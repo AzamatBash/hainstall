@@ -1,0 +1,12 @@
+# Binaries
+bin/
+*.exe
+
+# Local env / secrets
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,12 @@
+.tools/
+*.db
+data/
+panel/server/data/
+**/node_modules/
+panel/web/dist/
+.env
+*.exe
+*.test
+**/certs/
+*.pem
+deploy/node/.env

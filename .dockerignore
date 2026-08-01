@@ -1,0 +1,12 @@
+.git
+**/.git
+.tools
+**/bin
+**/.env
+**/node_modules
+**/dist
+**/*.pem
+**/certs
+**/deploy/node/certs
+*.md
+!README.md

@@ -1,0 +1,25 @@
+services:
+  panel:
+    image: azamatbash/hapanel:0.1.0
+    # Optional local build (also tags as the image above):
+    #   docker compose up -d --build
+    build:
+      context: ../..
+      dockerfile: deploy/panel/Dockerfile
+    container_name: hapanel-panel
+    ports:
+      - "${PANEL_PORT:-3080}:3080"
+    environment:
+      PANEL_PASSWORD: ${PANEL_PASSWORD:-changeme}
+      PANEL_JWT_SECRET: ${PANEL_JWT_SECRET:-change-me-to-a-long-random-secret}
+      PANEL_LISTEN: ":3080"
+      PANEL_DB_PATH: /app/data/panel.db
+      PANEL_STATIC_DIR: /app/web/dist
+      HAPANEL_INSECURE_SKIP_VERIFY: ${HAPANEL_INSECURE_SKIP_VERIFY:-true}
+      HAPANEL_UTLS_HELLO: ${HAPANEL_UTLS_HELLO:-randomized}
+    volumes:
+      - panel-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  panel-data:
