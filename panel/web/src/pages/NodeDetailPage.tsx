@@ -4,6 +4,7 @@ import {
   api,
   BackendServer,
   flattenBackends,
+  formatBitrate,
   formatBytes,
   formatLastSeen,
   formatUptime,
@@ -53,8 +54,13 @@ export default function NodeDetailPage() {
   const [cpuHist, setCpuHist] = useState<ChartPoint[]>([])
   const [memHist, setMemHist] = useState<ChartPoint[]>([])
   const [sessHist, setSessHist] = useState<ChartPoint[]>([])
+  const [downHist, setDownHist] = useState<ChartPoint[]>([])
+  const [upHist, setUpHist] = useState<ChartPoint[]>([])
+  const [downBps, setDownBps] = useState<number | null>(null)
+  const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
   const histResetRef = useRef(id)
+  const trafficRef = useRef<{ t: number; inn: number; out: number } | null>(null)
   const [error, setError] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -77,6 +83,26 @@ export default function NodeDetailPage() {
 
   const facing = useMemo(() => userFacingStats(stats), [stats])
 
+  const applyTraffic = useCallback((statsRes: StatsSummary) => {
+    const inn = Number(statsRes.bytes_in) || 0
+    const out = Number(statsRes.bytes_out) || 0
+    const now = Date.now()
+    const prev = trafficRef.current
+    if (prev && now > prev.t) {
+      const dt = (now - prev.t) / 1000
+      if (dt >= 0.5) {
+        // HAProxy FRONTEND: bin = from clients (upload), bout = to clients (download)
+        const up = Math.max(0, (inn - prev.inn) / dt)
+        const down = Math.max(0, (out - prev.out) / dt)
+        setUpBps(up)
+        setDownBps(down)
+        setUpHist((h) => pushPoint(h, up))
+        setDownHist((h) => pushPoint(h, down))
+      }
+    }
+    trafficRef.current = { t: now, inn, out }
+  }, [])
+
   const load = useCallback(async () => {
     setError('')
     try {
@@ -91,6 +117,8 @@ export default function NodeDetailPage() {
         setStats(null)
         setSystem(null)
         setBackends([])
+        setUpBps(null)
+        setDownBps(null)
         return
       }
       const [statsRes, backendsRes, systemRes] = await Promise.all([
@@ -99,6 +127,7 @@ export default function NodeDetailPage() {
         api<SystemMetrics>(`/api/nodes/${id}/system`).catch(() => null),
       ])
       setStats(statsRes)
+      applyTraffic(statsRes)
       setBackends(flattenBackends(backendsRes))
       if (systemRes) {
         setSystem(systemRes)
@@ -112,7 +141,7 @@ export default function NodeDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки')
     }
-  }, [id])
+  }, [id, applyTraffic])
 
   useEffect(() => {
     if (histResetRef.current !== id) {
@@ -120,6 +149,11 @@ export default function NodeDetailPage() {
       setCpuHist([])
       setMemHist([])
       setSessHist([])
+      setDownHist([])
+      setUpHist([])
+      setDownBps(null)
+      setUpBps(null)
+      trafficRef.current = null
       setSystem(null)
     }
   }, [id])
@@ -139,6 +173,7 @@ export default function NodeDetailPage() {
             api<SystemMetrics>(`/api/nodes/${id}/system`),
           ])
           setStats(statsRes)
+          applyTraffic(statsRes)
           setSystem(systemRes)
           setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
           setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
@@ -152,7 +187,7 @@ export default function NodeDetailPage() {
       })()
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [id, node?.status])
+  }, [id, node?.status, applyTraffic])
 
   useEffect(() => {
     if (!toast) return
@@ -437,6 +472,24 @@ export default function NodeDetailPage() {
                 {facing.backends_up !== null ? facing.backends_up : '—'}
               </div>
             </div>
+            <div className="stat">
+              <div className="label">Отдача ↓</div>
+              <div className="value" style={{ fontSize: '1.05rem' }}>
+                {formatBitrate(downBps)}
+              </div>
+              <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                всего {formatBytes(stats?.bytes_out)}
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">Загрузка ↑</div>
+              <div className="value" style={{ fontSize: '1.05rem' }}>
+                {formatBitrate(upBps)}
+              </div>
+              <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                всего {formatBytes(stats?.bytes_in)}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -515,6 +568,22 @@ export default function NodeDetailPage() {
                 valueLabel={
                   facing.active_sessions !== null ? String(facing.active_sessions) : '—'
                 }
+              />
+              <SparklineChart
+                label="Отдача ↓"
+                unit=""
+                color="var(--accent)"
+                points={downHist}
+                max={Math.max(1, ...downHist.map((p) => p.v), 1)}
+                valueLabel={formatBitrate(downBps)}
+              />
+              <SparklineChart
+                label="Загрузка ↑"
+                unit=""
+                color="var(--ok)"
+                points={upHist}
+                max={Math.max(1, ...upHist.map((p) => p.v), 1)}
+                valueLabel={formatBitrate(upBps)}
               />
             </div>
           </section>

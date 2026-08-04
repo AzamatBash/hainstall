@@ -12,6 +12,8 @@ type FrontendStat struct {
 	Status   string `json:"status"`
 	Sessions int    `json:"sessions"`
 	ReqRate  int    `json:"req_rate"`
+	BytesIn  int64  `json:"bytes_in"`
+	BytesOut int64  `json:"bytes_out"`
 }
 
 // BackendStat summarizes a backend from "show stat".
@@ -20,12 +22,16 @@ type BackendStat struct {
 	Status   string `json:"status"`
 	Sessions int    `json:"sessions"`
 	Servers  int    `json:"servers_up"`
+	BytesIn  int64  `json:"bytes_in"`
+	BytesOut int64  `json:"bytes_out"`
 }
 
 // Stats is the aggregated view returned by GET /stats.
 type Stats struct {
 	ActiveConnections int            `json:"active_connections"`
 	ActiveSessions    int            `json:"active_sessions"`
+	BytesIn           int64          `json:"bytes_in"`
+	BytesOut          int64          `json:"bytes_out"`
 	Frontends         []FrontendStat `json:"frontends"`
 	Backends          []BackendStat  `json:"backends"`
 }
@@ -45,9 +51,11 @@ type ServerInfo struct {
 const (
 	statPxName  = 0
 	statSvName  = 1
+	statScur    = 4
+	statBin     = 8
+	statBout    = 9
 	statStatus  = 17
 	statWeight  = 18
-	statScur    = 4
 	statReqRate = 46
 )
 
@@ -66,6 +74,8 @@ func ParseStats(raw string) Stats {
 	backendServersUp := map[string]int{}
 	backendSessions := map[string]int{}
 	backendStatus := map[string]string{}
+	backendBin := map[string]int64{}
+	backendBout := map[string]int64{}
 
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -80,6 +90,8 @@ func ParseStats(raw string) Stats {
 		sv := fields[statSvName]
 		status := fields[statStatus]
 		scur, _ := strconv.Atoi(fields[statScur])
+		bin := parseInt64Field(fields, statBin)
+		bout := parseInt64Field(fields, statBout)
 
 		switch sv {
 		case "FRONTEND":
@@ -92,12 +104,18 @@ func ParseStats(raw string) Stats {
 				Status:   status,
 				Sessions: scur,
 				ReqRate:  reqRate,
+				BytesIn:  bin,
+				BytesOut: bout,
 			})
 			out.ActiveSessions += scur
 			out.ActiveConnections += scur
+			out.BytesIn += bin
+			out.BytesOut += bout
 		case "BACKEND":
 			backendSessions[px] = scur
 			backendStatus[px] = status
+			backendBin[px] = bin
+			backendBout[px] = bout
 			out.ActiveSessions += scur
 		default:
 			if status == "UP" {
@@ -112,9 +130,19 @@ func ParseStats(raw string) Stats {
 			Status:   backendStatus[name],
 			Sessions: sessions,
 			Servers:  backendServersUp[name],
+			BytesIn:  backendBin[name],
+			BytesOut: backendBout[name],
 		})
 	}
 	return out
+}
+
+func parseInt64Field(fields []string, idx int) int64 {
+	if len(fields) <= idx {
+		return 0
+	}
+	v, _ := strconv.ParseInt(fields[idx], 10, 64)
+	return v
 }
 
 // ListServers returns servers preferring "show servers state" (has addr),

@@ -131,6 +131,14 @@ services:
     command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
     expose:
       - "9999"
+    sysctls:
+      net.ipv4.ip_local_port_range: "1024 65535"
+      net.ipv4.tcp_tw_reuse: "1"
+      net.ipv4.tcp_fin_timeout: "15"
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
     depends_on:
       - agent
     networks:
@@ -176,7 +184,8 @@ volumes:
 	haproxyCfg := `# hapanel node HAProxy — только клиенты (:80 / :8443).
 # Runtime API для агента: TCP :9999 (docker network only).
 global
-    maxconn 20000
+    maxconn 50000
+    nbthread 4
     stats socket ipv4@0.0.0.0:9999 level admin
     stats timeout 30s
     master-worker
@@ -184,11 +193,13 @@ global
 defaults
     mode    tcp
     no log
-    timeout connect 10s
+    timeout connect 5s
     timeout client  30m
     timeout server  30m
     timeout tunnel  30m
-    retries 3
+    timeout client-fin 30s
+    timeout server-fin 30s
+    retries 2
 
 frontend http_plain
     mode http
@@ -200,6 +211,7 @@ frontend http_plain
 frontend https_front
     mode tcp
     bind *:8443
+    maxconn 40000
     default_backend app
 
 backend acme
@@ -211,7 +223,6 @@ backend acme
 backend app
     mode tcp
     balance leastconn
-    option tcp-check
 `
 
 	envFile := fmt.Sprintf(`HAPANEL_TOKEN=%s

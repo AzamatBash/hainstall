@@ -22,8 +22,24 @@ export interface BackendServer {
 export interface StatsSummary {
   active_connections?: number
   active_sessions?: number
-  frontends?: Array<{ name: string; status: string; sessions: number; req_rate: number }>
-  backends?: Array<{ name: string; status: string; sessions: number; servers_up: number }>
+  bytes_in?: number
+  bytes_out?: number
+  frontends?: Array<{
+    name: string
+    status: string
+    sessions: number
+    req_rate: number
+    bytes_in?: number
+    bytes_out?: number
+  }>
+  backends?: Array<{
+    name: string
+    status: string
+    sessions: number
+    servers_up: number
+    bytes_in?: number
+    bytes_out?: number
+  }>
   [key: string]: unknown
 }
 
@@ -49,8 +65,21 @@ export function formatBytes(n?: number | null): string {
     v /= 1024
     i++
   }
-  const digits = v >= 100 || i === 0 ? 0 : v >= 10 ? 1 : 2
-  return `${v.toFixed(digits)} ${units[i]}`
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+/** Format bits/s. Input is bytes per second. */
+export function formatBitrate(bytesPerSec?: number | null): string {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—'
+  const bits = bytesPerSec * 8
+  const units = ['bit/s', 'Kbit/s', 'Mbit/s', 'Gbit/s']
+  let v = bits
+  let i = 0
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000
+    i++
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
 export function formatUptime(sec?: number | null): string {
