@@ -28,7 +28,8 @@ func main() {
 	}
 
 	st := store.New(cfg.StatePath)
-	ha := haproxy.NewClient(cfg.HAProxySocket)
+	socket := haproxy.ResolveSocket(cfg.HAProxySocket)
+	ha := haproxy.NewClient(socket)
 	cfgWriter := haproxy.NewConfigWriter(cfg.BackendsDir)
 
 	// Sync persisted servers into backends.d on startup.
@@ -48,6 +49,15 @@ func main() {
 	}
 	defer docker.Close()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Old nodes: compose still has unix admin.sock — agent self-heals via TCP
+	// snippet in backends.d + reload/restart. No manual compose edits.
+	go haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
+		log.Info(msg, args...)
+	})
+
 	router := api.NewRouter(api.Deps{
 		Log:            log,
 		Auth:           auth.Bearer{Token: cfg.Token},
@@ -56,6 +66,7 @@ func main() {
 		Store:          st,
 		Docker:         docker,
 		DefaultBackend: cfg.DefaultBackend,
+		BackendsDir:    cfg.BackendsDir,
 	})
 
 	srv := &http.Server{
@@ -71,7 +82,7 @@ func main() {
 		log.Info("agent listening",
 			"addr", cfg.ListenAddr,
 			"version", api.Version,
-			"socket", cfg.HAProxySocket,
+			"socket", socket,
 			"container", cfg.HAProxyContainer,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -80,8 +91,6 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 
 	log.Info("shutting down")

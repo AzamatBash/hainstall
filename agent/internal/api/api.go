@@ -22,13 +22,14 @@ var Version = "0.1.0"
 
 // Deps holds handler dependencies.
 type Deps struct {
-	Log     *slog.Logger
-	Auth    auth.Bearer
-	HA      *haproxy.Client
-	Cfg     *haproxy.ConfigWriter
-	Store   *store.Store
-	Docker  *dockerctl.Controller
+	Log            *slog.Logger
+	Auth           auth.Bearer
+	HA             *haproxy.Client
+	Cfg            *haproxy.ConfigWriter
+	Store          *store.Store
+	Docker         *dockerctl.Controller
 	DefaultBackend string
+	BackendsDir    string
 }
 
 // NewRouter builds the HTTP router under /_hapctl/v1.
@@ -101,8 +102,15 @@ func (d Deps) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (d Deps) handleStats(w http.ResponseWriter, _ *http.Request) {
+func (d Deps) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := d.HA.GetStats()
+	if err != nil && d.Docker != nil && d.BackendsDir != "" {
+		if heal := haproxy.EnsureRuntimeTCP(r.Context(), d.BackendsDir, d.Docker, d.HA); heal != nil {
+			d.Log.Warn("runtime heal", "err", heal)
+		} else {
+			stats, err = d.HA.GetStats()
+		}
+	}
 	if err != nil {
 		d.Log.Error("stats", "err", err)
 		writeErr(w, http.StatusBadGateway, "failed to read haproxy stats: "+err.Error())

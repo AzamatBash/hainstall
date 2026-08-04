@@ -65,7 +65,7 @@ func (w *ConfigWriter) Write(servers []store.Server) error {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".cfg") {
 			continue
 		}
-		if e.Name() == w.FileName {
+		if e.Name() == w.FileName || e.Name() == RuntimeTCPFile {
 			continue
 		}
 		if _, ok := written[e.Name()]; ok {

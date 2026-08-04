@@ -99,23 +99,19 @@ func TestWaitReadyTCP(t *testing.T) {
 	}
 }
 
-func TestNetworkAndAddress(t *testing.T) {
+func TestResolveSocket(t *testing.T) {
 	cases := []struct {
-		in, network, address string
+		in, want string
 	}{
-		{"/var/run/haproxy/admin.sock", "unix", "/var/run/haproxy/admin.sock"},
-		{"unix:///tmp/x.sock", "unix", "/tmp/x.sock"},
-		{"tcp://haproxy:9999", "tcp", "haproxy:9999"},
-		{"haproxy:9999", "tcp", "haproxy:9999"},
+		{"", RuntimeTCPAddr},
+		{"/var/run/haproxy/admin.sock", RuntimeTCPAddr},
+		{"unix:///var/run/haproxy/admin.sock", RuntimeTCPAddr},
+		{"tcp://haproxy:9999", "tcp://haproxy:9999"},
+		{"haproxy:9999", "haproxy:9999"},
 	}
 	for _, tc := range cases {
-		c := NewClient(tc.in)
-		n, a, err := c.networkAndAddress()
-		if err != nil {
-			t.Fatalf("%q: %v", tc.in, err)
-		}
-		if n != tc.network || a != tc.address {
-			t.Fatalf("%q: got %s %s, want %s %s", tc.in, n, a, tc.network, tc.address)
+		if got := ResolveSocket(tc.in); got != tc.want {
+			t.Fatalf("ResolveSocket(%q)=%q want %q", tc.in, got, tc.want)
 		}
 	}
 }
