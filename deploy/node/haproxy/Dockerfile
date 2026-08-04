@@ -11,4 +11,4 @@ RUN chmod +x /usr/local/bin/hapanel-haproxy-entrypoint.sh \
 # Stay root so the runtime volume mount is writable for the stats socket.
 USER root
 ENTRYPOINT ["/usr/local/bin/hapanel-haproxy-entrypoint.sh"]
-CMD ["-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+CMD ["-W", "-db", "-f", "/etc/haproxy/backends.d"]

@@ -32,6 +32,11 @@ func main() {
 	ha := haproxy.NewClient(socket)
 	cfgWriter := haproxy.NewConfigWriter(cfg.BackendsDir)
 
+	// Write frontends into backends.d before HAProxy starts (compose depends_on agent).
+	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil); err != nil {
+		log.Warn("base config write failed", "err", err)
+	}
+
 	// Sync persisted servers into backends.d on startup.
 	servers, err := st.List()
 	if err != nil {
@@ -52,11 +57,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Old nodes: compose still has unix admin.sock — agent self-heals via TCP
-	// snippet in backends.d + reload/restart. No manual compose edits.
-	go haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
-		log.Info(msg, args...)
-	})
+	// Self-heal: write client frontends (:80/:8443) into backends.d (never rely
+	// on a host bind-mounted haproxy.cfg — Docker turns a missing file into a dir).
+	// Then ensure TCP runtime API for the panel.
+	go func() {
+		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
+			log.Info(msg, args...)
+		})
+		haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
+			log.Info(msg, args...)
+		})
+	}()
 
 	router := api.NewRouter(api.Deps{
 		Log:            log,

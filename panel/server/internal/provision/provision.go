@@ -115,7 +115,7 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 
 	compose := fmt.Sprintf(`# hapanel node — generated for %q
 # 80/8443 = клиенты (HAProxy) | %d = панель → агент напрямую (HTTP)
-# Runtime API: TCP haproxy:9999 (без unix socket / shared volume)
+# Конфиг фронтендов пишет агент в backends.d (без bind-mount файла haproxy.cfg).
 services:
   haproxy:
     image: haproxy:3.0-alpine
@@ -125,10 +125,9 @@ services:
       - "80:80"
       - "8443:8443"
     volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
-    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    command: ["haproxy", "-W", "-db", "-f", "/etc/haproxy/backends.d"]
     expose:
       - "9999"
     sysctls:
@@ -181,8 +180,8 @@ volumes:
   agent-state:
 `, name, port, AgentImage, mgmtMap, token)
 
-	haproxyCfg := `# hapanel node HAProxy — только клиенты (:80 / :8443).
-# Runtime API для агента: TCP :9999 (docker network only).
+	baseCfg := `# Managed by hapanel agent — do not edit by hand
+# Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
     maxconn 50000
     nbthread 4
@@ -233,36 +232,25 @@ DOCKER_GID=0
 	readme := fmt.Sprintf(`# hapanel node: %s
 
 Порты:
-- **8443 / 80** — клиентский трафик (HAProxy TCP passthrough → app; без TLS на :8443)
-- **%d** — панель ↔ агент напрямую (HTTP /_hapctl), не через HAProxy
+- **8443 / 80** — клиентский трафик (HAProxy TCP passthrough → app)
+- **%d** — панель ↔ агент напрямую (HTTP /_hapctl)
 
 Важно: ограничьте доступ к порту %d (firewall: только IP панели).
 
 1. Установите Docker + Compose на VPS.
-2. Создайте файлы из бандла панели в /opt/hapanel-node.
-3. Каталог certs/ можно оставить пустым (монтируется опционально; :8443 — TCP passthrough).
-   При необходимости ACME/старых скриптов:
-
-   mkdir -p certs
-   # openssl … → certs/site.pem (не используется для bind *:8443)
-
-4. Образ агента (Docker Hub):
-
-   docker pull %s
-   # также есть тег :latest; для продакшена предпочитайте версию 0.1.0
-
-5. Запуск:
-
-   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
-
+2. Скопируйте файлы бандла в /opt/hapanel-node (достаточно docker-compose.yml + backends.d).
+3. mkdir -p certs haproxy/backends.d
+4. docker pull %s
+5. DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
 6. В панели → «Проверить связь».
+
+Агент сам пишет фронтенды :80/:8443 в backends.d при старте.
 `, name, port, port, AgentImage)
 
 	nodeURL := BuildURL(host, port)
 	commands := fmt.Sprintf(`mkdir -p /opt/hapanel-node/haproxy/backends.d /opt/hapanel-node/certs
 cd /opt/hapanel-node
-# напишите docker-compose.yml + конфиги haproxy из панели
-# certs/ опционален (:8443 TCP passthrough)
+# запишите docker-compose.yml и файлы backends.d из бандла панели
 # 8443 = клиенты TCP, %d = панель→агент (HTTP)
 export DOCKER_GID=$(getent group docker | cut -d: -f3)
 docker compose up -d
@@ -276,11 +264,11 @@ docker compose up -d
 		Port:       port,
 		AgentImage: AgentImage,
 		Files: map[string]string{
-			"docker-compose.yml":         compose,
-			"haproxy/haproxy.cfg":        haproxyCfg,
-			"haproxy/backends.d/app.cfg": appCfg,
-			".env":                       envFile,
-			"README.md":                  readme,
+			"docker-compose.yml":                      compose,
+			"haproxy/backends.d/00-hapanel-base.cfg":  baseCfg,
+			"haproxy/backends.d/app.cfg":              appCfg,
+			".env":                                    envFile,
+			"README.md":                               readme,
 		},
 		Commands: commands,
 	}, nil

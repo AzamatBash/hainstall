@@ -7,10 +7,10 @@ services:
       - "80:80"
       - "8443:8443"
     volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
-    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    # Frontends come from backends.d/00-hapanel-base.cfg (agent writes it).
+    command: ["haproxy", "-W", "-db", "-f", "/etc/haproxy/backends.d"]
     # expose runtime API only on docker network (not published to host)
     expose:
       - "9999"

@@ -27,7 +27,7 @@ func NewConfigWriter(dir string) *ConfigWriter {
 }
 
 // Write regenerates one `{backend}.cfg` per backend with a full backend section.
-// Main haproxy.cfg must `include /etc/haproxy/backends.d/app.cfg` (and optionally others).
+// Frontends live in 00-hapanel-base.cfg (written by the agent).
 func (w *ConfigWriter) Write(servers []store.Server) error {
 	if w.Dir == "" {
 		return fmt.Errorf("backends dir is empty")
@@ -65,7 +65,7 @@ func (w *ConfigWriter) Write(servers []store.Server) error {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".cfg") {
 			continue
 		}
-		if e.Name() == w.FileName || e.Name() == RuntimeTCPFile {
+		if e.Name() == w.FileName || e.Name() == RuntimeTCPFile || e.Name() == BaseConfigFile {
 			continue
 		}
 		if _, ok := written[e.Name()]; ok {

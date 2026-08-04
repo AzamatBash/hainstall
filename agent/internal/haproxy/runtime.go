@@ -64,6 +64,25 @@ func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl
 	if err := os.MkdirAll(backendsDir, 0o755); err != nil {
 		return err
 	}
+
+	// Base config already declares the TCP stats socket — do not add a second one.
+	basePath := filepath.Join(backendsDir, BaseConfigFile)
+	if raw, err := os.ReadFile(basePath); err == nil && strings.Contains(string(raw), "0.0.0.0:9999") {
+		if docker != nil {
+			_ = docker.Reload(ctx)
+			if err := ha.WaitReadyTimeout(ctx, 8*time.Second); err == nil {
+				return nil
+			}
+			if err := docker.Restart(ctx); err != nil {
+				return fmt.Errorf("restart haproxy for TCP runtime: %w", err)
+			}
+			if err := ha.WaitReadyTimeout(ctx, 20*time.Second); err != nil {
+				return fmt.Errorf("haproxy TCP runtime not ready: %w", err)
+			}
+		}
+		return nil
+	}
+
 	path := filepath.Join(backendsDir, RuntimeTCPFile)
 	prev, _ := os.ReadFile(path)
 	if string(prev) != runtimeTCPBody {
