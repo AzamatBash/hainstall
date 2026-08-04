@@ -68,6 +68,7 @@ func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl
 	// Base config already declares the TCP stats socket — do not add a second one.
 	basePath := filepath.Join(backendsDir, BaseConfigFile)
 	if raw, err := os.ReadFile(basePath); err == nil && strings.Contains(string(raw), "0.0.0.0:9999") {
+		_ = os.Remove(filepath.Join(backendsDir, RuntimeTCPFile))
 		if docker != nil {
 			_ = docker.Reload(ctx)
 			if err := ha.WaitReadyTimeout(ctx, 8*time.Second); err == nil {
