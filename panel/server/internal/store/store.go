@@ -134,6 +134,28 @@ func (s *Store) DeleteNode(id string) (bool, error) {
 	return n > 0, err
 }
 
+// UpdateNodeURL changes the management URL (and optionally name) for a node.
+// Token is preserved. Status is reset to unknown until the next connect check.
+func (s *Store) UpdateNodeURL(id, name, url string) (*Node, error) {
+	n, err := s.GetNode(id)
+	if n == nil || err != nil {
+		return n, err
+	}
+	if name == "" {
+		name = n.Name
+	}
+	if url == "" {
+		url = n.URL
+	}
+	_, err = s.db.Exec(`
+UPDATE nodes SET name = ?, url = ?, status = ?, last_seen = NULL WHERE id = ?`,
+		name, url, string(StatusUnknown), id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetNode(id)
+}
+
 func (s *Store) UpdateNodeStatus(id string, status NodeStatus, lastSeen *time.Time) error {
 	var ls any
 	if lastSeen != nil {

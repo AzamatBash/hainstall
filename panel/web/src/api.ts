@@ -123,6 +123,7 @@ const ERROR_MAP: Record<string, string> = {
   'db error': 'Ошибка базы данных',
   'node not found': 'Нода не найдена',
   'name and host are required': 'Укажите имя и хост',
+  'укажите host или url': 'Укажите IP/домен или полный URL',
   'name, url, and token are required': 'Укажите имя, URL и токен',
   'url must start with https:// or http://': 'URL должен начинаться с https:// или http://',
   'unauthorized — token mismatch on node': 'Ошибка авторизации — неверный токен на ноде',

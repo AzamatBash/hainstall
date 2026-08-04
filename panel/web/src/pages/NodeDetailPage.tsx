@@ -72,6 +72,10 @@ export default function NodeDetailPage() {
   const [installBundle, setInstallBundle] = useState<Bundle | null>(null)
   const [installFileKey, setInstallFileKey] = useState('docker-compose.yml')
   const [copied, setCopied] = useState('')
+  const [editHost, setEditHost] = useState('')
+  const [editPort, setEditPort] = useState('47893')
+  const [editOpen, setEditOpen] = useState(false)
+  const [editBusy, setEditBusy] = useState(false)
 
   const [form, setForm] = useState({
     backend: 'app',
@@ -112,6 +116,14 @@ export default function NodeDetailPage() {
       if (!found) {
         setError('Нода не найдена')
         return
+      }
+      try {
+        const u = new URL(found.url)
+        setEditHost(u.hostname)
+        setEditPort(u.port || (u.protocol === 'https:' ? '443' : '80'))
+      } catch {
+        setEditHost('')
+        setEditPort('47893')
       }
       if (found.status !== 'online') {
         setStats(null)
@@ -330,6 +342,32 @@ export default function NodeDetailPage() {
     }
   }
 
+  async function onSaveAddress(e: FormEvent) {
+    e.preventDefault()
+    setEditBusy(true)
+    setError('')
+    setMsg('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          host: editHost.trim(),
+          port: Number(editPort) || 47893,
+        }),
+      })
+      setNode(res.node)
+      setEditOpen(false)
+      setMsg('Адрес ноды обновлён — нажмите «Проверить связь»')
+      setUpBps(null)
+      setDownBps(null)
+      trafficRef.current = null
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить адрес')
+    } finally {
+      setEditBusy(false)
+    }
+  }
+
   async function copyText(label: string, text: string) {
     const ok = await copyToClipboard(text)
     if (ok) {
@@ -354,6 +392,13 @@ export default function NodeDetailPage() {
           {node && <div className="mono muted">{node.url}</div>}
         </div>
         <div className="row">
+          <button
+            className="btn btn-sm"
+            type="button"
+            onClick={() => setEditOpen((v) => !v)}
+          >
+            {editOpen ? 'Скрыть адрес' : 'Изменить IP'}
+          </button>
           <button className="btn btn-sm" type="button" disabled={busy} onClick={() => void load()}>
             Обновить
           </button>
@@ -386,6 +431,55 @@ export default function NodeDetailPage() {
           </button>
         </div>
       </header>
+
+      {editOpen && node && (
+        <section className="panel" style={{ marginBottom: '1rem' }}>
+          <h2>Адрес агента</h2>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            IP/домен и порт, по которым панель ходит к агенту (не клиентский 8443). Токен не
+            меняется.
+          </p>
+          <form className="stack" onSubmit={onSaveAddress}>
+            <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div className="field" style={{ flex: '1 1 12rem' }}>
+                <label htmlFor="edit-host">IP или домен</label>
+                <input
+                  id="edit-host"
+                  className="mono"
+                  value={editHost}
+                  onChange={(e) => setEditHost(e.target.value)}
+                  required
+                  placeholder="94.241.142.98"
+                />
+              </div>
+              <div className="field" style={{ flex: '0 0 8rem' }}>
+                <label htmlFor="edit-port">Порт</label>
+                <input
+                  id="edit-port"
+                  className="mono"
+                  value={editPort}
+                  onChange={(e) => setEditPort(e.target.value)}
+                  required
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
+            <div className="row">
+              <button className="btn btn-primary" type="submit" disabled={editBusy}>
+                {editBusy ? 'Сохранение…' : 'Сохранить'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={editBusy}
+                onClick={() => setEditOpen(false)}
+              >
+                Отмена
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       {toast && (
         <div className={`toast toast-${toast.kind}`} role="status">

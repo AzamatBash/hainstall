@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/nodes", s.requireAuth(s.handleListNodes))
 	s.mux.HandleFunc("POST /api/nodes", s.requireAuth(s.handleCreateNode))
 	s.mux.HandleFunc("POST /api/nodes/provision", s.requireAuth(s.handleProvisionNode))
+	s.mux.HandleFunc("PATCH /api/nodes/{id}", s.requireAuth(s.handleUpdateNode))
 	s.mux.HandleFunc("DELETE /api/nodes/{id}", s.requireAuth(s.handleDeleteNode))
 	s.mux.HandleFunc("GET /api/nodes/{id}/install", s.requireAuth(s.handleNodeInstall))
 	s.mux.HandleFunc("POST /api/nodes/{id}/connect", s.requireAuth(s.handleConnectNode))
@@ -367,6 +368,74 @@ func publicNodeMust(s *Server, id string) map[string]any {
 	return publicNode(*n)
 }
 
+func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	var body struct {
+		Name string `json:"name"`
+		Host string `json:"host"`
+		Port int    `json:"port"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+
+	name := strings.TrimSpace(body.Name)
+	newURL := strings.TrimRight(strings.TrimSpace(body.URL), "/")
+
+	if newURL == "" {
+		host := strings.TrimSpace(body.Host)
+		port := body.Port
+		if host == "" && port == 0 {
+			writeErr(w, http.StatusBadRequest, "укажите host или url")
+			return
+		}
+		curHost, curPort, err := provision.ParseURL(n.URL)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "текущий URL ноды повреждён: "+err.Error())
+			return
+		}
+		if host == "" {
+			host = curHost
+		}
+		if port == 0 {
+			port = curPort
+		}
+		newURL = provision.BuildURL(host, port)
+	}
+	if !strings.HasPrefix(newURL, "https://") && !strings.HasPrefix(newURL, "http://") {
+		writeErr(w, http.StatusBadRequest, "URL должен начинаться с https:// или http://")
+		return
+	}
+	if _, _, err := provision.ParseURL(newURL); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updated, err := s.store.UpdateNodeURL(id, name, newURL)
+	if err != nil {
+		s.logger.Error("update node", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if updated == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": publicNode(*updated)})
+}
+
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ok, err := s.store.DeleteNode(id)
@@ -612,7 +681,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
