@@ -200,8 +200,6 @@ frontend http_plain
 frontend https_front
     mode tcp
     bind *:8443
-    tcp-request inspect-delay 5s
-    tcp-request content accept if { req_ssl_hello_type 1 }
     default_backend app
 
 backend acme
@@ -213,7 +211,7 @@ backend acme
 backend app
     mode tcp
     balance leastconn
-    option ssl-hello-chk
+    option tcp-check
 `
 
 	envFile := fmt.Sprintf(`HAPANEL_TOKEN=%s

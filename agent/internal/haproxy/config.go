@@ -87,13 +87,14 @@ func renderBackendSection(backend string, servers []store.Server) string {
 	fmt.Fprintf(&b, "backend %s\n", backend)
 	b.WriteString("    mode tcp\n")
 	b.WriteString("    balance leastconn\n")
-	b.WriteString("    option ssl-hello-chk\n")
+	// tcp-check only: ssl-hello-chk breaks Reality/VLESS (marks server DOWN).
+	b.WriteString("    option tcp-check\n")
 	for _, s := range servers {
 		weight := s.Weight
 		if weight <= 0 {
 			weight = 100
 		}
-		fmt.Fprintf(&b, "    server %s %s:%d check weight %d\n",
+		fmt.Fprintf(&b, "    server %s %s:%d check inter 3s fall 3 rise 2 weight %d\n",
 			s.Name, s.Address, s.Port, weight)
 	}
 	return b.String()
