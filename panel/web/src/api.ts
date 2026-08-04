@@ -53,6 +53,10 @@ export interface SystemMetrics {
   disk_used_bytes?: number
   disk_total_bytes?: number
   disk_percent?: number
+  /** Host NIC RX bytes (cumulative). Transit proxy: should track TX closely. */
+  net_rx_bytes?: number
+  /** Host NIC TX bytes (cumulative). */
+  net_tx_bytes?: number
   timestamp: string
 }
 

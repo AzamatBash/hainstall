@@ -25,7 +25,10 @@ type Metrics struct {
 	DiskUsedBytes  uint64    `json:"disk_used_bytes,omitempty"`
 	DiskTotalBytes uint64    `json:"disk_total_bytes,omitempty"`
 	DiskPercent    float64   `json:"disk_percent,omitempty"`
-	Timestamp      time.Time `json:"timestamp"`
+	// Host NIC counters (sum of non-virtual ifaces). For a transit proxy RX≈TX.
+	NetRxBytes uint64    `json:"net_rx_bytes,omitempty"`
+	NetTxBytes uint64    `json:"net_tx_bytes,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // Collect gathers CPU, memory, load, uptime and optional root disk usage.
@@ -61,6 +64,10 @@ func Collect() (Metrics, error) {
 		if dTotal > 0 {
 			m.DiskPercent = float64(dUsed) * 100 / float64(dTotal)
 		}
+	}
+	if rx, tx, err := netDevTotals(proc); err == nil {
+		m.NetRxBytes = rx
+		m.NetTxBytes = tx
 	}
 	return m, nil
 }
@@ -215,4 +222,51 @@ func diskUsage(root string) (used, total uint64, ok bool) {
 	}
 	used = total - free
 	return used, total, true
+}
+
+// netDevTotals sums RX/TX from /proc/net/dev, skipping loopback and docker/virtual ifaces
+// so we measure the host uplink (transit traffic), not double-counted bridges.
+func netDevTotals(proc string) (rx, tx uint64, err error) {
+	f, err := os.Open(filepath.Join(proc, "net/dev"))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		if skipNetIface(name) {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 9 {
+			continue
+		}
+		r, _ := strconv.ParseUint(fields[0], 10, 64)
+		t, _ := strconv.ParseUint(fields[8], 10, 64)
+		rx += r
+		tx += t
+	}
+	return rx, tx, sc.Err()
+}
+
+func skipNetIface(name string) bool {
+	switch name {
+	case "lo", "docker0":
+		return true
+	}
+	for _, p := range []string{"veth", "br-", "virbr", "tun", "tap", "wg", "flannel", "cni", "cali", "nodelocal"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }

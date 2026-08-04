@@ -87,24 +87,26 @@ export default function NodeDetailPage() {
 
   const facing = useMemo(() => userFacingStats(stats), [stats])
 
-  const applyTraffic = useCallback((statsRes: StatsSummary) => {
-    const inn = Number(statsRes.bytes_in) || 0
-    const out = Number(statsRes.bytes_out) || 0
+  const applyTraffic = useCallback((sys: SystemMetrics | null) => {
+    if (!sys) return
+    const rx = Number(sys.net_rx_bytes) || 0
+    const tx = Number(sys.net_tx_bytes) || 0
+    if (rx <= 0 && tx <= 0) return
     const now = Date.now()
     const prev = trafficRef.current
     if (prev && now > prev.t) {
       const dt = (now - prev.t) / 1000
       if (dt >= 0.5) {
-        // HAProxy FRONTEND: bin = from clients (upload), bout = to clients (download)
-        const up = Math.max(0, (inn - prev.inn) / dt)
-        const down = Math.max(0, (out - prev.out) / dt)
-        setUpBps(up)
-        setDownBps(down)
-        setUpHist((h) => pushPoint(h, up))
-        setDownHist((h) => pushPoint(h, down))
+        // Host NIC: RX = inbound, TX = outbound. Transit proxy ≈ symmetric.
+        const inn = Math.max(0, (rx - prev.inn) / dt)
+        const out = Math.max(0, (tx - prev.out) / dt)
+        setUpBps(inn)
+        setDownBps(out)
+        setUpHist((h) => pushPoint(h, inn))
+        setDownHist((h) => pushPoint(h, out))
       }
     }
-    trafficRef.current = { t: now, inn, out }
+    trafficRef.current = { t: now, inn: rx, out: tx }
   }, [])
 
   const load = useCallback(async () => {
@@ -139,10 +141,10 @@ export default function NodeDetailPage() {
         api<SystemMetrics>(`/api/nodes/${id}/system`).catch(() => null),
       ])
       setStats(statsRes)
-      applyTraffic(statsRes)
       setBackends(flattenBackends(backendsRes))
       if (systemRes) {
         setSystem(systemRes)
+        applyTraffic(systemRes)
         setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
         setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
       }
@@ -185,8 +187,8 @@ export default function NodeDetailPage() {
             api<SystemMetrics>(`/api/nodes/${id}/system`),
           ])
           setStats(statsRes)
-          applyTraffic(statsRes)
           setSystem(systemRes)
+          applyTraffic(systemRes)
           setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
           setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
           const facingNow = userFacingStats(statsRes)
@@ -567,21 +569,21 @@ export default function NodeDetailPage() {
               </div>
             </div>
             <div className="stat">
-              <div className="label">Отдача ↓</div>
+              <div className="label">Исходящий TX</div>
               <div className="value" style={{ fontSize: '1.05rem' }}>
                 {formatBitrate(downBps)}
               </div>
               <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                всего {formatBytes(stats?.bytes_out)}
+                всего {formatBytes(system?.net_tx_bytes)}
               </div>
             </div>
             <div className="stat">
-              <div className="label">Загрузка ↑</div>
+              <div className="label">Входящий RX</div>
               <div className="value" style={{ fontSize: '1.05rem' }}>
                 {formatBitrate(upBps)}
               </div>
               <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                всего {formatBytes(stats?.bytes_in)}
+                всего {formatBytes(system?.net_rx_bytes)}
               </div>
             </div>
           </div>
@@ -664,7 +666,7 @@ export default function NodeDetailPage() {
                 }
               />
               <SparklineChart
-                label="Отдача ↓"
+                label="Исходящий TX"
                 unit=""
                 color="var(--accent)"
                 points={downHist}
@@ -672,7 +674,7 @@ export default function NodeDetailPage() {
                 valueLabel={formatBitrate(downBps)}
               />
               <SparklineChart
-                label="Загрузка ↑"
+                label="Входящий RX"
                 unit=""
                 color="var(--ok)"
                 points={upHist}
