@@ -224,12 +224,18 @@ func diskUsage(root string) (used, total uint64, ok bool) {
 	return used, total, true
 }
 
-// netDevTotals sums RX/TX from /proc/net/dev, skipping loopback and docker/virtual ifaces
-// so we measure the host uplink (transit traffic), not double-counted bridges.
+// netDevTotals sums RX/TX from the host network namespace.
+// Note: /proc/net is a symlink to /proc/self/net — with HOST_PROC mounted that
+// still resolves to the container netns. Use <HOST_PROC>/1/net/dev (host init).
 func netDevTotals(proc string) (rx, tx uint64, err error) {
-	f, err := os.Open(filepath.Join(proc, "net/dev"))
+	path := filepath.Join(proc, "1/net/dev")
+	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, err
+		// Fallback for bare-metal / non-container runs.
+		f, err = os.Open(filepath.Join(proc, "net/dev"))
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
