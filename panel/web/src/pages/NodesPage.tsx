@@ -10,6 +10,7 @@ import {
   translateError,
   userFacingStats,
 } from '../api'
+import { copyToClipboard, downloadTextFile } from '../clipboard'
 
 function StatusBadge({ status, large }: { status: string; large?: boolean }) {
   const s = status || 'unknown'
@@ -291,13 +292,18 @@ function AddNodeWizard({
   }
 
   async function copyText(label: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text)
+    setError('')
+    const ok = await copyToClipboard(text)
+    if (ok) {
       setCopied(label)
       setTimeout(() => setCopied(''), 1500)
-    } catch {
-      setError('Буфер обмена недоступен')
+    } else {
+      setError('Не удалось скопировать')
     }
+  }
+
+  function downloadFile(filename: string, text: string) {
+    downloadTextFile(filename, text)
   }
 
   async function onConnect() {
@@ -448,6 +454,13 @@ function AddNodeWizard({
                 onClick={() => void copyText(fileKey, fileContent)}
               >
                 {copied === fileKey ? 'Скопировано' : `Копировать ${fileKey}`}
+              </button>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() => downloadFile(fileKey, fileContent)}
+              >
+                Скачать файл
               </button>
               <button
                 className="btn btn-sm"

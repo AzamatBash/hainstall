@@ -1,13 +1,14 @@
-# Use official HAProxy with our config layout baked as defaults.
+# hapanel node HAProxy — prepares /var/run/haproxy so admin.sock works with a
+# shared named volume (official image alone often fails: non-root + empty vol).
 FROM haproxy:3.0-alpine
 
 USER root
-RUN mkdir -p /var/run/haproxy /etc/haproxy/backends.d /etc/haproxy/certs \
-    && chown -R haproxy:haproxy /var/run/haproxy /etc/haproxy/backends.d
+COPY docker-entrypoint.sh /usr/local/bin/hapanel-haproxy-entrypoint.sh
+RUN chmod +x /usr/local/bin/hapanel-haproxy-entrypoint.sh \
+    && mkdir -p /var/run/haproxy /etc/haproxy/backends.d /etc/haproxy/certs \
+    && chmod 777 /var/run/haproxy
 
-COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
-COPY backends.d/ /etc/haproxy/backends.d/
-
-# Master-worker mode for SIGUSR2 soft-reloads.
-# Second -f loads managed backend sections from backends.d/*.cfg
-CMD ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+# Stay root so the runtime volume mount is writable for the stats socket.
+USER root
+ENTRYPOINT ["/usr/local/bin/hapanel-haproxy-entrypoint.sh"]
+CMD ["-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]

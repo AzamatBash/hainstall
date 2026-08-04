@@ -121,6 +121,8 @@ services:
     image: haproxy:3.0-alpine
     container_name: haproxy
     restart: unless-stopped
+    # Official image is non-root; empty volume /var/run/haproxy blocks admin.sock.
+    user: "0:0"
     ports:
       - "80:80"
       - "443:443"
@@ -129,7 +131,11 @@ services:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
       - haproxy-run:/var/run/haproxy
-    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /var/run/haproxy && chmod 777 /var/run/haproxy &&
+        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg -f /etc/haproxy/backends.d
     depends_on:
       - agent
     networks:
@@ -180,7 +186,8 @@ volumes:
 global
     # Access logs off (no log stdout / tcplog / httplog).
     maxconn 20000
-    stats socket /var/run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    # mode 666: shared volume with agent (avoid uid/gid mismatch)
+    stats socket /var/run/haproxy/admin.sock mode 666 level admin expose-fd listeners
     stats timeout 30s
     master-worker
 

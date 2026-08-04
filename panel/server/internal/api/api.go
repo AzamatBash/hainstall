@@ -238,8 +238,10 @@ func (s *Server) handleConnectNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, body, err := s.agent.Stats(r.Context(), n.URL, n.Token)
+	// Reachability: public health. Auth: /system. HAProxy readiness: /stats
+	// with retries (socket appears a few seconds after container start).
 	now := time.Now().UTC()
+	hStatus, hBody, err := s.agent.Health(r.Context(), n.URL, n.Token)
 	if err != nil {
 		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -250,35 +252,109 @@ func (s *Server) handleConnectNode(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if status == http.StatusUnauthorized {
+	if hStatus < 200 || hStatus >= 300 {
 		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":     false,
 			"online": false,
-			"status": status,
+			"status": hStatus,
+			"body":   string(hBody),
+			"error":  fmt.Sprintf("агент не отвечает на /health: %d", hStatus),
+			"node":   publicNodeMust(s, id),
+		})
+		return
+	}
+
+	sysStatus, sysBody, err := s.agent.System(r.Context(), n.URL, n.Token)
+	if err != nil {
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"online": false,
+			"error":  err.Error(),
+			"node":   publicNodeMust(s, id),
+		})
+		return
+	}
+	if sysStatus == http.StatusUnauthorized {
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"online": false,
+			"status": sysStatus,
 			"error":  "ошибка авторизации — неверный токен на ноде",
 			"node":   publicNodeMust(s, id),
 		})
 		return
 	}
-	if status < 200 || status >= 300 {
+	if sysStatus < 200 || sysStatus >= 300 {
 		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":     false,
 			"online": false,
-			"status": status,
-			"body":   string(body),
-			"error":  fmt.Sprintf("неожиданный ответ агента: %d", status),
+			"status": sysStatus,
+			"body":   string(sysBody),
+			"error":  fmt.Sprintf("неожиданный ответ агента /system: %d", sysStatus),
 			"node":   publicNodeMust(s, id),
 		})
 		return
 	}
+
+	var statsStatus int
+	var statsBody []byte
+	var statsErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-r.Context().Done():
+				_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+				writeJSON(w, http.StatusOK, map[string]any{
+					"ok":     false,
+					"online": false,
+					"error":  r.Context().Err().Error(),
+					"node":   publicNodeMust(s, id),
+				})
+				return
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			}
+		}
+		statsStatus, statsBody, statsErr = s.agent.Stats(r.Context(), n.URL, n.Token)
+		if statsErr == nil && statsStatus >= 200 && statsStatus < 300 {
+			break
+		}
+		// 502 = HAProxy socket not ready yet; keep retrying.
+		if statsErr != nil || statsStatus != http.StatusBadGateway {
+			break
+		}
+	}
+
+	if statsErr != nil || statsStatus < 200 || statsStatus >= 300 {
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		errMsg := "HAProxy stats недоступны"
+		if statsErr != nil {
+			errMsg = statsErr.Error()
+		} else if statsStatus == http.StatusBadGateway {
+			errMsg = "агент отвечает, но нет связи с HAProxy (admin.sock) — проверьте compose/сокет"
+		} else {
+			errMsg = fmt.Sprintf("неожиданный ответ агента /stats: %d", statsStatus)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"online": false,
+			"status": statsStatus,
+			"body":   string(statsBody),
+			"error":  errMsg,
+			"node":   publicNodeMust(s, id),
+		})
+		return
+	}
+
 	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"online": true,
-		"status": status,
-		"body":   string(body),
+		"status": statsStatus,
+		"body":   string(statsBody),
 		"node":   publicNodeMust(s, id),
 	})
 }

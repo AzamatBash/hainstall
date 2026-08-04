@@ -14,6 +14,7 @@ import {
   translateError,
   userFacingStats,
 } from '../api'
+import { copyToClipboard, downloadTextFile } from '../clipboard'
 import SparklineChart, { ChartPoint } from '../components/SparklineChart'
 
 const HISTORY_MAX = 90
@@ -295,12 +296,13 @@ export default function NodeDetailPage() {
   }
 
   async function copyText(label: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text)
+    const ok = await copyToClipboard(text)
+    if (ok) {
       setCopied(label)
+      setToast({ kind: 'ok', text: 'Скопировано' })
       setTimeout(() => setCopied(''), 1500)
-    } catch {
-      setError('Буфер обмена недоступен')
+    } else {
+      setToast({ kind: 'fail', text: 'Не удалось скопировать' })
     }
   }
 
@@ -652,6 +654,18 @@ export default function NodeDetailPage() {
                 }
               >
                 {copied === installFileKey ? 'Скопировано' : `Копировать ${installFileKey}`}
+              </button>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() =>
+                  downloadTextFile(
+                    installFileKey,
+                    installBundle.files[installFileKey] ?? '',
+                  )
+                }
+              >
+                Скачать файл
               </button>
               <button
                 className="btn btn-sm"

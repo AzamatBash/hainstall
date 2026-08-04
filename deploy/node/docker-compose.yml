@@ -7,6 +7,9 @@ services:
     #   context: ./haproxy
     #   dockerfile: Dockerfile
     restart: unless-stopped
+    # Official image USER is non-root; empty named volume on /var/run/haproxy is
+    # root-owned → admin.sock never appears. Run as root and prepare the dir.
+    user: "0:0"
     ports:
       - "80:80"
       - "443:443"
@@ -15,7 +18,11 @@ services:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
       - haproxy-run:/var/run/haproxy
-    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /var/run/haproxy && chmod 777 /var/run/haproxy &&
+        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg -f /etc/haproxy/backends.d
     networks:
       - hapnet
     depends_on:
