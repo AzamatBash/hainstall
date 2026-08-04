@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -79,37 +80,46 @@ func main() {
 	}
 }
 
+// spaHandler serves built UI files and falls back to index.html for client routes.
+// Important: do not pass directory paths to http.FileServer — with Go 1.22+ ServeMux
+// stripping the "/" prefix, that produces 301 Location: ./ and Firefox redirect loops
+// on /login and /nodes/:id refresh.
 func spaHandler(staticDir string, logger *slog.Logger) http.Handler {
-	fs := http.Dir(staticDir)
-	fileServer := http.FileServer(fs)
+	indexPath := filepath.Join(staticDir, "index.html")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		p := r.URL.Path
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		p = path.Clean(p)
+		if p == "/" || p == "/." {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+		if strings.HasPrefix(p, "/api/") {
 			http.NotFound(w, r)
 			return
 		}
-		path := filepath.Clean(r.URL.Path)
-		if path == "/" {
-			path = "/index.html"
-		}
-		f, err := fs.Open(path)
-		if err != nil {
-			// SPA fallback
-			index, ierr := fs.Open("/index.html")
-			if ierr != nil {
-				logger.Debug("static missing", "path", path, "err", err)
-				http.Error(w, "UI not built — run npm run build in panel/web", http.StatusNotFound)
-				return
-			}
-			_ = index.Close()
-			r.URL.Path = "/index.html"
-			fileServer.ServeHTTP(w, r)
+
+		rel := strings.TrimPrefix(p, "/")
+		full := filepath.Join(staticDir, filepath.FromSlash(rel))
+		// Prevent path escape outside staticDir.
+		if !strings.HasPrefix(full, filepath.Clean(staticDir)+string(os.PathSeparator)) &&
+			filepath.Clean(full) != filepath.Clean(staticDir) {
+			http.NotFound(w, r)
 			return
 		}
-		stat, _ := f.Stat()
-		_ = f.Close()
-		if stat != nil && stat.IsDir() {
-			r.URL.Path = "/index.html"
+		fi, err := os.Stat(full)
+		if err == nil && fi.Mode().IsRegular() {
+			http.ServeFile(w, r, full)
+			return
 		}
-		fileServer.ServeHTTP(w, r)
+
+		if _, err := os.Stat(indexPath); err != nil {
+			logger.Debug("static missing", "path", p, "err", err)
+			http.Error(w, "UI not built — run npm run build in panel/web", http.StatusNotFound)
+			return
+		}
+		http.ServeFile(w, r, indexPath)
 	})
 }
