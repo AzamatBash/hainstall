@@ -43,9 +43,21 @@ func ResolveSocket(env string) string {
 	}
 }
 
-// EnsureRuntimeTCP writes the TCP stats snippet into backends.d and makes sure
-// HAProxy is listening on it (reload/restart via Docker if needed).
+// EnsureRuntimeTCP makes sure HAProxy answers on the TCP runtime API.
+// If the address already works (e.g. stats socket is in the main cfg), it does
+// nothing — writing a second stats socket into backends.d causes bind conflicts.
 func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client) error {
+	if ha == nil {
+		return fmt.Errorf("haproxy client is nil")
+	}
+	ha.Addr = RuntimeTCPAddr
+
+	probe := *ha
+	probe.Timeout = 800 * time.Millisecond
+	if raw, err := probe.Exec("show info"); err == nil && strings.Contains(raw, "Name:") {
+		return nil
+	}
+
 	if backendsDir == "" {
 		return fmt.Errorf("backends dir is empty")
 	}
@@ -54,33 +66,21 @@ func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl
 	}
 	path := filepath.Join(backendsDir, RuntimeTCPFile)
 	prev, _ := os.ReadFile(path)
-	changed := string(prev) != runtimeTCPBody
-	if changed {
+	if string(prev) != runtimeTCPBody {
 		if err := atomicWrite(path, runtimeTCPBody); err != nil {
 			return err
 		}
-	}
-
-	ha.Addr = RuntimeTCPAddr
-
-	// Fast path: already answering.
-	probe := *ha
-	probe.Timeout = 800 * time.Millisecond
-	if raw, err := probe.Exec("show info"); err == nil && strings.Contains(raw, "Name:") {
-		return nil
 	}
 
 	if docker == nil {
 		return fmt.Errorf("haproxy TCP runtime not ready and no docker controller")
 	}
 
-	// Soft reload first (picks up new -f snippet without dropping traffic).
 	_ = docker.Reload(ctx)
 	if err := ha.WaitReadyTimeout(ctx, 8*time.Second); err == nil {
 		return nil
 	}
 
-	// Binding a new stats socket often needs a full container restart.
 	if err := docker.Restart(ctx); err != nil {
 		return fmt.Errorf("restart haproxy for TCP runtime: %w", err)
 	}

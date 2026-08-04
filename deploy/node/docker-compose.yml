@@ -14,6 +14,14 @@ services:
     # expose runtime API only on docker network (not published to host)
     expose:
       - "9999"
+    sysctls:
+      net.ipv4.ip_local_port_range: "1024 65535"
+      net.ipv4.tcp_tw_reuse: "1"
+      net.ipv4.tcp_fin_timeout: "15"
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
     networks:
       - hapnet
     depends_on:
