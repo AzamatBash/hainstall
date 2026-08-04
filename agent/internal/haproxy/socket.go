@@ -10,32 +10,55 @@ import (
 	"time"
 )
 
-// Client talks to the HAProxy master/runtime Unix socket.
+// Client talks to the HAProxy master/runtime API (Unix socket or TCP).
 type Client struct {
-	SocketPath string
-	Timeout    time.Duration
+	// Addr is either a Unix path ("/var/run/haproxy/admin.sock") or a TCP
+	// target ("haproxy:9999" / "tcp://haproxy:9999").
+	Addr    string
+	Timeout time.Duration
 }
 
 // NewClient returns a runtime API client. Default timeout is 5s.
-func NewClient(socketPath string) *Client {
+func NewClient(addr string) *Client {
 	return &Client{
-		SocketPath: socketPath,
-		Timeout:    5 * time.Second,
+		Addr:    strings.TrimSpace(addr),
+		Timeout: 5 * time.Second,
+	}
+}
+
+func (c *Client) networkAndAddress() (network, address string, err error) {
+	addr := c.Addr
+	if addr == "" {
+		return "", "", fmt.Errorf("haproxy address is empty")
+	}
+	switch {
+	case strings.HasPrefix(addr, "tcp://"):
+		return "tcp", strings.TrimPrefix(addr, "tcp://"), nil
+	case strings.HasPrefix(addr, "unix://"):
+		return "unix", strings.TrimPrefix(addr, "unix://"), nil
+	case strings.HasPrefix(addr, "/"):
+		return "unix", addr, nil
+	case strings.Contains(addr, ":"):
+		// host:port
+		return "tcp", addr, nil
+	default:
+		return "unix", addr, nil
 	}
 }
 
 // Exec runs a single runtime API command and returns the full response body.
 func (c *Client) Exec(cmd string) (string, error) {
-	if c.SocketPath == "" {
-		return "", fmt.Errorf("haproxy socket path is empty")
+	network, address, err := c.networkAndAddress()
+	if err != nil {
+		return "", err
 	}
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	conn, err := net.DialTimeout("unix", c.SocketPath, timeout)
+	conn, err := net.DialTimeout(network, address, timeout)
 	if err != nil {
-		return "", fmt.Errorf("dial haproxy socket: %w", err)
+		return "", fmt.Errorf("dial haproxy %s %s: %w", network, address, err)
 	}
 	defer conn.Close()
 
@@ -57,7 +80,6 @@ func (c *Client) Exec(cmd string) (string, error) {
 			break
 		}
 		if err != nil {
-			// Deadline / closed socket after response is common; keep what we have.
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				break
 			}
@@ -70,20 +92,18 @@ func (c *Client) Exec(cmd string) (string, error) {
 	return b.String(), nil
 }
 
-// DefaultWaitReadyTimeout is how long WaitReady waits for the admin socket.
+// DefaultWaitReadyTimeout is how long WaitReady waits for the runtime API.
 const DefaultWaitReadyTimeout = 25 * time.Second
 
-// WaitReady polls the admin socket until it accepts connections and answers
-// "show info". Use after container restart/reload while HAProxy recreates the
-// unix socket — otherwise immediate stats calls get connection refused.
+// WaitReady polls until the runtime API answers "show info".
 func (c *Client) WaitReady(ctx context.Context) error {
 	return c.WaitReadyTimeout(ctx, DefaultWaitReadyTimeout)
 }
 
 // WaitReadyTimeout is like WaitReady with a custom overall deadline.
 func (c *Client) WaitReadyTimeout(ctx context.Context, maxWait time.Duration) error {
-	if c.SocketPath == "" {
-		return fmt.Errorf("haproxy socket path is empty")
+	if _, _, err := c.networkAndAddress(); err != nil {
+		return err
 	}
 	if maxWait <= 0 {
 		maxWait = DefaultWaitReadyTimeout
@@ -92,8 +112,6 @@ func (c *Client) WaitReadyTimeout(ctx context.Context, maxWait time.Duration) er
 	backoff := 50 * time.Millisecond
 	const maxBackoff = 500 * time.Millisecond
 
-	// Short dial/exec timeout so retries stay responsive while the socket
-	// is being recreated after docker restart.
 	probe := *c
 	probe.Timeout = 500 * time.Millisecond
 

@@ -115,14 +115,12 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 
 	compose := fmt.Sprintf(`# hapanel node — generated for %q
 # 80/443 = клиенты (HAProxy) | %d = панель → агент напрямую (HTTP)
-# Paste on the VPS, then: docker compose up -d
+# Runtime API: TCP haproxy:9999 (без unix socket / shared volume)
 services:
   haproxy:
     image: haproxy:3.0-alpine
     container_name: haproxy
     restart: unless-stopped
-    # Official image is non-root; empty volume /var/run/haproxy blocks admin.sock.
-    user: "0:0"
     ports:
       - "80:80"
       - "443:443"
@@ -130,12 +128,9 @@ services:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
-      - haproxy-run:/var/run/haproxy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        mkdir -p /var/run/haproxy && chmod 777 /var/run/haproxy &&
-        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg -f /etc/haproxy/backends.d
+    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    expose:
+      - "9999"
     depends_on:
       - agent
     networks:
@@ -150,7 +145,7 @@ services:
     environment:
       HAPANEL_TOKEN: %q
       HAPANEL_LISTEN: "0.0.0.0:9100"
-      HAPROXY_SOCKET: /var/run/haproxy/admin.sock
+      HAPROXY_SOCKET: tcp://haproxy:9999
       HAPROXY_BACKENDS_DIR: /etc/haproxy/backends.d
       HAPANEL_STATE_PATH: /var/lib/hapanel/state.json
       DOCKER_HOST: unix:///var/run/docker.sock
@@ -160,7 +155,6 @@ services:
       HOST_ROOT: /host/root
     volumes:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
-      - haproxy-run:/var/run/haproxy
       - agent-state:/var/lib/hapanel
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro
@@ -176,18 +170,14 @@ networks:
     driver: bridge
 
 volumes:
-  haproxy-run:
   agent-state:
 `, name, port, AgentImage, mgmtMap, token)
 
 	haproxyCfg := `# hapanel node HAProxy — только клиенты (:80 / :443).
-# Панель ↔ агент НЕ через HAProxy (агент публикует порт управления сам).
-# :443 = TCP passthrough (Reality/VLESS); без TLS-терминации на HAProxy.
+# Runtime API для агента: TCP :9999 (docker network only).
 global
-    # Access logs off (no log stdout / tcplog / httplog).
     maxconn 20000
-    # mode 666: shared volume with agent (avoid uid/gid mismatch)
-    stats socket /var/run/haproxy/admin.sock mode 666 level admin expose-fd listeners
+    stats socket ipv4@0.0.0.0:9999 level admin
     stats timeout 30s
     master-worker
 

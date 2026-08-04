@@ -16,7 +16,10 @@ Or via Docker (see `deploy/node`).
 
 ```bash
 export HAPANEL_TOKEN=change-me
-export HAPROXY_SOCKET=/var/run/haproxy/admin.sock
+# Docker Compose (default): TCP runtime API on the hapnet network
+export HAPROXY_SOCKET=tcp://haproxy:9999
+# Bare metal / unix socket alternative:
+# export HAPROXY_SOCKET=/var/run/haproxy/admin.sock
 export HAPROXY_BACKENDS_DIR=/etc/haproxy/backends.d
 export HAPANEL_STATE_PATH=/var/lib/hapanel/state.json
 export DOCKER_HOST=unix:///var/run/docker.sock
@@ -74,7 +77,9 @@ internal/store     JSON state persistence
 
 ## HAProxy notes
 
-- Targets HAProxy **2.8+ / 3.x** with a Unix admin socket and master-worker (`-W`).
+- Targets HAProxy **2.8+ / 3.x** with master-worker (`-W`).
+- Runtime API: prefer **TCP** `stats socket ipv4@0.0.0.0:9999` on the docker
+  network (`HAPROXY_SOCKET=tcp://haproxy:9999`). Unix sockets still work.
 - Server inventory is written to `/etc/haproxy/backends.d/<backend>.cfg` then the
   HAProxy container is signaled (`SIGUSR2`, fallback `SIGHUP`).
 - Runtime `add server` / `del server` are attempted as a best-effort fast path.

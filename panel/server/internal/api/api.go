@@ -334,7 +334,7 @@ func (s *Server) handleConnectNode(w http.ResponseWriter, r *http.Request) {
 		if statsErr != nil {
 			errMsg = statsErr.Error()
 		} else if statsStatus == http.StatusBadGateway {
-			errMsg = "агент отвечает, но нет связи с HAProxy (admin.sock) — проверьте compose/сокет"
+			errMsg = "агент отвечает, но нет связи с HAProxy runtime API — проверьте HAPROXY_SOCKET (tcp://haproxy:9999) и stats socket в haproxy.cfg"
 		} else {
 			errMsg = fmt.Sprintf("неожиданный ответ агента /stats: %d", statsStatus)
 		}

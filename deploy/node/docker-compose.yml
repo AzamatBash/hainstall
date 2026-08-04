@@ -2,14 +2,7 @@ services:
   haproxy:
     container_name: haproxy
     image: haproxy:3.0-alpine
-    # Local bake (optional): build from ./haproxy/Dockerfile
-    # build:
-    #   context: ./haproxy
-    #   dockerfile: Dockerfile
     restart: unless-stopped
-    # Official image USER is non-root; empty named volume on /var/run/haproxy is
-    # root-owned → admin.sock never appears. Run as root and prepare the dir.
-    user: "0:0"
     ports:
       - "80:80"
       - "443:443"
@@ -17,12 +10,10 @@ services:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
-      - haproxy-run:/var/run/haproxy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        mkdir -p /var/run/haproxy && chmod 777 /var/run/haproxy &&
-        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg -f /etc/haproxy/backends.d
+    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg", "-f", "/etc/haproxy/backends.d"]
+    # expose runtime API only on docker network (not published to host)
+    expose:
+      - "9999"
     networks:
       - hapnet
     depends_on:
@@ -31,18 +22,13 @@ services:
   agent:
     container_name: hapanel-agent
     image: azamatbash/hanode:0.1.0
-    # Local build (optional):
-    # build:
-    #   context: ../..
-    #   dockerfile: deploy/node/agent/Dockerfile
     restart: unless-stopped
     ports:
-      # Panel ↔ agent directly (not through HAProxy)
       - "47893:9100"
     environment:
       HAPANEL_TOKEN: ${HAPANEL_TOKEN:?set HAPANEL_TOKEN in .env}
       HAPANEL_LISTEN: "0.0.0.0:9100"
-      HAPROXY_SOCKET: /var/run/haproxy/admin.sock
+      HAPROXY_SOCKET: tcp://haproxy:9999
       HAPROXY_BACKENDS_DIR: /etc/haproxy/backends.d
       HAPANEL_STATE_PATH: /var/lib/hapanel/state.json
       DOCKER_HOST: unix:///var/run/docker.sock
@@ -52,15 +38,12 @@ services:
       HOST_ROOT: /host/root
     volumes:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
-      - haproxy-run:/var/run/haproxy
       - agent-state:/var/lib/hapanel
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro
       - /:/host/root:ro
     networks:
       - hapnet
-    # Agent needs to write backends.d and talk to docker.sock as root-ish;
-    # run as root inside container for MVP (socket + shared volume perms).
     user: "0:0"
     group_add:
       - ${DOCKER_GID:-0}
@@ -70,5 +53,4 @@ networks:
     driver: bridge
 
 volumes:
-  haproxy-run:
   agent-state:
