@@ -14,7 +14,7 @@ import (
 // Also published as azamatbash/hanode:latest — prefer the version tag in production.
 const AgentImage = "azamatbash/hanode:0.1.0"
 
-// DefaultMgmtPort is the panel↔agent HTTP port (clients stay on 443).
+// DefaultMgmtPort is the panel↔agent HTTP port (clients stay on 8443).
 const DefaultMgmtPort = 47893
 
 // Bundle is everything the operator copies onto the VPS.
@@ -91,7 +91,7 @@ func normalizeHost(host string) string {
 
 // Generate creates install files for a node.
 // port is the host management port published on the agent (panel → agent HTTP).
-// HAProxy only serves clients on 80/443 — no /_hapctl routing.
+// HAProxy only serves clients on 80/8443 — no /_hapctl routing.
 func Generate(name, host string, port int, token string) (Bundle, error) {
 	host = normalizeHost(host)
 	if host == "" {
@@ -114,7 +114,7 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 	mgmtMap := fmt.Sprintf("%d:9100", port)
 
 	compose := fmt.Sprintf(`# hapanel node — generated for %q
-# 80/443 = клиенты (HAProxy) | %d = панель → агент напрямую (HTTP)
+# 80/8443 = клиенты (HAProxy) | %d = панель → агент напрямую (HTTP)
 # Runtime API: TCP haproxy:9999 (без unix socket / shared volume)
 services:
   haproxy:
@@ -123,7 +123,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
+      - "8443:8443"
     volumes:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./haproxy/backends.d:/etc/haproxy/backends.d
@@ -173,7 +173,7 @@ volumes:
   agent-state:
 `, name, port, AgentImage, mgmtMap, token)
 
-	haproxyCfg := `# hapanel node HAProxy — только клиенты (:80 / :443).
+	haproxyCfg := `# hapanel node HAProxy — только клиенты (:80 / :8443).
 # Runtime API для агента: TCP :9999 (docker network only).
 global
     maxconn 20000
@@ -199,7 +199,7 @@ frontend http_plain
 
 frontend https_front
     mode tcp
-    bind *:443
+    bind *:8443
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
     default_backend app
@@ -224,18 +224,18 @@ DOCKER_GID=0
 	readme := fmt.Sprintf(`# hapanel node: %s
 
 Порты:
-- **443 / 80** — клиентский трафик (HAProxy TCP passthrough → app; без TLS на :443)
+- **8443 / 80** — клиентский трафик (HAProxy TCP passthrough → app; без TLS на :8443)
 - **%d** — панель ↔ агент напрямую (HTTP /_hapctl), не через HAProxy
 
 Важно: ограничьте доступ к порту %d (firewall: только IP панели).
 
 1. Установите Docker + Compose на VPS.
 2. Создайте файлы из бандла панели в /opt/hapanel-node.
-3. Каталог certs/ можно оставить пустым (монтируется опционально; :443 — TCP passthrough).
+3. Каталог certs/ можно оставить пустым (монтируется опционально; :8443 — TCP passthrough).
    При необходимости ACME/старых скриптов:
 
    mkdir -p certs
-   # openssl … → certs/site.pem (не используется для bind *:443)
+   # openssl … → certs/site.pem (не используется для bind *:8443)
 
 4. Образ агента (Docker Hub):
 
@@ -253,8 +253,8 @@ DOCKER_GID=0
 	commands := fmt.Sprintf(`mkdir -p /opt/hapanel-node/haproxy/backends.d /opt/hapanel-node/certs
 cd /opt/hapanel-node
 # напишите docker-compose.yml + конфиги haproxy из панели
-# certs/ опционален (:443 TCP passthrough)
-# 443 = клиенты TCP, %d = панель→агент (HTTP)
+# certs/ опционален (:8443 TCP passthrough)
+# 8443 = клиенты TCP, %d = панель→агент (HTTP)
 export DOCKER_GID=$(getent group docker | cut -d: -f3)
 docker compose up -d
 # затем «Проверить связь» в панели → %s

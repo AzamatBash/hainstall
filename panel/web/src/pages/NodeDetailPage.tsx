@@ -71,7 +71,7 @@ export default function NodeDetailPage() {
     backend: 'app',
     name: '',
     address: '',
-    port: '80',
+    port: '8443',
     weight: '100',
   })
 

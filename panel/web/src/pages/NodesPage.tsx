@@ -391,7 +391,7 @@ function AddNodeWizard({
                 required
               />
               <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
-                Клиенты — 443 (HAProxy). Панель ходит к агенту напрямую по HTTP
+                Клиенты — 8443 (HAProxy). Панель ходит к агенту напрямую по HTTP
                 на этом порту (по умолчанию 47893), не через HAProxy.
               </p>
             </div>
