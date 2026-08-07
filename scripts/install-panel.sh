@@ -68,6 +68,12 @@ services:
       PANEL_STATIC_DIR: /app/web/dist
       HAPANEL_INSECURE_SKIP_VERIFY: \${HAPANEL_INSECURE_SKIP_VERIFY:-true}
       HAPANEL_UTLS_HELLO: \${HAPANEL_UTLS_HELLO:-randomized}
+      PANEL_BASE_PATH: \${PANEL_BASE_PATH:-}
+      GEMINI_API_KEY: \${GEMINI_API_KEY:-}
+      GROQ_API_KEY: \${GROQ_API_KEY:-}
+      LLM_PROVIDER: \${LLM_PROVIDER:-gemini}
+      PANEL_IP: \${PANEL_IP:-}
+      LLM_HTTP_PROXY: \${LLM_HTTP_PROXY:-}
     volumes:
       - panel-data:/app/data
     restart: unless-stopped

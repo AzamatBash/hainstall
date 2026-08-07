@@ -1,6 +1,7 @@
 .tools/
 *.db
 data/
+.local-panel-data/
 panel/server/data/
 **/node_modules/
 panel/web/dist/

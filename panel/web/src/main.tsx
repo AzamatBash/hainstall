@@ -2,6 +2,7 @@ import { Component, StrictMode, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { basePath } from './basePath'
 import './styles.css'
 
 class ErrorBoundary extends Component<
@@ -45,7 +46,7 @@ class ErrorBoundary extends Component<
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <BrowserRouter>
+      <BrowserRouter basename={basePath() || undefined}>
         <App />
       </BrowserRouter>
     </ErrorBoundary>

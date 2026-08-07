@@ -8,29 +8,88 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azabash/hapanel/panel/internal/agent"
 	"github.com/azabash/hapanel/panel/internal/auth"
+	"github.com/azabash/hapanel/panel/internal/opsagent"
 	"github.com/azabash/hapanel/panel/internal/provision"
+	"github.com/azabash/hapanel/panel/internal/remna"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
 
-type Server struct {
-	store  *store.Store
-	auth   *auth.Service
-	agent  *agent.Client
-	logger *slog.Logger
-	mux    *http.ServeMux
+type Options struct {
+	SecretsKey  string
+	GeminiKey   string
+	GroqKey     string
+	LLMProvider string
+	PanelIP     string
+	LLMProxy    string
 }
 
-func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logger) *Server {
+type Server struct {
+	store      *store.Store
+	auth       *auth.Service
+	agent      *agent.Client
+	remna      *remna.Client
+	ops        *opsagent.Runner
+	secretsKey string
+	logger     *slog.Logger
+	mux        *http.ServeMux
+
+	remnaCacheMu         sync.Mutex
+	remnaCache           map[string]remnaStatsCacheEntry
+	remnaLiveCache       map[string]remnaLiveCacheEntry
+	remnaPanelNodesCache map[string]remnaPanelNodesCacheEntry
+	remnaOnlineByNode    map[string]remnaOnlineCacheEntry
+	remnaRefreshInflight map[string]bool
+}
+
+func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logger, opt Options) *Server {
+	llm := &opsagent.LLM{
+		Provider:  opt.LLMProvider,
+		GeminiKey: opt.GeminiKey,
+		GroqKey:   opt.GroqKey,
+	}
+	if opt.LLMProxy != "" {
+		hc, err := opsagent.NewHTTPClient(opt.LLMProxy, 90*time.Second)
+		if err != nil {
+			logger.Error("llm proxy", "err", err)
+		} else {
+			llm.HTTPClient = hc
+			logger.Info("llm http client via proxy configured")
+		}
+	}
 	s := &Server{
-		store:  st,
-		auth:   au,
-		agent:  ag,
-		logger: logger,
-		mux:    http.NewServeMux(),
+		store:                st,
+		auth:                 au,
+		agent:                ag,
+		remna:                remna.New(),
+		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
+		secretsKey:           opt.SecretsKey,
+		logger:               logger,
+		mux:                  http.NewServeMux(),
+		remnaCache:           make(map[string]remnaStatsCacheEntry),
+		remnaLiveCache:       make(map[string]remnaLiveCacheEntry),
+		remnaPanelNodesCache: make(map[string]remnaPanelNodesCacheEntry),
+		remnaOnlineByNode:    make(map[string]remnaOnlineCacheEntry),
+		remnaRefreshInflight: make(map[string]bool),
+	}
+	s.ops.OnNodeReady = func(nodeID string) {
+		n, err := s.store.GetNode(nodeID)
+		if err != nil || n == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		now := time.Now().UTC()
+		hStatus, _, err := s.agent.Health(ctx, n.URL, n.Token)
+		if err != nil || hStatus < 200 || hStatus >= 300 {
+			_ = s.store.UpdateNodeStatus(nodeID, store.StatusOffline, &now)
+			return
+		}
+		_ = s.store.UpdateNodeStatus(nodeID, store.StatusOnline, &now)
 	}
 	s.routes()
 	return s
@@ -48,6 +107,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/nodes", s.requireAuth(s.handleListNodes))
 	s.mux.HandleFunc("POST /api/nodes", s.requireAuth(s.handleCreateNode))
 	s.mux.HandleFunc("POST /api/nodes/provision", s.requireAuth(s.handleProvisionNode))
+	s.mux.HandleFunc("PUT /api/nodes/reorder", s.requireAuth(s.handleReorderNodes))
 	s.mux.HandleFunc("PATCH /api/nodes/{id}", s.requireAuth(s.handleUpdateNode))
 	s.mux.HandleFunc("DELETE /api/nodes/{id}", s.requireAuth(s.handleDeleteNode))
 	s.mux.HandleFunc("GET /api/nodes/{id}/install", s.requireAuth(s.handleNodeInstall))
@@ -58,9 +118,28 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/nodes/{id}/backends", s.requireAuth(s.handleNodeBackends))
 	s.mux.HandleFunc("POST /api/nodes/{id}/backends", s.requireAuth(s.handleAddBackend))
 	s.mux.HandleFunc("DELETE /api/nodes/{id}/backends/{backend}/{name}", s.requireAuth(s.handleDeleteBackend))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/backends/{backend}/{name}/remna", s.requireAuth(s.handleUpsertBackendRemna))
+	s.mux.HandleFunc("GET /api/nodes/{id}/backends/remna-stats", s.requireAuth(s.handleNodeRemnaStats))
+	s.mux.HandleFunc("GET /api/nodes/{id}/backends/remna-links", s.requireAuth(s.handleNodeRemnaLinks))
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/reload", s.requireAuth(s.handleReload))
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/restart", s.requireAuth(s.handleRestart))
 	s.mux.HandleFunc("GET /api/nodes/{id}/health", s.requireAuth(s.handleHealth))
+
+	s.mux.HandleFunc("GET /api/remna-panels", s.requireAuth(s.handleListRemnaPanels))
+	s.mux.HandleFunc("POST /api/remna-panels", s.requireAuth(s.handleCreateRemnaPanel))
+	s.mux.HandleFunc("PUT /api/remna-panels/{id}", s.requireAuth(s.handleUpdateRemnaPanel))
+	s.mux.HandleFunc("DELETE /api/remna-panels/{id}", s.requireAuth(s.handleDeleteRemnaPanel))
+
+	s.mux.HandleFunc("GET /api/providers", s.requireAuth(s.handleListProviders))
+	s.mux.HandleFunc("POST /api/providers", s.requireAuth(s.handleCreateProvider))
+	s.mux.HandleFunc("PUT /api/providers/{id}", s.requireAuth(s.handleUpdateProvider))
+	s.mux.HandleFunc("DELETE /api/providers/{id}", s.requireAuth(s.handleDeleteProvider))
+	s.mux.HandleFunc("POST /api/providers/{id}/accounts", s.requireAuth(s.handleCreateProviderAccount))
+	s.mux.HandleFunc("PUT /api/provider-accounts/{id}", s.requireAuth(s.handleUpdateProviderAccount))
+	s.mux.HandleFunc("DELETE /api/provider-accounts/{id}", s.requireAuth(s.handleDeleteProviderAccount))
+
+	s.mux.HandleFunc("POST /api/agent/deploy", s.requireAuth(s.handleAgentDeploy))
+	s.mux.HandleFunc("GET /api/agent/jobs/{id}", s.requireAuth(s.handleAgentJob))
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -128,9 +207,28 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
 		return
 	}
+	remnaAddrs := map[string][]string{}
+	if links, err := s.store.ListAllBackendRemnaLinks(); err == nil {
+		for _, l := range links {
+			addr := strings.TrimSpace(l.RemnaAddress)
+			if addr == "" {
+				continue
+			}
+			remnaAddrs[l.NodeID] = append(remnaAddrs[l.NodeID], addr)
+		}
+	}
+	// Never wait on Remnawave for the list: serve cached Online and warm in background.
+	s.scheduleRemnaOnlineRefresh(nodes)
 	out := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, publicNode(n))
+		m := s.publicNode(n)
+		addrs := remnaAddrs[n.ID]
+		if addrs == nil {
+			addrs = []string{}
+		}
+		m["remna_addresses"] = addrs
+		m["remna_online"] = s.nodeRemnaOnlineCached(n.ID)
+		out = append(out, m)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
 }
@@ -162,7 +260,7 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
 		return
 	}
-	writeJSON(w, http.StatusCreated, publicNode(*n))
+	writeJSON(w, http.StatusCreated, s.publicNode(*n))
 }
 
 func (s *Server) handleProvisionNode(w http.ResponseWriter, r *http.Request) {
@@ -200,7 +298,7 @@ func (s *Server) handleProvisionNode(w http.ResponseWriter, r *http.Request) {
 	_ = s.store.UpdateNodeStatus(n.ID, store.StatusUnknown, nil)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"node":   publicNode(*n),
+		"node":   s.publicNode(*n),
 		"bundle": bundle,
 	})
 }
@@ -222,7 +320,7 @@ func (s *Server) handleNodeInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"node":   publicNode(*n),
+		"node":   s.publicNode(*n),
 		"bundle": bundle,
 	})
 }
@@ -365,7 +463,63 @@ func publicNodeMust(s *Server, id string) map[string]any {
 	if err != nil || n == nil {
 		return map[string]any{"id": id}
 	}
-	return publicNode(*n)
+	return s.publicNode(*n)
+}
+
+func (s *Server) handleReorderNodes(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "укажите ids")
+		return
+	}
+	existing, err := s.store.ListNodes()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if len(body.IDs) != len(existing) {
+		writeErr(w, http.StatusBadRequest, "ids должен содержать все ноды")
+		return
+	}
+	seen := make(map[string]struct{}, len(body.IDs))
+	for _, id := range body.IDs {
+		if id == "" {
+			writeErr(w, http.StatusBadRequest, "пустой id")
+			return
+		}
+		if _, ok := seen[id]; ok {
+			writeErr(w, http.StatusBadRequest, "дублирующийся id")
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	for _, n := range existing {
+		if _, ok := seen[n.ID]; !ok {
+			writeErr(w, http.StatusBadRequest, "ids не совпадает со списком нод")
+			return
+		}
+	}
+	if err := s.store.ReorderNodes(body.IDs); err != nil {
+		s.logger.Error("reorder nodes", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	nodes, err := s.store.ListNodes()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, s.publicNode(n))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": out})
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -381,10 +535,14 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name string `json:"name"`
-		Host string `json:"host"`
-		Port int    `json:"port"`
-		URL  string `json:"url"`
+		Name              string          `json:"name"`
+		Country           *string         `json:"country"`
+		RemnaPanelID      json.RawMessage `json:"remna_panel_id"`
+		ProviderID        json.RawMessage `json:"provider_id"`
+		ProviderAccountID json.RawMessage `json:"provider_account_id"`
+		Host              string          `json:"host"`
+		Port              int             `json:"port"`
+		URL               string          `json:"url"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON")
@@ -393,9 +551,101 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(body.Name)
 	newURL := strings.TrimRight(strings.TrimSpace(body.URL), "/")
+	host := strings.TrimSpace(body.Host)
+	hasURLChange := newURL != "" || host != "" || body.Port != 0
+	hasName := name != ""
+	hasCountry := body.Country != nil
+	remnaPanelPtr, hasRemnaPanel, remnaOK := parseOptionalRemnaPanelID(body.RemnaPanelID)
+	if !remnaOK {
+		writeErr(w, http.StatusBadRequest, "некорректный remna_panel_id")
+		return
+	}
+	providerPtr, hasProvider, providerOK := parseOptionalRemnaPanelID(body.ProviderID)
+	if !providerOK {
+		writeErr(w, http.StatusBadRequest, "некорректный provider_id")
+		return
+	}
+	accountPtr, hasAccount, accountOK := parseOptionalRemnaPanelID(body.ProviderAccountID)
+	if !accountOK {
+		writeErr(w, http.StatusBadRequest, "некорректный provider_account_id")
+		return
+	}
+	if hasRemnaPanel && remnaPanelPtr != nil && *remnaPanelPtr != "" {
+		p, err := s.store.GetRemnaPanel(*remnaPanelPtr)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+			return
+		}
+		if p == nil {
+			writeErr(w, http.StatusBadRequest, "remna-панель не найдена")
+			return
+		}
+	}
+	if hasProvider && providerPtr != nil && *providerPtr != "" {
+		p, err := s.store.GetProvider(*providerPtr)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+			return
+		}
+		if p == nil {
+			writeErr(w, http.StatusBadRequest, "провайдер не найден")
+			return
+		}
+	}
+	if hasAccount && accountPtr != nil && *accountPtr != "" {
+		a, err := s.store.GetProviderAccount(*accountPtr)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+			return
+		}
+		if a == nil {
+			writeErr(w, http.StatusBadRequest, "аккаунт провайдера не найден")
+			return
+		}
+		effectiveProvider := n.ProviderID
+		if hasProvider && providerPtr != nil {
+			effectiveProvider = *providerPtr
+		}
+		if a.ProviderID != effectiveProvider {
+			writeErr(w, http.StatusBadRequest, "аккаунт не принадлежит выбранному провайдеру")
+			return
+		}
+	}
+
+	if hasCountry {
+		c := strings.ToUpper(strings.TrimSpace(*body.Country))
+		if c != "" && !isCountryCode(c) {
+			writeErr(w, http.StatusBadRequest, "некорректный код страны")
+			return
+		}
+		body.Country = &c
+	}
+
+	// Meta-only update: name and/or country and/or remna panel / provider / account, keep URL and status.
+	if !hasURLChange {
+		if !hasName && !hasCountry && !hasRemnaPanel && !hasProvider && !hasAccount {
+			writeErr(w, http.StatusBadRequest, "укажите name, country, remna_panel_id, provider_id, provider_account_id, host или url")
+			return
+		}
+		var namePtr *string
+		if hasName {
+			namePtr = &name
+		}
+		updated, err := s.store.UpdateNodeMeta(id, namePtr, body.Country, remnaPanelPtr, providerPtr, accountPtr)
+		if err != nil {
+			s.logger.Error("update node", "err", err)
+			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+			return
+		}
+		if updated == nil {
+			writeErr(w, http.StatusNotFound, "нода не найдена")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": s.publicNode(*updated)})
+		return
+	}
 
 	if newURL == "" {
-		host := strings.TrimSpace(body.Host)
 		port := body.Port
 		if host == "" && port == 0 {
 			writeErr(w, http.StatusBadRequest, "укажите host или url")
@@ -433,7 +683,60 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "нода не найдена")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": publicNode(*updated)})
+	if hasCountry || hasRemnaPanel || hasProvider || hasAccount {
+		var countryPtr *string
+		if hasCountry {
+			countryPtr = body.Country
+		}
+		var remnaPtr *string
+		if hasRemnaPanel {
+			remnaPtr = remnaPanelPtr
+		}
+		var provPtr *string
+		if hasProvider {
+			provPtr = providerPtr
+		}
+		var accPtr *string
+		if hasAccount {
+			accPtr = accountPtr
+		}
+		updated, err = s.store.UpdateNodeMeta(id, nil, countryPtr, remnaPtr, provPtr, accPtr)
+		if err != nil {
+			s.logger.Error("update node meta", "err", err)
+			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": s.publicNode(*updated)})
+}
+
+// parseOptionalRemnaPanelID: absent → no change; null or "" → clear; otherwise set.
+func parseOptionalRemnaPanelID(raw json.RawMessage) (value *string, set bool, ok bool) {
+	if len(raw) == 0 {
+		return nil, false, true
+	}
+	if string(raw) == "null" {
+		empty := ""
+		return &empty, true, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, false, false
+	}
+	s = strings.TrimSpace(s)
+	return &s, true, true
+}
+
+func isCountryCode(code string) bool {
+	if len(code) != 2 {
+		return false
+	}
+	for _, c := range code {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
@@ -557,16 +860,46 @@ func (s *Server) proxyNode(w http.ResponseWriter, r *http.Request, fn nodeProxyF
 	_, _ = w.Write(body)
 }
 
-func publicNode(n store.Node) map[string]any {
+func (s *Server) publicNode(n store.Node) map[string]any {
 	m := map[string]any{
-		"id":         n.ID,
-		"name":       n.Name,
-		"url":        n.URL,
-		"created_at": n.CreatedAt.Format(time.RFC3339),
-		"status":     n.Status,
+		"id":                   n.ID,
+		"name":                 n.Name,
+		"url":                  n.URL,
+		"country":              n.Country,
+		"sort_order":           n.SortOrder,
+		"remna_panel_id":       n.RemnaPanelID,
+		"remna_panel_name":     "",
+		"provider_id":          n.ProviderID,
+		"provider_name":        "",
+		"provider_favicon":     "",
+		"provider_login_url":   "",
+		"provider_account_id":  n.ProviderAccountID,
+		"provider_account_login": "",
+		"created_at":           n.CreatedAt.Format(time.RFC3339),
+		"status":               n.Status,
+	}
+	if n.RemnaPanelID != "" {
+		if p, err := s.store.GetRemnaPanel(n.RemnaPanelID); err == nil && p != nil {
+			m["remna_panel_name"] = p.Name
+		}
+	}
+	if n.ProviderID != "" {
+		if p, err := s.store.GetProvider(n.ProviderID); err == nil && p != nil {
+			m["provider_name"] = p.Name
+			m["provider_favicon"] = p.FaviconURL
+			m["provider_login_url"] = p.LoginURL
+		}
+	}
+	if n.ProviderAccountID != "" {
+		if a, err := s.store.GetProviderAccount(n.ProviderAccountID); err == nil && a != nil {
+			m["provider_account_login"] = a.Login
+		}
 	}
 	if n.LastSeen != nil {
 		m["last_seen"] = n.LastSeen.Format(time.RFC3339)
+	}
+	if n.Snapshot != nil {
+		m["live"] = n.Snapshot
 	}
 	return m
 }
@@ -681,7 +1014,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

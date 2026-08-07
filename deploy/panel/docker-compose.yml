@@ -7,16 +7,22 @@ services:
       context: ../..
       dockerfile: deploy/panel/Dockerfile
     container_name: hapanel-panel
-    ports:
-      - "${PANEL_PORT:-3080}:3080"
     environment:
       PANEL_PASSWORD: ${PANEL_PASSWORD:-changeme}
       PANEL_JWT_SECRET: ${PANEL_JWT_SECRET:-change-me-to-a-long-random-secret}
       PANEL_LISTEN: ":3080"
       PANEL_DB_PATH: /app/data/panel.db
       PANEL_STATIC_DIR: /app/web/dist
+      PANEL_BASE_PATH: ${PANEL_BASE_PATH:-}
       HAPANEL_INSECURE_SKIP_VERIFY: ${HAPANEL_INSECURE_SKIP_VERIFY:-true}
       HAPANEL_UTLS_HELLO: ${HAPANEL_UTLS_HELLO:-randomized}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      PANEL_IP: ${PANEL_IP:-}
+      LLM_HTTP_PROXY: ${LLM_HTTP_PROXY:-}
+    ports:
+      - "${PANEL_BIND:-127.0.0.1}:${PANEL_PORT:-3080}:3080"
     volumes:
       - panel-data:/app/data
     restart: unless-stopped

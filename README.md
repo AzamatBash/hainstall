@@ -76,37 +76,50 @@ Builds from repo root:
 - panel → `deploy/panel/Dockerfile`
 - agent → `deploy/node/agent/Dockerfile`
 
-### Install panel from Hub (рекомендуется)
+### Как развернуть панель (Docker Hub)
 
-Скрипт сам генерирует сильный `PANEL_PASSWORD` и `PANEL_JWT_SECRET`, пишет
-`/opt/hapanel` (или `HAPANEL_DIR` / аргумент), поднимает образ
-`azamatbash/hapanel:0.1.0` и **печатает пароль в конце**. Клонировать весь
-репозиторий для runtime не обязательно — достаточно файла скрипта и Docker.
+Нужен сервер с Docker и плагином Compose. Образ панели: `azamatbash/hapanel:0.1.0`.
+
+**Вариант 1 — одной командой (рекомендуется)**
+
+Скрипт сам создаст `/opt/hapanel`, сгенерирует пароль и JWT-секрет, скачает образ и поднимет контейнер. В конце выведет URL и пароль.
 
 ```bash
-# одной командой (публичный репо):
 curl -fsSL https://raw.githubusercontent.com/AzamatBash/hainstall/main/scripts/install-panel.sh | bash
-
-# из клона:
-bash scripts/install-panel.sh
-# каталог: HAPANEL_DIR=/opt/hapanel bash scripts/install-panel.sh
 ```
 
-Пароль также лежит в `.env` с правами `600`. Сохраните его — повторно скрипт
-его не показывает. Защита входа: **5 неверных попыток с одного IP → блокировка
-на 15 минут** (ответ 429).
-
-Вручную (без скрипта):
+Или из клона репозитория:
 
 ```bash
-cd deploy/panel
+bash scripts/install-panel.sh
+# другой каталог: HAPANEL_DIR=/opt/hapanel bash scripts/install-panel.sh
+```
+
+Пароль также лежит в `/opt/hapanel/.env` (права `600`). Сохраните его — скрипт повторно не показывает. Защита входа: **5 неверных попыток с одного IP → блокировка на 15 минут** (429).
+
+**Вариант 2 — вручную**
+
+```bash
+mkdir -p /opt/hapanel && cd /opt/hapanel
+# скопируйте deploy/panel/docker-compose.yml и .env.example из репо
 cp .env.example .env
 # задайте PANEL_PASSWORD и PANEL_JWT_SECRET
+# опционально: PANEL_BASE_PATH=/секретный_путь  PANEL_BIND=127.0.0.1
 docker compose pull
 docker compose up -d
 ```
 
-Local rebuild of the same image name: `docker compose up -d --build`.
+Открыть: `http://SERVER:3080` (или с `PANEL_BASE_PATH`, если задан). Данные SQLite — в volume `panel-data`.
+
+Обновление панели до актуального образа с Hub:
+
+```bash
+cd /opt/hapanel
+docker compose pull
+docker compose up -d
+```
+
+Локальная пересборка того же тега из исходников: `docker compose up -d --build`.
 
 ### Nodes from the panel wizard
 

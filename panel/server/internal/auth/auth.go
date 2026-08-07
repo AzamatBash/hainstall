@@ -12,10 +12,12 @@ import (
 const CookieName = "hapanel_session"
 
 type Service struct {
-	password  string
-	jwtSecret []byte
-	ttl       time.Duration
-	limiter   *LoginLimiter
+	password   string
+	jwtSecret  []byte
+	ttl        time.Duration
+	limiter    *LoginLimiter
+	cookiePath string
+	secure     bool
 }
 
 type claims struct {
@@ -24,11 +26,20 @@ type claims struct {
 }
 
 func New(password, secret string, ttl time.Duration) *Service {
+	return NewWithCookie(password, secret, ttl, "/", false)
+}
+
+func NewWithCookie(password, secret string, ttl time.Duration, cookiePath string, secure bool) *Service {
+	if cookiePath == "" {
+		cookiePath = "/"
+	}
 	return &Service{
-		password:  password,
-		jwtSecret: []byte(secret),
-		ttl:       ttl,
-		limiter:   NewLoginLimiter(),
+		password:   password,
+		jwtSecret:  []byte(secret),
+		ttl:        ttl,
+		limiter:    NewLoginLimiter(),
+		cookiePath: cookiePath,
+		secure:     secure,
 	}
 }
 
@@ -87,8 +98,9 @@ func (s *Service) SetSessionCookie(w http.ResponseWriter, token string, exp time
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    token,
-		Path:     "/",
+		Path:     s.cookiePath,
 		HttpOnly: true,
+		Secure:   s.secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  exp,
 	})
@@ -98,8 +110,9 @@ func (s *Service) ClearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     s.cookiePath,
 		HttpOnly: true,
+		Secure:   s.secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),

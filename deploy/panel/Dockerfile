@@ -9,10 +9,8 @@ RUN npm run build
 FROM golang:1.22-alpine AS server
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
-COPY panel/server/go.mod panel/server/go.sum ./
-RUN go mod download
 COPY panel/server/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/panel ./cmd/panel
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/panel ./cmd/panel
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata \

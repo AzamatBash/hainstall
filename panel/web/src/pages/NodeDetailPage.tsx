@@ -1,14 +1,18 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
+  BackendRemnaLink,
   BackendServer,
   flattenBackends,
   formatBitrate,
+  formatBitrateShort,
   formatBytes,
-  formatLastSeen,
   formatUptime,
   Node,
+  Provider,
+  RemnaBackendStat,
+  RemnaPanel,
   StatsSummary,
   statusLabel,
   SystemMetrics,
@@ -16,7 +20,11 @@ import {
   userFacingStats,
 } from '../api'
 import { copyToClipboard, downloadTextFile } from '../clipboard'
+import CountryPicker from '../components/CountryPicker'
+import { countryLabel } from '../countries'
+import { putNodeCache } from '../nodeCache'
 import SparklineChart, { ChartPoint } from '../components/SparklineChart'
+import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 90
 const POLL_MS = 5000
@@ -32,6 +40,117 @@ function StatusBadge({ status, large }: { status: string; large?: boolean }) {
     <span className={`badge badge-status ${s}${large ? ' badge-lg' : ''}`}>
       {statusLabel(s)}
     </span>
+  )
+}
+
+function nodeHost(url: string): string {
+  try {
+    return new URL(url).hostname || url
+  } catch {
+    return url.replace(/^https?:\/\//, '').split(/[/:]/)[0] || url
+  }
+}
+
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.75" />
+      <path
+        d="M5 15V5a2 2 0 0 1 2-2h10"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function EditIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3zM13 7l3 3"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M20 12a8 8 0 1 1-2.3-5.6"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M20 4v5h-5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function ReloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 12a8 8 0 0 1 13.7-5.7M20 12a8 8 0 0 1-13.7 5.7"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M18 3v5h-5M6 21v-5h5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function RestartIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 5v4M12 5a7 7 0 1 1-5.3 2.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 5H4v4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }
 
@@ -62,7 +181,6 @@ export default function NodeDetailPage() {
   const histResetRef = useRef(id)
   const trafficRef = useRef<{ t: number; inn: number; out: number } | null>(null)
   const [error, setError] = useState('')
-  const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [toast, setToast] = useState<{ kind: 'ok' | 'fail'; text: string } | null>(
@@ -76,6 +194,9 @@ export default function NodeDetailPage() {
   const [editPort, setEditPort] = useState('47893')
   const [editOpen, setEditOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [showAddBackend, setShowAddBackend] = useState(false)
+  const actionsRef = useRef<HTMLDivElement | null>(null)
 
   const [form, setForm] = useState({
     backend: 'app',
@@ -85,15 +206,90 @@ export default function NodeDetailPage() {
     weight: '100',
   })
 
+  const [remnaPanels, setRemnaPanels] = useState<RemnaPanel[]>([])
+  const [providers, setProviders] = useState<Provider[]>([])
+  const [remnaForms, setRemnaForms] = useState<
+    Record<string, { panelId: string; remnaAddress: string }>
+  >({})
+  const [remnaLinked, setRemnaLinked] = useState<Record<string, boolean>>({})
+  const [remnaStats, setRemnaStats] = useState<Record<string, RemnaBackendStat>>({})
+  const [remnaBusyKey, setRemnaBusyKey] = useState('')
+
   const facing = useMemo(() => userFacingStats(stats), [stats])
 
+  const remnaKey = (backend: string, name: string) => `${backend}/${name}`
+
+  const applyRemnaLinks = useCallback((links: BackendRemnaLink[]) => {
+    const forms: Record<string, { panelId: string; remnaAddress: string }> = {}
+    const linked: Record<string, boolean> = {}
+    for (const l of links) {
+      const k = remnaKey(l.backend, l.name)
+      forms[k] = {
+        panelId: l.remna_panel_id || '',
+        remnaAddress: l.remna_address || '',
+      }
+      linked[k] = true
+    }
+    setRemnaForms((prev) => ({ ...prev, ...forms }))
+    setRemnaLinked(linked)
+  }, [])
+
+  const loadRemnaPanels = useCallback(async () => {
+    try {
+      const res = await api<{ panels: RemnaPanel[] }>('/api/remna-panels')
+      setRemnaPanels(Array.isArray(res.panels) ? res.panels : [])
+    } catch {
+      /* ignore — remna optional */
+    }
+  }, [])
+
+  const loadProviders = useCallback(async () => {
+    try {
+      const res = await api<{ providers: Provider[] }>('/api/providers')
+      setProviders(Array.isArray(res.providers) ? res.providers : [])
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const loadRemnaLinks = useCallback(async () => {
+    if (!id) return
+    try {
+      const res = await api<{ links: BackendRemnaLink[] }>(
+        `/api/nodes/${id}/backends/remna-links`,
+      )
+      applyRemnaLinks(Array.isArray(res.links) ? res.links : [])
+    } catch {
+      /* ignore */
+    }
+  }, [id, applyRemnaLinks])
+
+  const loadRemnaStats = useCallback(async () => {
+    if (!id) return
+    try {
+      const res = await api<{ stats: RemnaBackendStat[] }>(
+        `/api/nodes/${id}/backends/remna-stats`,
+      )
+      const list = Array.isArray(res.stats) ? res.stats : []
+      const map: Record<string, RemnaBackendStat> = {}
+      for (const s of list) {
+        map[remnaKey(s.backend, s.name)] = s
+      }
+      setRemnaStats(map)
+    } catch {
+      /* ignore transient */
+    }
+  }, [id])
+
   const applyTraffic = useCallback((sys: SystemMetrics | null) => {
-    if (!sys) return
+    if (!sys) return { downBps: null as number | null, upBps: null as number | null }
     const rx = Number(sys.net_rx_bytes) || 0
     const tx = Number(sys.net_tx_bytes) || 0
-    if (rx <= 0 && tx <= 0) return
+    if (rx <= 0 && tx <= 0) return { downBps: null, upBps: null }
     const now = Date.now()
     const prev = trafficRef.current
+    let down: number | null = null
+    let up: number | null = null
     if (prev && now > prev.t) {
       const dt = (now - prev.t) / 1000
       if (dt >= 0.5) {
@@ -104,9 +300,12 @@ export default function NodeDetailPage() {
         setDownBps(out)
         setUpHist((h) => pushPoint(h, inn))
         setDownHist((h) => pushPoint(h, out))
+        up = inn
+        down = out
       }
     }
     trafficRef.current = { t: now, inn: rx, out: tx }
+    return { downBps: down, upBps: up }
   }, [])
 
   const load = useCallback(async () => {
@@ -141,14 +340,30 @@ export default function NodeDetailPage() {
         api<SystemMetrics>(`/api/nodes/${id}/system`).catch(() => null),
       ])
       setStats(statsRes)
-      setBackends(flattenBackends(backendsRes))
+      const flat = flattenBackends(backendsRes)
+      setBackends(flat)
+      const facingNow = userFacingStats(statsRes)
+      let metrics
       if (systemRes) {
         setSystem(systemRes)
-        applyTraffic(systemRes)
+        const rates = applyTraffic(systemRes)
         setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
         setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
+        metrics = {
+          cpu: Number(systemRes.cpu_percent) || 0,
+          loadAvg: Array.isArray(systemRes.load_avg)
+            ? systemRes.load_avg.map(Number)
+            : undefined,
+          downBps: rates.downBps,
+          upBps: rates.upBps,
+        }
       }
-      const facingNow = userFacingStats(statsRes)
+      putNodeCache(id!, {
+        backends: flat,
+        sessions:
+          facingNow.active_sessions !== null ? String(facingNow.active_sessions) : '—',
+        metrics,
+      })
       if (facingNow.active_sessions !== null) {
         setSessHist((h) => pushPoint(h, facingNow.active_sessions ?? 0))
       }
@@ -176,6 +391,12 @@ export default function NodeDetailPage() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    void loadRemnaPanels()
+    void loadProviders()
+    void loadRemnaLinks()
+  }, [loadRemnaPanels, loadProviders, loadRemnaLinks])
+
   // Live poll while detail page is open and node is online.
   useEffect(() => {
     if (!node || node.status !== 'online') return
@@ -188,10 +409,24 @@ export default function NodeDetailPage() {
           ])
           setStats(statsRes)
           setSystem(systemRes)
-          applyTraffic(systemRes)
+          const rates = applyTraffic(systemRes)
           setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
           setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
           const facingNow = userFacingStats(statsRes)
+          putNodeCache(id!, {
+            sessions:
+              facingNow.active_sessions !== null
+                ? String(facingNow.active_sessions)
+                : undefined,
+            metrics: {
+              cpu: Number(systemRes.cpu_percent) || 0,
+              loadAvg: Array.isArray(systemRes.load_avg)
+                ? systemRes.load_avg.map(Number)
+                : undefined,
+              downBps: rates.downBps,
+              upBps: rates.upBps,
+            },
+          })
           if (facingNow.active_sessions !== null) {
             setSessHist((h) => pushPoint(h, facingNow.active_sessions ?? 0))
           }
@@ -203,18 +438,104 @@ export default function NodeDetailPage() {
     return () => clearInterval(timer)
   }, [id, node?.status, applyTraffic])
 
+  // Remna stats poll (~5s) when backends are present.
+  useEffect(() => {
+    if (!id || backends.length === 0) return
+    void loadRemnaStats()
+    const timer = setInterval(() => {
+      void loadRemnaStats()
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [id, backends.length, loadRemnaStats])
+
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 4500)
     return () => clearTimeout(t)
   }, [toast])
 
+  useEffect(() => {
+    if (!actionsOpen) return
+    function onDoc(e: MouseEvent) {
+      if (!actionsRef.current?.contains(e.target as globalThis.Node)) {
+        setActionsOpen(false)
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setActionsOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [actionsOpen])
+
   const title = useMemo(() => node?.name ?? 'Нода', [node])
   const st = node?.status || 'unknown'
 
+  async function setCountry(country: string) {
+    if (!id) return
+    setError('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ country }),
+      })
+      setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить страну')
+    }
+  }
+
+  async function setRemnaPanel(panelId: string) {
+    if (!id) return
+    setError('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ remna_panel_id: panelId || null }),
+      })
+      setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить Remnawave-панель')
+    }
+  }
+
+  async function setProvider(providerId: string) {
+    if (!id) return
+    setError('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          provider_id: providerId || null,
+          provider_account_id: null,
+        }),
+      })
+      setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить провайдера')
+    }
+  }
+
+  async function setProviderAccount(accountId: string) {
+    if (!id) return
+    setError('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ provider_account_id: accountId || null }),
+      })
+      setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить аккаунт провайдера')
+    }
+  }
+
   async function onConnect() {
     setConnecting(true)
-    setMsg('')
     setError('')
     setToast(null)
     try {
@@ -226,9 +547,7 @@ export default function NodeDetailPage() {
       }>(`/api/nodes/${id}/connect`, { method: 'POST' })
       setNode(res.node)
       if (res.ok && res.online) {
-        const text = 'Связь есть — нода онлайн'
-        setMsg(text)
-        setToast({ kind: 'ok', text })
+        setError('')
         await load()
       } else {
         const text =
@@ -236,14 +555,12 @@ export default function NodeDetailPage() {
           (translateError(res.error || '') ||
             'нода недоступна — проверьте docker compose')
         setError(text)
-        setToast({ kind: 'fail', text })
       }
     } catch (err) {
       const text =
         'Нет связи: ' +
         (err instanceof Error ? err.message : 'ошибка проверки связи')
       setError(text)
-      setToast({ kind: 'fail', text })
     } finally {
       setConnecting(false)
     }
@@ -251,7 +568,6 @@ export default function NodeDetailPage() {
 
   async function runAction(label: string, path: string, method = 'POST') {
     setBusy(true)
-    setMsg('')
     setError('')
     setToast(null)
     try {
@@ -265,7 +581,6 @@ export default function NodeDetailPage() {
           : label === 'Перезагрузка'
             ? 'Конфиг HAProxy перезагружен'
             : `${label}: готово`)
-      setMsg(text)
       setToast({ kind: 'ok', text })
       await load()
     } catch (err) {
@@ -281,7 +596,6 @@ export default function NodeDetailPage() {
     e.preventDefault()
     setBusy(true)
     setError('')
-    setMsg('')
     try {
       await api(`/api/nodes/${id}/backends`, {
         method: 'POST',
@@ -294,13 +608,19 @@ export default function NodeDetailPage() {
         }),
       })
       setForm((f) => ({ ...f, name: '', address: '' }))
-      setMsg('Бэкенд добавлен')
+      setShowAddBackend(false)
+      setToast({ kind: 'ok', text: 'Бэкенд добавлен' })
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось добавить бэкенд')
     } finally {
       setBusy(false)
     }
+  }
+
+  function closeAddBackend() {
+    if (busy) return
+    setShowAddBackend(false)
   }
 
   async function onDeleteBackend(backend: string, name: string) {
@@ -320,15 +640,126 @@ export default function NodeDetailPage() {
     }
   }
 
+  function remnaFormFor(backend: string, name: string) {
+    const k = remnaKey(backend, name)
+    return remnaForms[k] ?? { panelId: '', remnaAddress: '' }
+  }
+
+  function setRemnaForm(
+    backend: string,
+    name: string,
+    patch: Partial<{ panelId: string; remnaAddress: string }>,
+  ) {
+    const k = remnaKey(backend, name)
+    setRemnaForms((prev) => {
+      const cur = prev[k] ?? { panelId: '', remnaAddress: '' }
+      return {
+        ...prev,
+        [k]: { ...cur, ...patch },
+      }
+    })
+  }
+
+  async function onSaveRemna(backend: string, name: string) {
+    const k = remnaKey(backend, name)
+    const formState = remnaFormFor(backend, name)
+    const panelId = formState.panelId.trim()
+    const remnaAddress = formState.remnaAddress.trim()
+    const clearing = !panelId || !remnaAddress
+    setRemnaBusyKey(k)
+    setError('')
+    try {
+      await api(
+        `/api/nodes/${id}/backends/${encodeURIComponent(backend)}/${encodeURIComponent(name)}/remna`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            remna_panel_id: clearing ? null : panelId,
+            remna_address: clearing ? null : remnaAddress,
+          }),
+        },
+      )
+      if (clearing) {
+        setRemnaForms((prev) => ({
+          ...prev,
+          [k]: { panelId: '', remnaAddress: '' },
+        }))
+        setRemnaLinked((prev) => {
+          const next = { ...prev }
+          delete next[k]
+          return next
+        })
+        setRemnaStats((prev) => {
+          const next = { ...prev }
+          delete next[k]
+          return next
+        })
+      } else {
+        setRemnaLinked((prev) => ({ ...prev, [k]: true }))
+      }
+      await loadRemnaLinks()
+      await loadRemnaStats()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить Remna')
+    } finally {
+      setRemnaBusyKey('')
+    }
+  }
+
+  async function onClearRemna(backend: string, name: string) {
+    const k = remnaKey(backend, name)
+    setRemnaBusyKey(k)
+    setError('')
+    try {
+      await api(
+        `/api/nodes/${id}/backends/${encodeURIComponent(backend)}/${encodeURIComponent(name)}/remna`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ remna_panel_id: null, remna_address: null }),
+        },
+      )
+      setRemnaForms((prev) => ({
+        ...prev,
+        [k]: { panelId: '', remnaAddress: '' },
+      }))
+      setRemnaLinked((prev) => {
+        const next = { ...prev }
+        delete next[k]
+        return next
+      })
+      setRemnaStats((prev) => {
+        const next = { ...prev }
+        delete next[k]
+        return next
+      })
+      await loadRemnaStats()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отвязать Remna')
+    } finally {
+      setRemnaBusyKey('')
+    }
+  }
+
   async function onDeleteNode() {
     if (!node) return
-    if (!confirm(`Удалить ноду «${node.name}»?`)) return
+    const ok = window.confirm(
+      `Удалить ноду «${node.name}»?\n\nНода будет удалена из панели. Это действие нельзя отменить.`,
+    )
+    if (!ok) return
     try {
       await api(`/api/nodes/${id}`, { method: 'DELETE' })
       navigate('/')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось удалить')
     }
+  }
+
+  async function onRestartHaproxy() {
+    const ok = window.confirm(
+      'Перезапустить HAProxy на этой ноде?\n\nСоединения могут оборваться на несколько секунд.',
+    )
+    if (!ok) return
+    await runAction('Рестарт', `/api/nodes/${id}/haproxy/restart`)
   }
 
   async function openInstall() {
@@ -348,7 +779,6 @@ export default function NodeDetailPage() {
     e.preventDefault()
     setEditBusy(true)
     setError('')
-    setMsg('')
     try {
       const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
         method: 'PATCH',
@@ -359,7 +789,7 @@ export default function NodeDetailPage() {
       })
       setNode(res.node)
       setEditOpen(false)
-      setMsg('Адрес ноды обновлён — нажмите «Проверить связь»')
+      setToast({ kind: 'ok', text: 'Адрес ноды обновлён' })
       setUpBps(null)
       setDownBps(null)
       trafficRef.current = null
@@ -383,54 +813,204 @@ export default function NodeDetailPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <div>
-          <Link to="/" className="muted">
-            ← Ноды
+      <header className="topbar node-detail-topbar">
+        <div className="node-detail-title-row">
+          <Link to="/" className="btn btn-sm btn-ghost back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M15 6L9 12l6 6"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Назад
           </Link>
-          <div className="brand" style={{ marginTop: '0.35rem' }}>
-            {title}
+          <div className="brand name-with-flag">
+            {node && (
+              <CountryPicker
+                value={node.country || ''}
+                onChange={(code) => void setCountry(code)}
+              />
+            )}
+            <span>{title}</span>
           </div>
-          {node && <div className="mono muted">{node.url}</div>}
         </div>
-        <div className="row">
+        {node && (
+          <div className="node-detail-meta">
+            <span className="node-detail-country-inline muted">
+              {node.country ? countryLabel(node.country) : 'Страна не задана'}
+            </span>
+            {node.provider_name ? (
+              <ProviderBadge
+                name={node.provider_name}
+                favicon={node.provider_favicon}
+                loginUrl={node.provider_login_url}
+                accountLogin={node.provider_account_login}
+              />
+            ) : null}
+            <span className="addr-cell">
+              <span className="mono muted">{nodeHost(node.url)}</span>
+              <button
+                type="button"
+                className={`icon-btn${copied === 'node-ip' ? ' copied' : ''}`}
+                title={copied === 'node-ip' ? 'Скопировано' : 'Копировать IP'}
+                aria-label="Копировать IP"
+                onClick={() => void copyText('node-ip', nodeHost(node.url))}
+              >
+                <CopyIcon />
+              </button>
+            </span>
+          </div>
+        )}
+        {node && (
+          <div className="node-detail-selects">
+            <div className="field node-remna-panel-field">
+              <label htmlFor="node-remna-panel">Панель Remnawave</label>
+              <select
+                id="node-remna-panel"
+                value={node.remna_panel_id || ''}
+                onChange={(e) => void setRemnaPanel(e.target.value)}
+              >
+                <option value="">— не выбрана —</option>
+                {remnaPanels.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field node-remna-panel-field">
+              <label htmlFor="node-provider">Провайдер</label>
+              <select
+                id="node-provider"
+                value={node.provider_id || ''}
+                onChange={(e) => void setProvider(e.target.value)}
+              >
+                <option value="">— не выбран —</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {node.provider_id ? (
+              <div className="field node-remna-panel-field">
+                <label htmlFor="node-provider-account">Аккаунт</label>
+                <select
+                  id="node-provider-account"
+                  value={node.provider_account_id || ''}
+                  onChange={(e) => void setProviderAccount(e.target.value)}
+                >
+                  <option value="">— не выбран —</option>
+                  {(providers.find((p) => p.id === node.provider_id)?.accounts ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.login}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+          </div>
+        )}
+        <div className="node-detail-toolbar">
           <button
-            className="btn btn-sm"
+            className="btn btn-sm btn-primary"
             type="button"
-            onClick={() => setEditOpen((v) => !v)}
-          >
-            {editOpen ? 'Скрыть адрес' : 'Изменить IP'}
-          </button>
-          <button className="btn btn-sm" type="button" disabled={busy} onClick={() => void load()}>
-            Обновить
-          </button>
-          <button
-            className="btn btn-sm"
-            type="button"
-            disabled={busy || st !== 'online'}
-            onClick={() => void runAction('Перезагрузка', `/api/nodes/${id}/haproxy/reload`)}
-          >
-            Перезагрузить HAProxy
-          </button>
-          <button
-            className="btn btn-sm btn-danger"
-            type="button"
-            disabled={busy || st !== 'online'}
+            disabled={busy || connecting || st !== 'online'}
             onClick={() => {
-              if (confirm('Перезапустить HAProxy на этой ноде?')) {
-                void runAction('Рестарт', `/api/nodes/${id}/haproxy/restart`)
-              }
+              setError('')
+              setShowAddBackend(true)
             }}
           >
-            Рестарт
+            Добавить бэкенд
           </button>
-          <button
-            className="btn btn-sm btn-danger"
-            type="button"
-            onClick={() => void onDeleteNode()}
-          >
-            Удалить ноду
-          </button>
+          <div className="actions-menu-wrap" ref={actionsRef}>
+            <button
+              className="btn btn-sm actions-menu-trigger"
+              type="button"
+              aria-expanded={actionsOpen}
+              aria-haspopup="menu"
+              disabled={busy || connecting}
+              onClick={() => setActionsOpen((v) => !v)}
+            >
+              <span className="actions-menu-trigger-dots" aria-hidden>
+                ⋯
+              </span>
+              Действия
+            </button>
+            {actionsOpen && (
+              <div className="actions-menu" role="menu">
+                <div className="actions-menu-label">Менеджмент</div>
+                <button
+                  className="actions-menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setActionsOpen(false)
+                    setEditOpen((v) => !v)
+                  }}
+                >
+                  <EditIcon />
+                  {editOpen ? 'Скрыть адрес' : 'Изменить IP'}
+                </button>
+                <button
+                  className="actions-menu-item"
+                  type="button"
+                  role="menuitem"
+                  disabled={busy}
+                  onClick={() => {
+                    setActionsOpen(false)
+                    void load()
+                  }}
+                >
+                  <RefreshIcon />
+                  Обновить
+                </button>
+                <button
+                  className="actions-menu-item"
+                  type="button"
+                  role="menuitem"
+                  disabled={busy || st !== 'online'}
+                  onClick={() => {
+                    setActionsOpen(false)
+                    void runAction('Перезагрузка', `/api/nodes/${id}/haproxy/reload`)
+                  }}
+                >
+                  <ReloadIcon />
+                  Перезагрузить HAProxy
+                </button>
+                <button
+                  className="actions-menu-item ok"
+                  type="button"
+                  role="menuitem"
+                  disabled={busy || st !== 'online'}
+                  onClick={() => {
+                    setActionsOpen(false)
+                    void onRestartHaproxy()
+                  }}
+                >
+                  <RestartIcon />
+                  Рестарт
+                </button>
+                <div className="actions-menu-sep" />
+                <button
+                  className="actions-menu-item danger"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setActionsOpen(false)
+                    void onDeleteNode()
+                  }}
+                >
+                  <TrashIcon />
+                  Удалить ноду
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -489,40 +1069,6 @@ export default function NodeDetailPage() {
         </div>
       )}
 
-      {node && (
-        <div className={`status-hero ${st}`}>
-          <StatusBadge status={st} large />
-          <div className="status-hero-text" style={{ flex: 1 }}>
-            <div className="status-hero-title">{statusLabel(st)}</div>
-            <div className="muted">
-              {st === 'online'
-                ? 'Панель успешно связывается с агентом'
-                : st === 'offline'
-                  ? 'Агент не отвечает — проверьте сервер и docker compose'
-                  : 'Нода ещё не проверялась — нажмите «Проверить связь»'}
-            </div>
-            <div className="muted" style={{ marginTop: '0.25rem' }}>
-              Последняя проверка: {formatLastSeen(node.last_seen)}
-            </div>
-          </div>
-          <button
-            className="btn btn-primary btn-connect"
-            type="button"
-            disabled={connecting || busy}
-            onClick={() => void onConnect()}
-          >
-            {connecting ? (
-              <span className="btn-spinner-label">
-                <span className="spinner" aria-hidden />
-                Проверка…
-              </span>
-            ) : (
-              'Проверить связь'
-            )}
-          </button>
-        </div>
-      )}
-
       {st !== 'online' && node && (
         <div className="panel install-hint">
           <p className="muted" style={{ margin: 0 }}>
@@ -540,150 +1086,125 @@ export default function NodeDetailPage() {
           <strong>{error}</strong>
         </div>
       )}
-      {msg && !error && (
-        <div className="connect-result ok" style={{ marginBottom: '1rem' }}>
-          <strong>{msg}</strong>
-        </div>
-      )}
 
       <div className="stack" style={{ gap: '1rem' }}>
         <section className="panel">
-          <h2>Статистика</h2>
-          <div className="stats-grid">
-            <div className="stat">
-              <div className="label">Статус</div>
-              <div className="value">
-                <StatusBadge status={st} />
-              </div>
-            </div>
-            <div className="stat">
-              <div className="label">Сессии (приложения)</div>
-              <div className="value">
-                {facing.active_sessions !== null ? facing.active_sessions : '—'}
-              </div>
-            </div>
-            <div className="stat">
-              <div className="label">Бэкенды UP</div>
-              <div className="value">
-                {facing.backends_up !== null ? facing.backends_up : '—'}
-              </div>
-            </div>
-            <div className="stat">
-              <div className="label">Исходящий TX</div>
-              <div className="value" style={{ fontSize: '1.05rem' }}>
-                {formatBitrate(downBps)}
-              </div>
-              <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                всего {formatBytes(system?.net_tx_bytes)}
-              </div>
-            </div>
-            <div className="stat">
-              <div className="label">Входящий RX</div>
-              <div className="value" style={{ fontSize: '1.05rem' }}>
-                {formatBitrate(upBps)}
-              </div>
-              <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                всего {formatBytes(system?.net_rx_bytes)}
-              </div>
+          <div className="panel-head">
+            <h2>Система</h2>
+            <div className="panel-head-aside">
+              <StatusBadge status={st} />
+              <button
+                className="btn btn-primary btn-connect"
+                type="button"
+                disabled={connecting || busy || !node}
+                onClick={() => void onConnect()}
+              >
+                {connecting ? (
+                  <span className="btn-spinner-label">
+                    <span className="spinner" aria-hidden />
+                    Проверка…
+                  </span>
+                ) : (
+                  'Проверить связь'
+                )}
+              </button>
             </div>
           </div>
-        </section>
-
-        {st === 'online' && (
-          <section className="panel">
-            <h2>Ресурсы</h2>
-            <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-              Метрики хоста ноды. Графики обновляются каждые {POLL_MS / 1000} с, пока страница
-              открыта.
-            </p>
-            <div className="stats-grid" style={{ marginBottom: '0.85rem' }}>
-              <div className="stat">
-                <div className="label">CPU</div>
-                <div className="value">
-                  {system ? `${system.cpu_percent.toFixed(1)}%` : '—'}
-                </div>
-              </div>
-              <div className="stat">
-                <div className="label">RAM</div>
-                <div className="value">
-                  {system
-                    ? `${system.mem_percent.toFixed(1)}%`
-                    : '—'}
-                </div>
-                <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                  {system
-                    ? `${formatBytes(system.mem_used_bytes)} / ${formatBytes(system.mem_total_bytes)}`
-                    : ''}
-                </div>
-              </div>
-              <div className="stat">
-                <div className="label">Load (1/5/15)</div>
-                <div className="value" style={{ fontSize: '1rem' }}>
-                  {system?.load_avg && system.load_avg.length >= 3
-                    ? system.load_avg.map((n) => n.toFixed(2)).join(' / ')
-                    : '—'}
-                </div>
-              </div>
-              <div className="stat">
-                <div className="label">Аптайм</div>
-                <div className="value" style={{ fontSize: '1rem' }}>
-                  {formatUptime(system?.uptime_seconds)}
-                </div>
-              </div>
-              {system?.disk_total_bytes ? (
+          {st === 'online' ? (
+            <>
+              <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+                Метрики хоста ноды. Графики обновляются каждые {POLL_MS / 1000} с, пока страница
+                открыта.
+              </p>
+              <div className="stats-grid" style={{ marginBottom: '0.85rem' }}>
                 <div className="stat">
-                  <div className="label">Диск /</div>
+                  <div className="label">CPU</div>
                   <div className="value">
-                    {(system.disk_percent ?? 0).toFixed(1)}%
+                    {system ? `${system.cpu_percent.toFixed(1)}%` : '—'}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">RAM</div>
+                  <div className="value">
+                    {system ? `${system.mem_percent.toFixed(1)}%` : '—'}
                   </div>
                   <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                    {formatBytes(system.disk_used_bytes)} / {formatBytes(system.disk_total_bytes)}
+                    {system
+                      ? `${formatBytes(system.mem_used_bytes)} / ${formatBytes(system.mem_total_bytes)}`
+                      : ''}
                   </div>
                 </div>
-              ) : null}
-            </div>
-            <div className="charts-grid">
-              <SparklineChart
-                label="CPU"
-                color="var(--accent)"
-                points={cpuHist}
-                valueLabel={system ? system.cpu_percent.toFixed(1) : '—'}
-              />
-              <SparklineChart
-                label="RAM"
-                color="var(--ok)"
-                points={memHist}
-                valueLabel={system ? system.mem_percent.toFixed(1) : '—'}
-              />
-              <SparklineChart
-                label="Сессии"
-                unit=""
-                color="var(--warn)"
-                points={sessHist}
-                max={Math.max(10, ...sessHist.map((p) => p.v), 1)}
-                valueLabel={
-                  facing.active_sessions !== null ? String(facing.active_sessions) : '—'
-                }
-              />
-              <SparklineChart
-                label="Исходящий TX"
-                unit=""
-                color="var(--accent)"
-                points={downHist}
-                max={Math.max(1, ...downHist.map((p) => p.v), 1)}
-                valueLabel={formatBitrate(downBps)}
-              />
-              <SparklineChart
-                label="Входящий RX"
-                unit=""
-                color="var(--ok)"
-                points={upHist}
-                max={Math.max(1, ...upHist.map((p) => p.v), 1)}
-                valueLabel={formatBitrate(upBps)}
-              />
-            </div>
-          </section>
-        )}
+                <div className="stat">
+                  <div className="label">Load (1/5/15)</div>
+                  <div className="value" style={{ fontSize: '1rem' }}>
+                    {system?.load_avg && system.load_avg.length >= 3
+                      ? system.load_avg.map((n) => n.toFixed(2)).join(' / ')
+                      : '—'}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">Аптайм</div>
+                  <div className="value" style={{ fontSize: '1rem' }}>
+                    {formatUptime(system?.uptime_seconds)}
+                  </div>
+                </div>
+                {system?.disk_total_bytes ? (
+                  <div className="stat">
+                    <div className="label">Диск /</div>
+                    <div className="value">{(system.disk_percent ?? 0).toFixed(1)}%</div>
+                    <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                      {formatBytes(system.disk_used_bytes)} / {formatBytes(system.disk_total_bytes)}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="charts-grid">
+                <SparklineChart
+                  label="CPU"
+                  color="var(--accent)"
+                  points={cpuHist}
+                  valueLabel={system ? system.cpu_percent.toFixed(1) : '—'}
+                />
+                <SparklineChart
+                  label="RAM"
+                  color="var(--ok)"
+                  points={memHist}
+                  valueLabel={system ? system.mem_percent.toFixed(1) : '—'}
+                />
+                <SparklineChart
+                  label="Сессии"
+                  unit=""
+                  color="var(--warn)"
+                  points={sessHist}
+                  max={Math.max(10, ...sessHist.map((p) => p.v), 1)}
+                  valueLabel={
+                    facing.active_sessions !== null ? String(facing.active_sessions) : '—'
+                  }
+                />
+                <SparklineChart
+                  label="Исходящий TX"
+                  unit=""
+                  color="var(--accent)"
+                  points={downHist}
+                  max={Math.max(1, ...downHist.map((p) => p.v), 1)}
+                  valueLabel={formatBitrate(downBps)}
+                />
+                <SparklineChart
+                  label="Входящий RX"
+                  unit=""
+                  color="var(--ok)"
+                  points={upHist}
+                  max={Math.max(1, ...upHist.map((p) => p.v), 1)}
+                  valueLabel={formatBitrate(upBps)}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+              Метрики появятся после установки связи с нодой.
+            </p>
+          )}
+        </section>
 
         <section className="panel">
           <h2>Бэкенды приложений</h2>
@@ -714,36 +1235,185 @@ export default function NodeDetailPage() {
                     </td>
                   </tr>
                 ) : (
-                  backends.map((b) => (
-                    <tr key={`${b.backend}-${b.name}`}>
-                      <td className="mono">{b.backend}</td>
-                      <td className="mono">{b.name}</td>
-                      <td className="mono">{b.address}</td>
-                      <td className="mono">{b.port}</td>
-                      <td className="mono">{b.weight ?? '—'}</td>
-                      <td>{b.status ?? '—'}</td>
-                      <td>
-                        <button
-                          className="btn btn-sm btn-danger"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void onDeleteBackend(b.backend, b.name)}
-                        >
-                          Удалить
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  backends.map((b) => {
+                    const k = remnaKey(b.backend, b.name)
+                    const rf = remnaFormFor(b.backend, b.name)
+                    const linked = Boolean(remnaLinked[k])
+                    const stRow = remnaStats[k]
+                    const busyRemna = remnaBusyKey === k
+                    const panelId = stRow?.remna_panel_id || rf.panelId
+                    const panelName =
+                      remnaPanels.find((p) => p.id === panelId)?.name || panelId || 'Remna'
+                    return (
+                      <Fragment key={k}>
+                        <tr>
+                          <td className="mono">{b.backend}</td>
+                          <td className="mono">{b.name}</td>
+                          <td className="mono">{b.address}</td>
+                          <td className="mono">{b.port}</td>
+                          <td className="mono">{b.weight ?? '—'}</td>
+                          <td>{b.status ?? '—'}</td>
+                          <td>
+                            <button
+                              className="btn btn-sm btn-danger"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void onDeleteBackend(b.backend, b.name)}
+                            >
+                              Удалить
+                            </button>
+                          </td>
+                        </tr>
+                        <tr className="backend-remna-row">
+                          <td colSpan={7}>
+                            <div className="backend-remna">
+                              {!linked ? (
+                                <div className="backend-remna-bind">
+                                  <select
+                                    value={rf.panelId}
+                                    aria-label="Панель Remnawave"
+                                    onChange={(e) =>
+                                      setRemnaForm(b.backend, b.name, {
+                                        panelId: e.target.value,
+                                      })
+                                    }
+                                  >
+                                    <option value="">— Remnawave —</option>
+                                    {remnaPanels.map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    value={rf.remnaAddress}
+                                    placeholder="Адрес ноды (IP или домен)"
+                                    aria-label="Адрес ноды"
+                                    title="Как в Remnawave → Address: IP или домен"
+                                    onChange={(e) =>
+                                      setRemnaForm(b.backend, b.name, {
+                                        remnaAddress: e.target.value,
+                                      })
+                                    }
+                                  />
+                                  <button
+                                    className="btn btn-sm"
+                                    type="button"
+                                    disabled={busyRemna}
+                                    onClick={() => void onSaveRemna(b.backend, b.name)}
+                                  >
+                                    {busyRemna ? '…' : 'Сохранить'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="backend-remna-strip">
+                                  <span className="backend-remna-panel" title={rf.remnaAddress || undefined}>
+                                    {panelName}
+                                  </span>
+                                  {!stRow ? (
+                                    <span className="muted">…</span>
+                                  ) : stRow.error || stRow.missing ? (
+                                    <span className="backend-remna-err">
+                                      {stRow.missing
+                                        ? 'нода не найдена в Remna'
+                                        : stRow.error || 'ошибка'}
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <span
+                                        className={`status-inline ${stRow.online ? 'online' : 'offline'}`}
+                                      >
+                                        <span className="status-inline-dot" aria-hidden />
+                                        {stRow.online ? 'online' : 'offline'}
+                                      </span>
+                                      <span className="backend-remna-metric mono" title="Users online">
+                                        <span className="label">users</span>
+                                        {stRow.users_online != null &&
+                                        Number.isFinite(stRow.users_online)
+                                          ? stRow.users_online
+                                          : '—'}
+                                      </span>
+                                      <span className="backend-remna-metric mono" title="RAM">
+                                        <span className="label">ram</span>
+                                        {stRow.ram_percent != null &&
+                                        Number.isFinite(stRow.ram_percent)
+                                          ? `${Math.round(stRow.ram_percent)}%`
+                                          : '—'}
+                                      </span>
+                                      <span
+                                        className="backend-remna-metric mono"
+                                        title={
+                                          stRow.cpu_count
+                                            ? `Load average (${stRow.cpu_count} cores)`
+                                            : 'Load average'
+                                        }
+                                      >
+                                        <span className="label">load</span>
+                                        {stRow.load_avg && stRow.load_avg.length >= 3
+                                          ? stRow.load_avg
+                                              .slice(0, 3)
+                                              .map((n) => Number(n).toFixed(2))
+                                              .join(' ')
+                                          : '—'}
+                                      </span>
+                                      <span className="node-live-net down" title="RX ↓">
+                                        <span className="node-live-arrow" aria-hidden>
+                                          ↓
+                                        </span>
+                                        {formatBitrateShort(stRow.down_bps)}
+                                      </span>
+                                      <span className="node-live-net up" title="TX ↑">
+                                        <span className="node-live-arrow" aria-hidden>
+                                          ↑
+                                        </span>
+                                        {formatBitrateShort(stRow.up_bps)}
+                                      </span>
+                                      <span
+                                        className="backend-remna-metric mono"
+                                        title="Traffic used / limit"
+                                      >
+                                        <span className="label">traf</span>
+                                        {stRow.traffic_used != null
+                                          ? formatBytes(stRow.traffic_used)
+                                          : '—'}
+                                        {stRow.traffic_limit != null && stRow.traffic_limit > 0
+                                          ? ` / ${formatBytes(stRow.traffic_limit)}`
+                                          : ''}
+                                      </span>
+                                    </>
+                                  )}
+                                  <button
+                                    className="btn btn-sm btn-ghost"
+                                    type="button"
+                                    disabled={busyRemna}
+                                    onClick={() => void onClearRemna(b.backend, b.name)}
+                                  >
+                                    {busyRemna ? '…' : 'Сбросить'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      </Fragment>
+                    )
+                  })
                 )}
               </tbody>
             </table>
           </div>
         </section>
+      </div>
 
-        <section className="panel">
-          <h3>Добавить бэкенд</h3>
-          <form className="stack" onSubmit={onAddBackend}>
-            <div className="row" style={{ alignItems: 'flex-end' }}>
+      {showAddBackend && (
+        <div className="modal-backdrop" onClick={closeAddBackend}>
+          <div
+            className="modal stack"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(32rem, 100%)' }}
+          >
+            <h3 style={{ margin: 0 }}>Добавить бэкенд</h3>
+            <form className="stack" onSubmit={onAddBackend}>
               {(
                 [
                   ['backend', 'Бэкенд'],
@@ -753,28 +1423,44 @@ export default function NodeDetailPage() {
                   ['weight', 'Вес'],
                 ] as const
               ).map(([key, label]) => (
-                <div
-                  className="field"
-                  key={key}
-                  style={{ minWidth: key === 'address' ? 160 : 100 }}
-                >
-                  <label htmlFor={key}>{label}</label>
+                <div className="field" key={key}>
+                  <label htmlFor={`add-${key}`}>{label}</label>
                   <input
-                    id={key}
+                    id={`add-${key}`}
+                    className={key === 'address' || key === 'backend' ? 'mono' : undefined}
                     value={form[key]}
                     onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                     required
-                    disabled={st !== 'online'}
+                    disabled={busy}
+                    placeholder={
+                      key === 'backend'
+                        ? 'app'
+                        : key === 'port'
+                          ? '8443'
+                          : key === 'weight'
+                            ? '100'
+                            : undefined
+                    }
                   />
                 </div>
               ))}
-              <button className="btn btn-primary" type="submit" disabled={busy || st !== 'online'}>
-                Добавить
-              </button>
-            </div>
-          </form>
-        </section>
-      </div>
+              <div className="modal-actions">
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={closeAddBackend}
+                >
+                  Отменить
+                </button>
+                <button className="btn btn-primary" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showInstall && installBundle && (
         <div className="modal-backdrop" onClick={() => setShowInstall(false)}>

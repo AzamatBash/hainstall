@@ -1,12 +1,37 @@
+import { withBase } from './basePath'
+
 export type NodeStatus = 'unknown' | 'online' | 'offline'
+
+export interface NodeLive {
+  sessions?: number | null
+  cpu?: number
+  load_avg?: number[]
+  down_bps?: number | null
+  up_bps?: number | null
+  backends?: BackendServer[]
+  updated_at?: string
+}
 
 export interface Node {
   id: string
   name: string
   url: string
+  country?: string
+  sort_order?: number
+  remna_panel_id?: string
+  remna_panel_name?: string
+  remna_addresses?: string[]
+  remna_online?: number
+  provider_id?: string
+  provider_name?: string
+  provider_favicon?: string
+  provider_login_url?: string
+  provider_account_id?: string
+  provider_account_login?: string
   created_at: string
   last_seen?: string
   status: NodeStatus
+  live?: NodeLive
 }
 
 export interface BackendServer {
@@ -17,6 +42,56 @@ export interface BackendServer {
   weight?: number
   status?: string
   [key: string]: unknown
+}
+
+export interface RemnaPanel {
+  id: string
+  name: string
+  base_url: string
+  has_api_key: boolean
+  created_at: string
+}
+
+export interface Provider {
+  id: string
+  name: string
+  favicon_url: string
+  login_url: string
+  created_at: string
+  accounts?: ProviderAccount[]
+}
+
+export interface ProviderAccount {
+  id: string
+  provider_id: string
+  login: string
+  created_at: string
+}
+
+export interface BackendRemnaLink {
+  node_id: string
+  backend: string
+  name: string
+  remna_panel_id: string
+  remna_address: string
+}
+
+export interface RemnaBackendStat {
+  backend: string
+  name: string
+  remna_panel_id: string
+  remna_address: string
+  online: boolean
+  users_online?: number | null
+  down_bps?: number | null
+  up_bps?: number | null
+  ram_percent?: number | null
+  load_avg?: number[] | null
+  cpu_count?: number | null
+  traffic_used?: number | null
+  traffic_limit?: number | null
+  error?: string
+  missing?: boolean
 }
 
 export interface StatsSummary {
@@ -83,7 +158,21 @@ export function formatBitrate(bytesPerSec?: number | null): string {
     v /= 1000
     i++
   }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+  return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
+}
+
+/** Compact HAP-style: 124.73 Mb/s */
+export function formatBitrateShort(bytesPerSec?: number | null): string {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—'
+  const bits = bytesPerSec * 8
+  const units = ['bit/s', 'Kb/s', 'Mb/s', 'Gb/s']
+  let v = bits
+  let i = 0
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000
+    i++
+  }
+  return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
 }
 
 export function formatUptime(sec?: number | null): string {
@@ -243,7 +332,9 @@ export async function api<T = unknown>(
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(path, {
+  const url = path.startsWith('http') ? path : withBase(path)
+
+  const res = await fetch(url, {
     ...init,
     headers,
     credentials: 'include',

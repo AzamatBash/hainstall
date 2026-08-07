@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { api, getToken, setToken } from '../api'
+import { withBase } from '../basePath'
 
 export default function LoginPage() {
   const [password, setPassword] = useState('')
@@ -48,7 +49,7 @@ export default function LoginPage() {
         body: JSON.stringify({ password }),
       })
       setToken(res.token)
-      window.location.href = '/'
+      window.location.href = withBase('/')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка входа')
     } finally {

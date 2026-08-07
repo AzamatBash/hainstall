@@ -17,6 +17,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/api"
 	"github.com/azabash/hapanel/panel/internal/auth"
 	"github.com/azabash/hapanel/panel/internal/config"
+	"github.com/azabash/hapanel/panel/internal/snapshot"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
 
@@ -36,17 +37,37 @@ func main() {
 	}
 	defer st.Close()
 
-	au := auth.New(cfg.PanelPassword, cfg.JWTSecret, cfg.SessionTTL)
+	cookiePath := "/"
+	if cfg.BasePath != "" {
+		cookiePath = cfg.BasePath
+	}
+	au := auth.NewWithCookie(cfg.PanelPassword, cfg.JWTSecret, cfg.SessionTTL, cookiePath, cfg.BasePath != "")
 	ag := agent.NewWithHello(cfg.InsecureSkipVerify, cfg.UTLSHello)
-	apiSrv := api.New(st, au, ag, logger)
+	secretsKey := cfg.SecretsKey
+	if secretsKey == "" {
+		secretsKey = cfg.JWTSecret
+	}
+	apiSrv := api.New(st, au, ag, logger, api.Options{
+		SecretsKey:  secretsKey,
+		GeminiKey:   cfg.GeminiAPIKey,
+		GroqKey:     cfg.GroqAPIKey,
+		LLMProvider: cfg.LLMProvider,
+		PanelIP:     cfg.PanelIP,
+		LLMProxy:    cfg.LLMHTTPProxy,
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiSrv.Handler())
-	mux.Handle("/", spaHandler(cfg.StaticDir, logger))
+	mux.Handle("/", spaHandler(cfg.StaticDir, cfg.BasePath, logger))
+
+	var handler http.Handler = mux
+	if cfg.BasePath != "" {
+		handler = basePathMiddleware(cfg.BasePath, mux)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -56,11 +77,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	snapshot.Start(ctx, st, ag, logger)
+
 	go func() {
 		logger.Info("panel listening",
 			"addr", cfg.ListenAddr,
 			"db", cfg.DBPath,
 			"static", cfg.StaticDir,
+			"base_path", cfg.BasePath,
 			"insecure_skip_verify", cfg.InsecureSkipVerify,
 			"utls_hello", ag.HelloName(),
 		)
@@ -80,11 +104,34 @@ func main() {
 	}
 }
 
+func basePathMiddleware(base string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if p == base || p == base+"/" {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/"
+			next.ServeHTTP(w, r2)
+			return
+		}
+		prefix := base + "/"
+		if strings.HasPrefix(p, prefix) {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/" + strings.TrimPrefix(p, prefix)
+			next.ServeHTTP(w, r2)
+			return
+		}
+		// Outside secret path — look like a blank host.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>404</title></head><body>Not Found</body></html>`))
+	})
+}
+
 // spaHandler serves built UI files and falls back to index.html for client routes.
 // Important: do not pass directory paths to http.FileServer — with Go 1.22+ ServeMux
 // stripping the "/" prefix, that produces 301 Location: ./ and Firefox redirect loops
 // on /login and /nodes/:id refresh.
-func spaHandler(staticDir string, logger *slog.Logger) http.Handler {
+func spaHandler(staticDir, basePath string, logger *slog.Logger) http.Handler {
 	indexPath := filepath.Join(staticDir, "index.html")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -93,7 +140,7 @@ func spaHandler(staticDir string, logger *slog.Logger) http.Handler {
 		}
 		p = path.Clean(p)
 		if p == "/" || p == "/." {
-			http.ServeFile(w, r, indexPath)
+			serveIndex(w, indexPath, basePath, logger)
 			return
 		}
 		if strings.HasPrefix(p, "/api/") {
@@ -120,6 +167,30 @@ func spaHandler(staticDir string, logger *slog.Logger) http.Handler {
 			http.Error(w, "UI not built — run npm run build in panel/web", http.StatusNotFound)
 			return
 		}
-		http.ServeFile(w, r, indexPath)
+		serveIndex(w, indexPath, basePath, logger)
 	})
+}
+
+func serveIndex(w http.ResponseWriter, indexPath, basePath string, logger *slog.Logger) {
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		logger.Error("read index", "err", err)
+		http.Error(w, "UI missing", http.StatusNotFound)
+		return
+	}
+	html := string(raw)
+	if basePath != "" {
+		inject := `<script>window.__HAPANEL_BASE__="` + basePath + `";</script>`
+		if strings.Contains(html, "<head>") {
+			html = strings.Replace(html, "<head>", "<head>"+inject, 1)
+		} else {
+			html = inject + html
+		}
+		// Vite emits absolute /assets/... — rewrite for secret path.
+		html = strings.ReplaceAll(html, `href="/assets/`, `href="`+basePath+`/assets/`)
+		html = strings.ReplaceAll(html, `src="/assets/`, `src="`+basePath+`/assets/`)
+		html = strings.ReplaceAll(html, `href="/vite.svg"`, `href="`+basePath+`/vite.svg"`)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(html))
 }
