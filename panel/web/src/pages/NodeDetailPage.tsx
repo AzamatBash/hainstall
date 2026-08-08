@@ -68,6 +68,20 @@ function CopyIcon() {
   )
 }
 
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 12.5l5 5L20 7"
+        stroke="currentColor"
+        strokeWidth="2.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function TrashIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -897,10 +911,10 @@ export default function NodeDetailPage() {
                 type="button"
                 className={`icon-btn${copied === 'node-ip' ? ' copied' : ''}`}
                 title={copied === 'node-ip' ? 'Скопировано' : 'Копировать IP'}
-                aria-label="Копировать IP"
+                aria-label={copied === 'node-ip' ? 'Скопировано' : 'Копировать IP'}
                 onClick={() => void copyText('node-ip', nodeHost(node.url))}
               >
-                <CopyIcon />
+                {copied === 'node-ip' ? <CheckIcon /> : <CopyIcon />}
               </button>
             </span>
           </div>

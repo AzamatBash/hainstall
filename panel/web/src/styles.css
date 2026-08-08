@@ -1819,6 +1819,7 @@ a.provider-badge:hover {
 
 .icon-btn.copied {
   color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
 .hint-wrap {
