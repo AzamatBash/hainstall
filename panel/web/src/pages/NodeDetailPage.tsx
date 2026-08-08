@@ -28,7 +28,9 @@ import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
-const TRAFFIC_WINDOW_MS = 60 * 60 * 1000
+const TRAFFIC_HOURS_OPTIONS = [1, 2, 3, 6, 12, 24] as const
+/** Max samples kept live in the browser for the longest window (24h @ 5s). */
+const TRAFFIC_HISTORY_MAX = (24 * 60 * 60) / 5
 
 function pushPoint(prev: ChartPoint[], v: number, max = HISTORY_MAX): ChartPoint[] {
   const next = [...prev, { t: Date.now(), v }]
@@ -177,6 +179,7 @@ export default function NodeDetailPage() {
   const [downHist, setDownHist] = useState<ChartPoint[]>([])
   const [upHist, setUpHist] = useState<ChartPoint[]>([])
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
+  const [trafficHours, setTrafficHours] = useState<(typeof TRAFFIC_HOURS_OPTIONS)[number]>(1)
   const [downBps, setDownBps] = useState<number | null>(null)
   const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
@@ -304,8 +307,8 @@ export default function NodeDetailPage() {
         setDownHist((h) => pushPoint(h, out))
         setTrafficPoints((prev) => {
           const next = [...prev, { t: now, down_bps: out, up_bps: inn }]
-          const cutoff = now - TRAFFIC_WINDOW_MS
-          return next.filter((p) => p.t >= cutoff).slice(-HISTORY_MAX)
+          const cutoff = now - trafficHours * 60 * 60 * 1000
+          return next.filter((p) => p.t >= cutoff).slice(-TRAFFIC_HISTORY_MAX)
         })
         up = inn
         down = out
@@ -313,7 +316,7 @@ export default function NodeDetailPage() {
     }
     trafficRef.current = { t: now, inn: rx, out: tx }
     return { downBps: down, upBps: up }
-  }, [])
+  }, [trafficHours])
 
   const load = useCallback(async () => {
     setError('')
@@ -400,13 +403,19 @@ export default function NodeDetailPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await api<{ points: TrafficPoint[] }>(`/api/nodes/${id}/traffic`)
+        const res = await api<{ points: TrafficPoint[] }>(
+          `/api/nodes/${id}/traffic?hours=${trafficHours}`,
+        )
         if (cancelled) return
         const pts = Array.isArray(res.points) ? res.points : []
-        if (!pts.length) return
         setTrafficPoints(pts)
-        setDownHist(pts.map((p) => ({ t: p.t, v: p.down_bps })))
-        setUpHist(pts.map((p) => ({ t: p.t, v: p.up_bps })))
+        if (!pts.length) return
+        // Sparklines stay compact: last hour of the fetched window.
+        const sparkCut = Date.now() - 60 * 60 * 1000
+        const spark = pts.filter((p) => p.t >= sparkCut)
+        const sparkSrc = spark.length ? spark : pts.slice(-HISTORY_MAX)
+        setDownHist(sparkSrc.map((p) => ({ t: p.t, v: p.down_bps })))
+        setUpHist(sparkSrc.map((p) => ({ t: p.t, v: p.up_bps })))
         const last = pts[pts.length - 1]
         setDownBps(last.down_bps)
         setUpBps(last.up_bps)
@@ -417,7 +426,7 @@ export default function NodeDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, trafficHours])
 
   useEffect(() => {
     void load()
@@ -1437,12 +1446,35 @@ export default function NodeDetailPage() {
         </section>
 
         <section className="panel">
-          <h2>Трафик</h2>
+          <div className="panel-head">
+            <h2>Трафик</h2>
+            <div className="panel-head-aside">
+              <label className="traffic-hours-label muted" htmlFor="traffic-hours">
+                Период
+              </label>
+              <select
+                id="traffic-hours"
+                className="traffic-hours-select"
+                value={trafficHours}
+                onChange={(e) =>
+                  setTrafficHours(
+                    Number(e.target.value) as (typeof TRAFFIC_HOURS_OPTIONS)[number],
+                  )
+                }
+              >
+                {TRAFFIC_HOURS_OPTIONS.map((h) => (
+                  <option key={h} value={h}>
+                    {h === 1 ? '1 час' : `${h} ч`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Скорость TX/RX на интерфейсе ноды за последний час.
+            Скорость TX/RX на интерфейсе ноды. История накапливается на панели.
           </p>
           {st === 'online' || trafficPoints.length > 0 ? (
-            <TrafficMirrorChart points={trafficPoints} />
+            <TrafficMirrorChart points={trafficPoints} hours={trafficHours} />
           ) : (
             <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
               График появится после установки связи с нодой.

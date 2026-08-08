@@ -429,9 +429,10 @@ type TrafficSample struct {
 	UpBps   float64 `json:"up_bps"`
 }
 
-const trafficRetention = time.Hour
+// Keep enough history for the longest UI window (24h).
+const trafficRetention = 24 * time.Hour
 
-// AppendTrafficSample records a rate point and prunes samples older than 1h.
+// AppendTrafficSample records a rate point and prunes samples older than retention.
 func (s *Store) AppendTrafficSample(nodeID string, at time.Time, downBps, upBps float64) error {
 	if nodeID == "" {
 		return nil

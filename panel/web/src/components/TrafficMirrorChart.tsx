@@ -9,7 +9,21 @@ export type TrafficPoint = {
 
 type Props = {
   points: TrafficPoint[]
+  /** Selected window length in hours (legend label). */
+  hours?: number
   className?: string
+}
+
+const MAX_DRAW_POINTS = 1200
+
+function downsample(points: TrafficPoint[], max: number): TrafficPoint[] {
+  if (points.length <= max) return points
+  const out: TrafficPoint[] = []
+  const step = (points.length - 1) / (max - 1)
+  for (let i = 0; i < max; i++) {
+    out.push(points[Math.round(i * step)])
+  }
+  return out
 }
 
 function toMbit(bytesPerSec: number): number {
@@ -37,8 +51,8 @@ function formatAxisTime(ts: number): string {
   return `${hh}:${mm}`
 }
 
-/** Mirrored TX/RX area chart for the last hour (panel style). */
-export default function TrafficMirrorChart({ points, className }: Props) {
+/** Mirrored TX/RX area chart (panel style). */
+export default function TrafficMirrorChart({ points, hours = 1, className }: Props) {
   const width = 720
   const height = 200
   const padL = 48
@@ -59,15 +73,16 @@ export default function TrafficMirrorChart({ points, className }: Props) {
         lastUp: 0,
         lastDown: 0,
       }
-      if (!points.length) return empty
+      const drawn = downsample(points, MAX_DRAW_POINTS)
+      if (!drawn.length) return empty
 
       // down_bps = host TX (outbound), up_bps = host RX (inbound)
-      const txVals = points.map((p) => toMbit(p.down_bps))
-      const rxVals = points.map((p) => toMbit(p.up_bps))
+      const txVals = drawn.map((p) => toMbit(p.down_bps))
+      const rxVals = drawn.map((p) => toMbit(p.up_bps))
       const peak = Math.max(0.01, ...txVals, ...rxVals)
       const maxM = niceMax(peak)
-      const minT = points[0].t
-      const maxT = points[points.length - 1].t
+      const minT = drawn[0].t
+      const maxT = drawn[drawn.length - 1].t
       const spanT = Math.max(maxT - minT, 1)
       const innerW = width - padL - padR
       const innerH = height - padT - padB
@@ -77,14 +92,14 @@ export default function TrafficMirrorChart({ points, className }: Props) {
       const yTx = (mbit: number) => midY - (Math.min(mbit, maxM) / maxM) * (innerH / 2)
       const yRx = (mbit: number) => midY + (Math.min(mbit, maxM) / maxM) * (innerH / 2)
 
-      const txPath = points
+      const txPath = drawn
         .map((p, i) => {
           const x = xAt(p.t)
           const y = yTx(toMbit(p.down_bps))
           return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
         })
         .join(' ')
-      const rxPath = points
+      const rxPath = drawn
         .map((p, i) => {
           const x = xAt(p.t)
           const y = yRx(toMbit(p.up_bps))
@@ -92,8 +107,8 @@ export default function TrafficMirrorChart({ points, className }: Props) {
         })
         .join(' ')
 
-      const x0 = xAt(points[0].t)
-      const x1 = xAt(points[points.length - 1].t)
+      const x0 = xAt(drawn[0].t)
+      const x1 = xAt(drawn[drawn.length - 1].t)
       const areaTx = `${txPath} L${x1.toFixed(1)},${midY.toFixed(1)} L${x0.toFixed(1)},${midY.toFixed(1)} Z`
       const areaRx = `${rxPath} L${x1.toFixed(1)},${midY.toFixed(1)} L${x0.toFixed(1)},${midY.toFixed(1)} Z`
 
@@ -120,6 +135,8 @@ export default function TrafficMirrorChart({ points, className }: Props) {
   const innerH = height - padT - padB
   const midY = padT + innerH / 2
   const last = points.length ? points[points.length - 1] : null
+  const windowLabel =
+    hours === 1 ? 'последний час · Mbit/s' : `последние ${hours} ч · Mbit/s`
 
   return (
     <div className={`traffic-chart${className ? ` ${className}` : ''}`}>
@@ -138,7 +155,7 @@ export default function TrafficMirrorChart({ points, className }: Props) {
             <span className="traffic-legend-val">{formatBitrateShort(last.up_bps)}</span>
           ) : null}
         </span>
-        <span className="traffic-chart-window muted">последний час · Mbit/s</span>
+        <span className="traffic-chart-window muted">{windowLabel}</span>
       </div>
       <svg
         className="traffic-chart-svg"

@@ -2,12 +2,34 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 )
 
+const (
+	trafficDefaultHours = 1
+	trafficMaxHours     = 24
+)
+
+func trafficWindowHours(r *http.Request) int {
+	raw := r.URL.Query().Get("hours")
+	if raw == "" {
+		return trafficDefaultHours
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return trafficDefaultHours
+	}
+	if n > trafficMaxHours {
+		return trafficMaxHours
+	}
+	return n
+}
+
 func (s *Server) handleNodeTraffic(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	since := time.Now().UTC().Add(-time.Hour)
+	hours := trafficWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 	points, err := s.store.ListTrafficSamples(id, since)
 	if err != nil {
 		s.logger.Error("list traffic", "err", err)
@@ -16,13 +38,15 @@ func (s *Server) handleNodeTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"node_id": id,
-		"window":  "1h",
+		"hours":   hours,
+		"window":  strconv.Itoa(hours) + "h",
 		"points":  points,
 	})
 }
 
 func (s *Server) handleAllTraffic(w http.ResponseWriter, r *http.Request) {
-	since := time.Now().UTC().Add(-time.Hour)
+	hours := trafficWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 	byNode, err := s.store.ListAllTrafficSamples(since)
 	if err != nil {
 		s.logger.Error("list all traffic", "err", err)
@@ -30,7 +54,8 @@ func (s *Server) handleAllTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"window": "1h",
+		"hours":  hours,
+		"window": strconv.Itoa(hours) + "h",
 		"nodes":  byNode,
 	})
 }

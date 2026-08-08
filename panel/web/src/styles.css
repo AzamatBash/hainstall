@@ -926,6 +926,17 @@ select {
   margin-top: 0.85rem;
 }
 
+.traffic-hours-label {
+  font-size: 0.78rem;
+  margin-right: 0.15rem;
+}
+
+.traffic-hours-select {
+  min-width: 5.5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
 .traffic-chart {
   margin-top: 0.15rem;
   padding: 0.65rem 0.7rem 0.35rem;
