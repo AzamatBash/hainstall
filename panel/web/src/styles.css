@@ -57,6 +57,12 @@ button {
   cursor: pointer;
 }
 
+.shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem 3rem;
+}
+
 .remna-panels-top {
   margin-bottom: 1rem;
 }
@@ -915,7 +921,7 @@ select {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
   gap: 0.75rem;
   margin-top: 0.85rem;
 }
@@ -926,7 +932,6 @@ select {
   border-radius: var(--radius);
   padding: 0.65rem 0.75rem 0.5rem;
   min-width: 0;
-  max-width: 18rem;
 }
 
 .metric-chart-head {
