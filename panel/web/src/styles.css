@@ -81,15 +81,26 @@ button {
 }
 
 .agent-chat {
-  max-height: 28rem;
+  position: relative;
+  max-height: min(70vh, 40rem);
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
   padding: 0.75rem;
+}
+
+.agent-chat-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin: 0 0 0.35rem;
+}
+
+.agent-msg + .agent-msg {
+  margin-top: 0.65rem;
 }
 
 .agent-msg-meta {

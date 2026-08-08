@@ -1026,6 +1026,7 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
   const [nodeId, setNodeId] = useState('')
   const [messages, setMessages] = useState<AgentMsg[]>([])
   const logRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
 
   useEffect(() => {
     if (!jobId) return
@@ -1064,9 +1065,31 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     const el = logRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
   }, [messages])
 
+  function onLogScroll() {
+    const el = logRef.current
+    if (!el) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickToBottomRef.current = dist < 64
+  }
+
+  function scrollLogsToTop() {
+    const el = logRef.current
+    if (!el) return
+    stickToBottomRef.current = false
+    el.scrollTop = 0
+  }
+
+  function scrollLogsToBottom() {
+    const el = logRef.current
+    if (!el) return
+    stickToBottomRef.current = true
+    el.scrollTop = el.scrollHeight
+  }
   async function onStart(e: FormEvent) {
     e.preventDefault()
     setError('')
@@ -1075,6 +1098,7 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
     setStatus('queued')
     setNodeId('')
     setJobId(null)
+    stickToBottomRef.current = true
     try {
       const res = await api<{ job: { id: string; status: string } }>('/api/agent/deploy', {
         method: 'POST',
@@ -1190,7 +1214,23 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
         </div>
       )}
 
-      <div className="agent-chat" ref={logRef} aria-live="polite">
+      {messages.length > 0 ? (
+        <div className="agent-chat-toolbar">
+          <button className="btn btn-sm" type="button" onClick={scrollLogsToTop}>
+            ↑ К началу
+          </button>
+          <button className="btn btn-sm" type="button" onClick={scrollLogsToBottom}>
+            ↓ К концу
+          </button>
+        </div>
+      ) : null}
+
+      <div
+        className="agent-chat"
+        ref={logRef}
+        aria-live="polite"
+        onScroll={onLogScroll}
+      >
         {messages.length === 0 ? (
           <p className="muted" style={{ margin: 0 }}>
             Лог появится после запуска.
