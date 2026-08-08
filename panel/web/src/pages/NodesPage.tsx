@@ -1,4 +1,4 @@
-import { FormEvent, Fragment, useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   api,
@@ -238,6 +238,7 @@ export default function NodesPage() {
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [onlineSort, setOnlineSort] = useState<'desc' | 'asc' | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const renameRef = useRef<HTMLInputElement | null>(null)
   const nodesRef = useRef<Node[]>([])
@@ -379,11 +380,25 @@ export default function NodesPage() {
     }
   }, [renamingId])
 
-  const visibleNodes = (
-    filterTab === 'nodes' || filterTab === 'remna' || filterTab === 'agent'
-      ? nodes
-      : nodes.filter((n) => (n.remna_panel_id || '') === filterTab)
-  ).filter((n) => nodeMatchesSearch(n, searchQuery, backendsMap[n.id] ?? []))
+  const visibleNodes = useMemo(() => {
+    const base = (
+      filterTab === 'nodes' || filterTab === 'remna' || filterTab === 'agent'
+        ? nodes
+        : nodes.filter((n) => (n.remna_panel_id || '') === filterTab)
+    ).filter((n) => nodeMatchesSearch(n, searchQuery, backendsMap[n.id] ?? []))
+    if (!onlineSort) return base
+    const sorted = [...base]
+    sorted.sort((a, b) => {
+      const av = typeof a.remna_online === 'number' && Number.isFinite(a.remna_online) ? a.remna_online : 0
+      const bv = typeof b.remna_online === 'number' && Number.isFinite(b.remna_online) ? b.remna_online : 0
+      return onlineSort === 'desc' ? bv - av : av - bv
+    })
+    return sorted
+  }, [nodes, filterTab, searchQuery, backendsMap, onlineSort])
+
+  function cycleOnlineSort() {
+    setOnlineSort((cur) => (cur === null ? 'desc' : cur === 'desc' ? 'asc' : null))
+  }
 
   const activePanelName =
     filterTab === 'remna'
@@ -511,6 +526,10 @@ export default function NodesPage() {
 
   function startRowDrag(e: DragEvent<HTMLElement>, id: string) {
     e.stopPropagation()
+    if (onlineSort) {
+      // Manual order takes over; clear Online sort so drag persists cleanly.
+      setOnlineSort(null)
+    }
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', id)
     dragMovedRef.current = false
@@ -695,7 +714,28 @@ export default function NodesPage() {
                       <th className="col-drag" aria-label="Order" />
                       <th>Имя</th>
                       <th>Адрес</th>
-                      <th>Online</th>
+                      <th>
+                        <button
+                          type="button"
+                          className={`th-sort${onlineSort ? ' active' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            cycleOnlineSort()
+                          }}
+                          title={
+                            onlineSort === 'desc'
+                              ? 'Сейчас: больше → меньше. Клик — по возрастанию'
+                              : onlineSort === 'asc'
+                                ? 'Сейчас: меньше → больше. Клик — ручной порядок'
+                                : 'Сортировать по Online'
+                          }
+                        >
+                          Online
+                          <span className="th-sort-ind" aria-hidden>
+                            {onlineSort === 'desc' ? '↓' : onlineSort === 'asc' ? '↑' : '↕'}
+                          </span>
+                        </button>
+                      </th>
                       <th>Бэкенды</th>
                       <th className="col-actions" />
                     </tr>
