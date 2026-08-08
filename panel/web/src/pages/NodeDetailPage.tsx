@@ -23,11 +23,12 @@ import CountryPicker from '../components/CountryPicker'
 import { countryLabel } from '../countries'
 import { putNodeCache } from '../nodeCache'
 import SparklineChart, { ChartPoint } from '../components/SparklineChart'
-import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
 import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
+
+type TrafficPoint = { t: number; down_bps: number; up_bps: number }
 
 function pushPoint(prev: ChartPoint[], v: number, max = HISTORY_MAX): ChartPoint[] {
   const next = [...prev, { t: Date.now(), v }]
@@ -173,9 +174,10 @@ export default function NodeDetailPage() {
   const [cpuHist, setCpuHist] = useState<ChartPoint[]>([])
   const [memHist, setMemHist] = useState<ChartPoint[]>([])
   const [sessHist, setSessHist] = useState<ChartPoint[]>([])
-  const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
-  const [, setDownBps] = useState<number | null>(null)
-  const [, setUpBps] = useState<number | null>(null)
+  const [downHist, setDownHist] = useState<ChartPoint[]>([])
+  const [upHist, setUpHist] = useState<ChartPoint[]>([])
+  const [downBps, setDownBps] = useState<number | null>(null)
+  const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
   const histResetRef = useRef(id)
   const trafficRef = useRef<{ t: number; inn: number; out: number } | null>(null)
@@ -297,11 +299,8 @@ export default function NodeDetailPage() {
         const out = Math.max(0, (tx - prev.out) / dt)
         setUpBps(inn)
         setDownBps(out)
-        setTrafficPoints((prev) => {
-          const next = [...prev, { t: now, down_bps: out, up_bps: inn }]
-          const cutoff = now - 60 * 60 * 1000
-          return next.filter((p) => p.t >= cutoff).slice(-HISTORY_MAX)
-        })
+        setUpHist((h) => pushPoint(h, inn))
+        setDownHist((h) => pushPoint(h, out))
         up = inn
         down = out
       }
@@ -380,7 +379,8 @@ export default function NodeDetailPage() {
       setCpuHist([])
       setMemHist([])
       setSessHist([])
-      setTrafficPoints([])
+      setDownHist([])
+      setUpHist([])
       setDownBps(null)
       setUpBps(null)
       trafficRef.current = null
@@ -396,12 +396,12 @@ export default function NodeDetailPage() {
         const res = await api<{ points: TrafficPoint[] }>(`/api/nodes/${id}/traffic`)
         if (cancelled) return
         const pts = Array.isArray(res.points) ? res.points : []
-        setTrafficPoints(pts)
-        if (pts.length) {
-          const last = pts[pts.length - 1]
-          setDownBps(last.down_bps)
-          setUpBps(last.up_bps)
-        }
+        if (!pts.length) return
+        setDownHist(pts.map((p) => ({ t: p.t, v: p.down_bps })))
+        setUpHist(pts.map((p) => ({ t: p.t, v: p.up_bps })))
+        const last = pts[pts.length - 1]
+        setDownBps(last.down_bps)
+        setUpBps(last.up_bps)
       } catch {
         /* history optional */
       }
@@ -1205,8 +1205,23 @@ export default function NodeDetailPage() {
                     facing.active_sessions !== null ? String(facing.active_sessions) : '—'
                   }
                 />
+                <SparklineChart
+                  label="Исходящий TX"
+                  unit=""
+                  color="var(--accent)"
+                  points={downHist}
+                  max={Math.max(1, ...downHist.map((p) => p.v), 1)}
+                  valueLabel={formatBitrateShort(downBps)}
+                />
+                <SparklineChart
+                  label="Входящий RX"
+                  unit=""
+                  color="var(--ok)"
+                  points={upHist}
+                  max={Math.max(1, ...upHist.map((p) => p.v), 1)}
+                  valueLabel={formatBitrateShort(upBps)}
+                />
               </div>
-              <TrafficMirrorChart points={trafficPoints} />
             </>
           ) : (
             <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>

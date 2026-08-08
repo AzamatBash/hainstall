@@ -13,7 +13,6 @@ import {
 } from '../api'
 import { copyToClipboard, downloadTextFile } from '../clipboard'
 import CountryPicker from '../components/CountryPicker'
-import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
 import {
   getNodesCacheMap,
   NodeLiveMetrics,
@@ -231,7 +230,6 @@ export default function NodesPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [backendsMap, setBackendsMap] = useState<Record<string, BackendServer[]>>({})
   const [metricsMap, setMetricsMap] = useState<Record<string, NodeLiveMetrics>>({})
-  const [trafficMap, setTrafficMap] = useState<Record<string, TrafficPoint[]>>({})
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -346,19 +344,6 @@ export default function NodesPage() {
     void load()
   }, [load])
 
-  const loadTraffic = useCallback(async () => {
-    try {
-      const res = await api<{ nodes: Record<string, TrafficPoint[]> }>('/api/traffic')
-      setTrafficMap(res.nodes && typeof res.nodes === 'object' ? res.nodes : {})
-    } catch {
-      /* optional */
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadTraffic()
-  }, [loadTraffic])
-
   // Soft refresh list snapshots from panel DB (panel poller fills them).
   useEffect(() => {
     const timer = setInterval(() => {
@@ -371,11 +356,10 @@ export default function NodesPage() {
         } catch {
           /* ignore */
         }
-        void loadTraffic()
       })()
     }, METRICS_POLL_MS)
     return () => clearInterval(timer)
-  }, [applyLiveFromNodes, loadTraffic])
+  }, [applyLiveFromNodes])
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -813,17 +797,6 @@ export default function NodesPage() {
                               {n.status === 'online' && metricsMap[n.id] && (
                                 <NodeLiveRow m={metricsMap[n.id]} />
                               )}
-                              {(trafficMap[n.id]?.length ?? 0) > 0 ? (
-                                <div
-                                  className="node-traffic-wrap"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <TrafficMirrorChart
-                                    compact
-                                    points={trafficMap[n.id] ?? []}
-                                  />
-                                </div>
-                              ) : null}
                             </div>
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
