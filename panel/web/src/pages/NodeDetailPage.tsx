@@ -23,12 +23,12 @@ import CountryPicker from '../components/CountryPicker'
 import { countryLabel } from '../countries'
 import { putNodeCache } from '../nodeCache'
 import SparklineChart, { ChartPoint } from '../components/SparklineChart'
+import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
 import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
-
-type TrafficPoint = { t: number; down_bps: number; up_bps: number }
+const TRAFFIC_WINDOW_MS = 60 * 60 * 1000
 
 function pushPoint(prev: ChartPoint[], v: number, max = HISTORY_MAX): ChartPoint[] {
   const next = [...prev, { t: Date.now(), v }]
@@ -176,6 +176,7 @@ export default function NodeDetailPage() {
   const [sessHist, setSessHist] = useState<ChartPoint[]>([])
   const [downHist, setDownHist] = useState<ChartPoint[]>([])
   const [upHist, setUpHist] = useState<ChartPoint[]>([])
+  const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
   const [downBps, setDownBps] = useState<number | null>(null)
   const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
@@ -301,6 +302,11 @@ export default function NodeDetailPage() {
         setDownBps(out)
         setUpHist((h) => pushPoint(h, inn))
         setDownHist((h) => pushPoint(h, out))
+        setTrafficPoints((prev) => {
+          const next = [...prev, { t: now, down_bps: out, up_bps: inn }]
+          const cutoff = now - TRAFFIC_WINDOW_MS
+          return next.filter((p) => p.t >= cutoff).slice(-HISTORY_MAX)
+        })
         up = inn
         down = out
       }
@@ -381,6 +387,7 @@ export default function NodeDetailPage() {
       setSessHist([])
       setDownHist([])
       setUpHist([])
+      setTrafficPoints([])
       setDownBps(null)
       setUpBps(null)
       trafficRef.current = null
@@ -397,6 +404,7 @@ export default function NodeDetailPage() {
         if (cancelled) return
         const pts = Array.isArray(res.points) ? res.points : []
         if (!pts.length) return
+        setTrafficPoints(pts)
         setDownHist(pts.map((p) => ({ t: p.t, v: p.down_bps })))
         setUpHist(pts.map((p) => ({ t: p.t, v: p.up_bps })))
         const last = pts[pts.length - 1]
@@ -1426,6 +1434,20 @@ export default function NodeDetailPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="panel">
+          <h2>Трафик</h2>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            Скорость TX/RX на интерфейсе ноды за последний час.
+          </p>
+          {st === 'online' || trafficPoints.length > 0 ? (
+            <TrafficMirrorChart points={trafficPoints} />
+          ) : (
+            <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+              График появится после установки связи с нодой.
+            </p>
+          )}
         </section>
       </div>
 
