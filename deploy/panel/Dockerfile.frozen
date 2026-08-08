@@ -1,0 +1,19 @@
+# Packages the exact production panel binary + UI that run on prod / Docker Hub.
+# Prefer pulling azamatbash/hapanel@sha256:68ba8c98… for installs.
+# This Dockerfile exists so the repo can rebuild an image with the same app bits.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata \
+  && adduser -D -H -u 10001 panel
+WORKDIR /app
+COPY deploy/panel/prod-frozen/panel /app/panel
+COPY deploy/panel/prod-frozen/web/dist /app/web/dist
+RUN mkdir -p /app/data && chown -R panel:panel /app \
+  && chmod 755 /app/panel
+USER panel
+ENV PANEL_LISTEN=:3080 \
+    PANEL_DB_PATH=/app/data/panel.db \
+    PANEL_STATIC_DIR=/app/web/dist \
+    HAPANEL_INSECURE_SKIP_VERIFY=true
+EXPOSE 3080
+VOLUME ["/app/data"]
+ENTRYPOINT ["/app/panel"]

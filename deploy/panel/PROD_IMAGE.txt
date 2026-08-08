@@ -1,0 +1,9 @@
+# Exact production image (hapanel-panel)
+# Config ID (docker image id):
+sha256:a251825eb102cb43c2445ddf60016a6d2f476c710bc546b32fedd917631f58b0
+# Digest as seen by docker inspect on container (OCI index):
+sha256:d3553a986aa3ca56c3d2b86a6b650d98d9bb088954eb1415350cc769a329ab2a
+# Docker Hub manifest digest for tags 0.1.0 and latest:
+sha256:68ba8c9862194c986b2a4aa49689235c5bf55d3b1f7c54b91e6f9b2c8792d047
+# Created:
+2026-08-08T01:58:18.598845441+03:00

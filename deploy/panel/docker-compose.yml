@@ -1,11 +1,12 @@
 services:
   panel:
-    image: azamatbash/hapanel:0.1.0
-    # Optional local build (also tags as the image above):
-    #   docker compose up -d --build
-    build:
-      context: ../..
-      dockerfile: deploy/panel/Dockerfile
+    image: azamatbash/hapanel@sha256:68ba8c9862194c986b2a4aa49689235c5bf55d3b1f7c54b91e6f9b2c8792d047
+    # Equivalent tags on Hub: azamatbash/hapanel:0.1.0 and :latest (same digest).
+    # Optional local rebuild from sources (will NOT match prod digest):
+    #   docker compose build
+    # build:
+    #   context: ../..
+    #   dockerfile: deploy/panel/Dockerfile
     container_name: hapanel-panel
     environment:
       PANEL_PASSWORD: ${PANEL_PASSWORD:-changeme}
