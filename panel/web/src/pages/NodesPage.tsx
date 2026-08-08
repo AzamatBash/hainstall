@@ -201,6 +201,14 @@ function NodeLiveRow({ m }: { m: NodeLiveMetrics }) {
           {load}
         </span>
       )}
+    </div>
+  )
+}
+
+function NodeTrafficCell({ m }: { m?: NodeLiveMetrics }) {
+  if (!m) return <span className="muted">—</span>
+  return (
+    <div className="node-traffic-cell">
       <span className="node-live-net down" title="Отдача (TX)">
         <span className="node-live-arrow" aria-hidden>
           ↓
@@ -216,6 +224,16 @@ function NodeLiveRow({ m }: { m: NodeLiveMetrics }) {
     </div>
   )
 }
+
+function trafficScore(m?: NodeLiveMetrics): number {
+  if (!m) return 0
+  const down = Number(m.downBps)
+  const up = Number(m.upBps)
+  return (Number.isFinite(down) ? down : 0) + (Number.isFinite(up) ? up : 0)
+}
+
+type ListSortKey = 'online' | 'traffic'
+type ListSort = { key: ListSortKey; dir: 'asc' | 'desc' } | null
 
 type NodeFilterTab = 'remna' | 'providers' | 'nodes' | 'agent' | string
 
@@ -238,7 +256,7 @@ export default function NodesPage() {
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [onlineSort, setOnlineSort] = useState<'desc' | 'asc' | null>(null)
+  const [listSort, setListSort] = useState<ListSort>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const renameRef = useRef<HTMLInputElement | null>(null)
   const nodesRef = useRef<Node[]>([])
@@ -386,18 +404,29 @@ export default function NodesPage() {
         ? nodes
         : nodes.filter((n) => (n.remna_panel_id || '') === filterTab)
     ).filter((n) => nodeMatchesSearch(n, searchQuery, backendsMap[n.id] ?? []))
-    if (!onlineSort) return base
+    if (!listSort) return base
     const sorted = [...base]
     sorted.sort((a, b) => {
-      const av = typeof a.remna_online === 'number' && Number.isFinite(a.remna_online) ? a.remna_online : 0
-      const bv = typeof b.remna_online === 'number' && Number.isFinite(b.remna_online) ? b.remna_online : 0
-      return onlineSort === 'desc' ? bv - av : av - bv
+      let av = 0
+      let bv = 0
+      if (listSort.key === 'online') {
+        av = typeof a.remna_online === 'number' && Number.isFinite(a.remna_online) ? a.remna_online : 0
+        bv = typeof b.remna_online === 'number' && Number.isFinite(b.remna_online) ? b.remna_online : 0
+      } else {
+        av = trafficScore(metricsMap[a.id])
+        bv = trafficScore(metricsMap[b.id])
+      }
+      return listSort.dir === 'desc' ? bv - av : av - bv
     })
     return sorted
-  }, [nodes, filterTab, searchQuery, backendsMap, onlineSort])
+  }, [nodes, filterTab, searchQuery, backendsMap, listSort, metricsMap])
 
-  function cycleOnlineSort() {
-    setOnlineSort((cur) => (cur === null ? 'desc' : cur === 'desc' ? 'asc' : null))
+  function cycleListSort(key: ListSortKey) {
+    setListSort((cur) => {
+      if (!cur || cur.key !== key) return { key, dir: 'desc' }
+      if (cur.dir === 'desc') return { key, dir: 'asc' }
+      return null
+    })
   }
 
   const activePanelName =
@@ -526,9 +555,9 @@ export default function NodesPage() {
 
   function startRowDrag(e: DragEvent<HTMLElement>, id: string) {
     e.stopPropagation()
-    if (onlineSort) {
-      // Manual order takes over; clear Online sort so drag persists cleanly.
-      setOnlineSort(null)
+    if (listSort) {
+      // Manual order takes over; clear column sort so drag persists cleanly.
+      setListSort(null)
     }
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', id)
@@ -717,22 +746,52 @@ export default function NodesPage() {
                       <th>
                         <button
                           type="button"
-                          className={`th-sort${onlineSort ? ' active' : ''}`}
+                          className={`th-sort${listSort?.key === 'online' ? ' active' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation()
-                            cycleOnlineSort()
+                            cycleListSort('online')
                           }}
                           title={
-                            onlineSort === 'desc'
+                            listSort?.key === 'online' && listSort.dir === 'desc'
                               ? 'Сейчас: больше → меньше. Клик — по возрастанию'
-                              : onlineSort === 'asc'
+                              : listSort?.key === 'online' && listSort.dir === 'asc'
                                 ? 'Сейчас: меньше → больше. Клик — ручной порядок'
                                 : 'Сортировать по Online'
                           }
                         >
                           Online
                           <span className="th-sort-ind" aria-hidden>
-                            {onlineSort === 'desc' ? '↓' : onlineSort === 'asc' ? '↑' : '↕'}
+                            {listSort?.key === 'online'
+                              ? listSort.dir === 'desc'
+                                ? '↓'
+                                : '↑'
+                              : '↕'}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button
+                          type="button"
+                          className={`th-sort${listSort?.key === 'traffic' ? ' active' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            cycleListSort('traffic')
+                          }}
+                          title={
+                            listSort?.key === 'traffic' && listSort.dir === 'desc'
+                              ? 'Сейчас: больше → меньше. Клик — по возрастанию'
+                              : listSort?.key === 'traffic' && listSort.dir === 'asc'
+                                ? 'Сейчас: меньше → больше. Клик — ручной порядок'
+                                : 'Сортировать по текущему трафику (TX+RX)'
+                          }
+                        >
+                          Трафик
+                          <span className="th-sort-ind" aria-hidden>
+                            {listSort?.key === 'traffic'
+                              ? listSort.dir === 'desc'
+                                ? '↓'
+                                : '↑'
+                              : '↕'}
                           </span>
                         </button>
                       </th>
@@ -862,6 +921,13 @@ export default function NodesPage() {
                             </div>
                           </td>
                           <td className="mono">{n.remna_online ?? 0}</td>
+                          <td>
+                            {n.status === 'online' ? (
+                              <NodeTrafficCell m={metricsMap[n.id]} />
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
                           <td
                             className="col-backends"
                             onClick={(e) => e.stopPropagation()}
