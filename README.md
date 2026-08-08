@@ -58,7 +58,7 @@ All agent routes are under `/_hapctl/v1/...` with `Authorization: Bearer <token>
 
 | Image | Tags | Role |
 |-------|------|------|
-| `azamatbash/hapanel` | `0.1.0`, `latest` | Panel (UI + API). **Prod digest:** `sha256:68ba8c9862194c986b2a4aa49689235c5bf55d3b1f7c54b91e6f9b2c8792d047` (см. `deploy/panel/PROD_IMAGE.txt`) |
+| `azamatbash/hapanel` | `0.1.0`, `latest` | Panel (UI + API). **Prod digest:** `sha256:cefbedd99b5b5de35eef2346ad919322e2dde33544417365731b5693e53ba9cb` (см. `deploy/panel/PROD_IMAGE.txt`) |
 | `azamatbash/hanode` | `0.1.0`, `latest` | Node agent |
 | `haproxy:3.0-alpine` | official | HAProxy on nodes |
 
