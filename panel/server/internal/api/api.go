@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 
 	s.mux.HandleFunc("GET /api/nodes", s.requireAuth(s.handleListNodes))
+	s.mux.HandleFunc("GET /api/traffic", s.requireAuth(s.handleAllTraffic))
 	s.mux.HandleFunc("POST /api/nodes", s.requireAuth(s.handleCreateNode))
 	s.mux.HandleFunc("POST /api/nodes/provision", s.requireAuth(s.handleProvisionNode))
 	s.mux.HandleFunc("PUT /api/nodes/reorder", s.requireAuth(s.handleReorderNodes))
@@ -115,6 +116,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/nodes/{id}/stats", s.requireAuth(s.handleNodeStats))
 	s.mux.HandleFunc("GET /api/nodes/{id}/system", s.requireAuth(s.handleNodeSystem))
+	s.mux.HandleFunc("GET /api/nodes/{id}/traffic", s.requireAuth(s.handleNodeTraffic))
 	s.mux.HandleFunc("GET /api/nodes/{id}/backends", s.requireAuth(s.handleNodeBackends))
 	s.mux.HandleFunc("POST /api/nodes/{id}/backends", s.requireAuth(s.handleAddBackend))
 	s.mux.HandleFunc("DELETE /api/nodes/{id}/backends/{backend}/{name}", s.requireAuth(s.handleDeleteBackend))

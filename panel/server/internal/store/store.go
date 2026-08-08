@@ -147,6 +147,14 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   login TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS traffic_samples (
+  node_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  down_bps REAL NOT NULL,
+  up_bps REAL NOT NULL,
+  PRIMARY KEY (node_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_samples_node_ts ON traffic_samples(node_id, ts);
 `)
 	if err != nil {
 		return err
@@ -398,7 +406,104 @@ func (s *Store) SaveSnapshot(id string, status NodeStatus, snap NodeSnapshot) er
 	_, err = s.db.Exec(`
 UPDATE nodes SET status = ?, last_seen = ?, snapshot = ? WHERE id = ?`,
 		string(status), now.Format(time.RFC3339Nano), string(raw), id)
-	return err
+	if err != nil {
+		return err
+	}
+	if snap.DownBps != nil || snap.UpBps != nil {
+		down, up := 0.0, 0.0
+		if snap.DownBps != nil {
+			down = *snap.DownBps
+		}
+		if snap.UpBps != nil {
+			up = *snap.UpBps
+		}
+		_ = s.AppendTrafficSample(id, now, down, up)
+	}
+	return nil
+}
+
+// TrafficSample is one RX/TX rate point (bytes/sec) for charts.
+type TrafficSample struct {
+	TS      int64   `json:"t"`
+	DownBps float64 `json:"down_bps"`
+	UpBps   float64 `json:"up_bps"`
+}
+
+const trafficRetention = time.Hour
+
+// AppendTrafficSample records a rate point and prunes samples older than 1h.
+func (s *Store) AppendTrafficSample(nodeID string, at time.Time, downBps, upBps float64) error {
+	if nodeID == "" {
+		return nil
+	}
+	if downBps < 0 {
+		downBps = 0
+	}
+	if upBps < 0 {
+		upBps = 0
+	}
+	ts := at.UTC().UnixMilli()
+	cutoff := at.UTC().Add(-trafficRetention).UnixMilli()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO traffic_samples (node_id, ts, down_bps, up_bps) VALUES (?, ?, ?, ?)`,
+		nodeID, ts, downBps, upBps,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM traffic_samples WHERE node_id = ? AND ts < ?`, nodeID, cutoff); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListTrafficSamples returns samples for a node within the retention window.
+func (s *Store) ListTrafficSamples(nodeID string, since time.Time) ([]TrafficSample, error) {
+	cutoff := since.UTC().UnixMilli()
+	rows, err := s.db.Query(`
+SELECT ts, down_bps, up_bps FROM traffic_samples
+WHERE node_id = ? AND ts >= ?
+ORDER BY ts ASC`, nodeID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TrafficSample, 0, 128)
+	for rows.Next() {
+		var p TrafficSample
+		if err := rows.Scan(&p.TS, &p.DownBps, &p.UpBps); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListAllTrafficSamples returns last-hour samples keyed by node id.
+func (s *Store) ListAllTrafficSamples(since time.Time) (map[string][]TrafficSample, error) {
+	cutoff := since.UTC().UnixMilli()
+	rows, err := s.db.Query(`
+SELECT node_id, ts, down_bps, up_bps FROM traffic_samples
+WHERE ts >= ?
+ORDER BY node_id ASC, ts ASC`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]TrafficSample{}
+	for rows.Next() {
+		var id string
+		var p TrafficSample
+		if err := rows.Scan(&id, &p.TS, &p.DownBps, &p.UpBps); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], p)
+	}
+	return out, rows.Err()
 }
 
 type rowScanner interface {
