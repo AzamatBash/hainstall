@@ -139,25 +139,38 @@ type backendGroup struct {
 }
 
 func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
-	servers, err := d.HA.ListServers()
+	stored, err := d.Store.List()
 	if err != nil {
-		d.Log.Warn("list servers via runtime failed, falling back to store", "err", err)
-		stored, serr := d.Store.List()
-		if serr != nil {
-			writeErr(w, http.StatusInternalServerError, serr.Error())
-			return
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Prefer persisted address (what the operator entered). HAProxy runtime
+	// "show servers state" always reports the resolved IP in srv_addr, which
+	// made the UI look like hostnames were rewritten to IPs.
+	statusByKey := map[string]string{}
+	if live, lerr := d.HA.ListServers(); lerr == nil {
+		for _, s := range live {
+			statusByKey[s.Backend+"/"+s.Name] = s.Status
 		}
-		servers = make([]haproxy.ServerInfo, 0, len(stored))
-		for _, s := range stored {
-			servers = append(servers, haproxy.ServerInfo{
-				Backend: s.Backend,
-				Name:    s.Name,
-				Address: s.Address,
-				Port:    s.Port,
-				Weight:  s.Weight,
-				Status:  "unknown",
-			})
+	} else {
+		d.Log.Warn("list servers via runtime failed, status unknown", "err", lerr)
+	}
+
+	servers := make([]haproxy.ServerInfo, 0, len(stored))
+	for _, s := range stored {
+		st := statusByKey[s.Backend+"/"+s.Name]
+		if st == "" {
+			st = "unknown"
 		}
+		servers = append(servers, haproxy.ServerInfo{
+			Backend: s.Backend,
+			Name:    s.Name,
+			Address: s.Address,
+			Port:    s.Port,
+			Weight:  s.Weight,
+			Status:  st,
+		})
 	}
 
 	byBackend := map[string][]haproxy.ServerInfo{}

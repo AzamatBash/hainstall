@@ -1495,12 +1495,17 @@ export default function NodeDetailPage() {
             style={{ width: 'min(32rem, 100%)' }}
           >
             <h3 style={{ margin: 0 }}>Добавить бэкенд</h3>
+            <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+              В «Адрес» пишите IP (или домен) — именно это попадёт в конфиг HAProxy как
+              цель <span className="mono">server …</span>. Поле Remnawave ниже по строке
+              бэкенда на это не влияет.
+            </p>
             <form className="stack" onSubmit={onAddBackend}>
               {(
                 [
                   ['backend', 'Бэкенд'],
                   ['name', 'Имя сервера'],
-                  ['address', 'Адрес'],
+                  ['address', 'Адрес (IP для HAProxy)'],
                   ['port', 'Порт'],
                   ['weight', 'Вес'],
                 ] as const
@@ -1517,11 +1522,13 @@ export default function NodeDetailPage() {
                     placeholder={
                       key === 'backend'
                         ? 'app'
-                        : key === 'port'
-                          ? '8443'
-                          : key === 'weight'
-                            ? '100'
-                            : undefined
+                        : key === 'address'
+                          ? '1.2.3.4'
+                          : key === 'port'
+                            ? '8443'
+                            : key === 'weight'
+                              ? '100'
+                              : undefined
                     }
                   />
                 </div>
