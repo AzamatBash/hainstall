@@ -957,17 +957,6 @@ export default function NodeDetailPage() {
           </div>
         )}
         <div className="node-detail-toolbar">
-          <button
-            className="btn btn-sm btn-primary"
-            type="button"
-            disabled={busy || connecting || st !== 'online'}
-            onClick={() => {
-              setError('')
-              setShowAddBackend(true)
-            }}
-          >
-            Добавить бэкенд
-          </button>
           <div className="actions-menu-wrap" ref={actionsRef}>
             <button
               className="btn btn-sm actions-menu-trigger"
@@ -1248,7 +1237,22 @@ export default function NodeDetailPage() {
         </section>
 
         <section className="panel">
-          <h2>Бэкенды приложений</h2>
+          <div className="panel-head">
+            <h2>Бэкенды приложений</h2>
+            <div className="panel-head-aside">
+              <button
+                className="btn btn-sm btn-primary"
+                type="button"
+                disabled={busy || connecting || st !== 'online'}
+                onClick={() => {
+                  setError('')
+                  setShowAddBackend(true)
+                }}
+              >
+                Добавить бэкенд
+              </button>
+            </div>
+          </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
             Только пользовательские серверы (app и добавленные вами). Служебные
             hap_agent / acme скрыты.
@@ -1271,7 +1275,7 @@ export default function NodeDetailPage() {
                   <tr>
                     <td colSpan={7} className="muted">
                       {st === 'online'
-                        ? 'Пока нет серверов — добавьте ниже'
+                        ? 'Пока нет серверов — добавьте через кнопку выше'
                         : 'Нет данных — сначала установите связь'}
                     </td>
                   </tr>
