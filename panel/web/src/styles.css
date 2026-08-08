@@ -1603,16 +1603,16 @@ a.provider-badge:hover {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: 0.76rem;
+  font-weight: 500;
 }
 
 .node-live-net.down {
-  color: #5eead4;
+  color: #4db8a8;
 }
 
 .node-live-net.up {
-  color: #86efac;
+  color: #5faf7f;
 }
 
 .node-live-arrow {
