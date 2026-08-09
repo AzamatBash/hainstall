@@ -2069,20 +2069,25 @@ a.provider-badge:hover {
     font-size: 0.82rem;
   }
 
-  .stats-panel-tabs {
+  .stats-panel-picker {
+    margin-top: 0.65rem;
+    padding: 0.65rem 0.7rem;
+  }
+
+  .stats-panel-picker-list {
     flex-wrap: nowrap;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
-    gap: 0;
-    padding-bottom: 0.15rem;
+    padding-bottom: 0.1rem;
   }
 
-  .stats-panel-tabs .page-tab {
+  .stats-panel-chip {
     flex: 0 0 auto;
-    white-space: nowrap;
-    padding: 0.5rem 0.65rem;
-    font-size: 0.85rem;
+  }
+
+  .stats-lead {
+    font-size: 0.82rem;
   }
 
   .stats-current {
@@ -2504,18 +2509,99 @@ button.task-image-open {
   width: 3.2rem;
 }
 
-.stats-panel-tabs .stats-tab-online {
-  margin-left: 0.4rem;
-  font-size: 0.78rem;
-  opacity: 0.85;
+.stats-panel-picker {
+  margin: 0.85rem 0 0.35rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 10px;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent) 10%, transparent),
+      color-mix(in srgb, var(--bg-elev) 88%, transparent)
+    );
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.stats-panel-picker-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.stats-panel-picker-kicker {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--accent);
+}
+
+.stats-panel-picker-hint {
+  font-size: 0.78rem;
+}
+
+.stats-panel-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.stats-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 70%, var(--bg-elev));
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.stats-panel-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.stats-panel-chip.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.stats-panel-chip-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-panel-chip-online {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0.95;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.stats-panel-chip.active .stats-panel-chip-online {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .stats-section-title {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  margin: 0.75rem 0 0;
+  margin: 0;
   font-size: 1.15rem;
   font-weight: 600;
   line-height: 1.2;

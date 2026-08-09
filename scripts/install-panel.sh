@@ -7,7 +7,7 @@
 #
 set -euo pipefail
 
-PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel@sha256:9ace94f8efdda108ac2065583d443a4bdccf39399ea0b8b23d19031e67582608}"
+PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel@sha256:e347e198f669e6fd412505358a1d8b2e46763cf435cdecccb0fe24250a660e71}"
 PANEL_PORT="${PANEL_PORT:-3080}"
 INSTALL_DIR="${HAPANEL_DIR:-${1:-/opt/hapanel}}"
 

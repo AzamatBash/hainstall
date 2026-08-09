@@ -433,16 +433,6 @@ export default function StatsPage() {
 
         {mode === 'stats' ? (
           <>
-            <StatsTitleHelp
-              title="Онлайн пользователей"
-              help={[
-                'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
-                active ? `Панель: ${active.name}.` : '',
-                onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-            />
             {loading ? (
               <p className="muted">Загрузка…</p>
             ) : panels.length === 0 ? (
@@ -452,25 +442,44 @@ export default function StatsPage() {
               </p>
             ) : (
               <>
-                <nav className="page-tabs stats-panel-tabs" aria-label="Панели Remnawave">
-                  {panels.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`page-tab${activeId === p.id ? ' active' : ''}`}
-                      onClick={() => setActiveId(p.id)}
-                      title={p.base_url}
-                    >
-                      {p.name}
-                      {typeof p.online === 'number' ? (
-                        <span className="stats-tab-online mono">{p.online}</span>
-                      ) : null}
-                    </button>
-                  ))}
-                </nav>
+                <div className="stats-panel-picker" role="group" aria-label="Панель Remnawave">
+                  <div className="stats-panel-picker-label">
+                    <span className="stats-panel-picker-kicker">Панель Remnawave</span>
+                    <span className="muted stats-panel-picker-hint">
+                      Общий фильтр для онлайн и трафика
+                    </span>
+                  </div>
+                  <div className="stats-panel-picker-list">
+                    {panels.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`stats-panel-chip${activeId === p.id ? ' active' : ''}`}
+                        onClick={() => setActiveId(p.id)}
+                        title={p.base_url}
+                      >
+                        <span className="stats-panel-chip-name">{p.name}</span>
+                        {typeof p.online === 'number' ? (
+                          <span className="stats-panel-chip-online mono">{p.online}</span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
                 {active && (
                   <div className="stack stats-body">
+                    <StatsTitleHelp
+                      title="Онлайн пользователей"
+                      help={[
+                        'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                        active ? `Панель: ${active.name}.` : '',
+                        onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    />
+
                     {onlineError ? <div className="error">{onlineError}</div> : null}
 
                     <div className="row stats-presets" style={{ flexWrap: 'wrap', gap: '0.4rem' }}>
