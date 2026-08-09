@@ -17,10 +17,10 @@ type Inbound struct {
 	Port        int    `json:"port"`
 }
 
-// NodeConfigProfile holds the active profile + inbound UUIDs attached to a node.
+// NodeConfigProfile holds the active profile + inbound refs attached to a node.
 type NodeConfigProfile struct {
-	ActiveConfigProfileUUID string   `json:"activeConfigProfileUuid"`
-	ActiveInbounds          []string `json:"activeInbounds"`
+	ActiveConfigProfileUUID string          `json:"activeConfigProfileUuid"`
+	ActiveInbounds          json.RawMessage `json:"activeInbounds"`
 }
 
 // ConfigProfileUUID returns the profile id from nested or flat node fields.
@@ -35,11 +35,45 @@ func (n *Node) ConfigProfileUUID() string {
 
 // ActiveInboundUUIDs returns inbound UUIDs attached to the node (best-effort).
 func (n *Node) ActiveInboundUUIDs() []string {
-	if n.ConfigProfile != nil && len(n.ConfigProfile.ActiveInbounds) > 0 {
-		return append([]string(nil), n.ConfigProfile.ActiveInbounds...)
+	if n.ConfigProfile != nil {
+		if ids := parseInboundUUIDList(n.ConfigProfile.ActiveInbounds); len(ids) > 0 {
+			return ids
+		}
 	}
 	if len(n.ConfigProfileInbounds) > 0 {
 		return append([]string(nil), n.ConfigProfileInbounds...)
+	}
+	return nil
+}
+
+func parseInboundUUIDList(raw json.RawMessage) []string {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var asStrings []string
+	if err := json.Unmarshal(raw, &asStrings); err == nil {
+		out := make([]string, 0, len(asStrings))
+		for _, s := range asStrings {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	var asObjects []struct {
+		UUID string `json:"uuid"`
+	}
+	if err := json.Unmarshal(raw, &asObjects); err == nil {
+		out := make([]string, 0, len(asObjects))
+		for _, o := range asObjects {
+			u := strings.TrimSpace(o.UUID)
+			if u != "" {
+				out = append(out, u)
+			}
+		}
+		return out
 	}
 	return nil
 }
