@@ -21,16 +21,15 @@ const PRESETS: { hours: HoursPreset; label: string }[] = [
   { hours: 744, label: '30 дней' },
 ]
 
-const PROTO_OPTS = [
-  '',
-  'vless_reality',
-  'vless',
-  'hysteria2',
-  'shadowsocks',
-  'trojan',
-  'wireguard',
-  'other',
-  'unknown',
+const PROTO_OPTS: { value: string; label: string }[] = [
+  { value: 'vless_reality', label: 'VLESS Reality' },
+  { value: 'hysteria2', label: 'Hysteria' },
+  { value: 'vless', label: 'VLESS' },
+  { value: 'shadowsocks', label: 'Shadowsocks' },
+  { value: 'trojan', label: 'Trojan' },
+  { value: 'wireguard', label: 'WireGuard' },
+  { value: 'other', label: 'Other' },
+  { value: 'unknown', label: 'Unknown' },
 ]
 
 function formatAt(iso: string) {
@@ -546,10 +545,7 @@ export default function StatsPage() {
                         <tr>
                           <th>Панель</th>
                           <th>Нода</th>
-                          <th>Online</th>
-                          <th>Inbound</th>
                           <th>Протокол</th>
-                          <th>Override</th>
                           <th>RN front</th>
                           <th>RN back</th>
                           <th>HP front</th>
@@ -562,34 +558,46 @@ export default function StatsPage() {
                         {nodes.map((n) => {
                           const key = `${n.panel_id}:${n.remna_uuid}`
                           const busy = savingKey === key
+                          const protoValue =
+                            n.protocol_override ||
+                            n.protocol ||
+                            n.protocol_derived ||
+                            'unknown'
+                          const known = PROTO_OPTS.some((p) => p.value === protoValue)
                           return (
                             <tr key={key} className={busy ? 'muted' : undefined}>
                               <td className="analytics-cell-panel">{n.panel_name || '—'}</td>
                               <td className="analytics-cell-name">
-                                <div className="analytics-node-title" title={n.name}>{n.name}</div>
-                                <div className="muted mono analytics-node-addr" title={n.address}>
-                                  {n.address}
+                                <div className="analytics-node-row">
+                                  <div className="analytics-node-text">
+                                    <div className="analytics-node-title" title={n.name}>
+                                      {n.name}
+                                    </div>
+                                    <div className="muted mono analytics-node-addr" title={n.address}>
+                                      {n.address}
+                                    </div>
+                                  </div>
+                                  <span
+                                    className={`analytics-status-dot${n.node_ok ? ' ok' : ' bad'}`}
+                                    title={n.node_ok ? 'online' : 'offline'}
+                                    aria-label={n.node_ok ? 'online' : 'offline'}
+                                  />
                                 </div>
                               </td>
-                              <td className="mono analytics-cell-online">
-                                {n.users_online}
-                                {!n.node_ok ? <span className="error"> · off</span> : null}
-                              </td>
-                              <td className="mono analytics-cell-inbound" title={n.inbound_tags || ''}>
-                                {n.inbound_tags || '—'}
-                              </td>
-                              <td className="mono analytics-cell-proto">{n.protocol_derived || 'unknown'}</td>
-                              <td className="analytics-cell-override">
+                              <td className="analytics-cell-proto">
                                 <select
-                                  value={n.protocol_override || ''}
+                                  value={known ? protoValue : 'other'}
                                   disabled={busy}
                                   onChange={(e) =>
                                     void patchNode(n, { protocol_override: e.target.value })
                                   }
                                 >
+                                  {!known ? (
+                                    <option value="other">{protoValue}</option>
+                                  ) : null}
                                   {PROTO_OPTS.map((p) => (
-                                    <option key={p || 'auto'} value={p}>
-                                      {p || 'авто'}
+                                    <option key={p.value} value={p.value}>
+                                      {p.label}
                                     </option>
                                   ))}
                                 </select>
