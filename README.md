@@ -65,7 +65,7 @@ All agent routes are under `/_hapctl/v1/...` with `Authorization: Bearer <token>
 Теги `0.1.0` и `latest` указывают на **один и тот же** образ, что крутится на проде (одни и те же layers). Ставить лучше по digest:
 
 ```bash
-docker pull azamatbash/hapanel@sha256:9f15ac9e52c479146dafdc4b06cecc08ecaa0195d852e3f7b0ca7be11c60fcdd
+docker pull azamatbash/hapanel@sha256:9c1830865afab7b1df2c2ceb3e938ce81e71a92624d9678937428083acf8678a
 ```
 
 В репозитории точные бинарник и UI с прода лежат в `deploy/panel/prod-frozen/` (сверка с живым контейнером).
