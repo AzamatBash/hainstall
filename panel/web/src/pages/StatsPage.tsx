@@ -9,6 +9,7 @@ import {
 } from '../api'
 import BrandNav from '../components/BrandNav'
 import OnlineUsersChart, { type OnlinePoint } from '../components/OnlineUsersChart'
+import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
 
 type HoursPreset = 1 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
@@ -48,20 +49,32 @@ function formatAt(iso: string) {
   )
 }
 
-function sumLatestByKey(buckets: { t: number; key: string; online: number }[]) {
-  const latestT = new Map<string, number>()
-  const online = new Map<string, number>()
-  for (const b of buckets) {
-    const prev = latestT.get(b.key) ?? -1
-    if (b.t >= prev) {
-      latestT.set(b.key, b.t)
-      online.set(b.key, b.online)
-    }
-  }
-  return [...online.entries()]
-    .map(([key, value]) => ({ key, online: value }))
-    .sort((a, b) => b.online - a.online)
-}
+const SEGMENT_META: { key: string; label: string; color: string; hint: string }[] = [
+  {
+    key: 'vless_reality',
+    label: 'VLESS Reality',
+    color: '#5b8def',
+    hint: 'VLESS Reality без HP back',
+  },
+  {
+    key: 'hysteria2',
+    label: 'Hysteria',
+    color: '#3ecf8e',
+    hint: 'Протокол Hysteria2',
+  },
+  {
+    key: 'vless_reality_hp_front',
+    label: 'VLESS Reality + HP front',
+    color: '#f0b429',
+    hint: 'VLESS Reality и роль HP back',
+  },
+  {
+    key: 'cdn',
+    label: 'CDN',
+    color: '#c084fc',
+    hint: 'Роль CDN back',
+  },
+]
 
 export default function StatsPage() {
   const [mode, setMode] = useState<Mode>('stats')
@@ -189,14 +202,7 @@ export default function StatsPage() {
     return points.filter((p) => p.t >= zoom.from && p.t <= zoom.to)
   }, [points, zoom])
 
-  const segmentLatest = useMemo(() => {
-    const labels: Record<string, string> = {
-      vless_reality: 'VLESS Reality',
-      hysteria2: 'Hysteria',
-      vless_reality_hp_front: 'VLESS Reality + HP front',
-      cdn: 'CDN',
-    }
-    const order = ['vless_reality', 'hysteria2', 'vless_reality_hp_front', 'cdn']
+  const segmentSeries = useMemo(() => {
     const now = new Map<string, number>()
     for (const n of nodes) {
       if (!n.enabled_in_analytics) continue
@@ -204,22 +210,45 @@ export default function StatsPage() {
       const isVless = proto === 'vless_reality' || proto === 'vless'
       const isHy2 = proto === 'hysteria2' || proto === 'hysteria' || proto === 'hy2'
       const online = Number(n.users_online) || 0
-      if (isVless && n.role_hp_back) now.set('vless_reality_hp_front', (now.get('vless_reality_hp_front') || 0) + online)
-      else if (isVless) now.set('vless_reality', (now.get('vless_reality') || 0) + online)
+      if (isVless && n.role_hp_back) {
+        now.set('vless_reality_hp_front', (now.get('vless_reality_hp_front') || 0) + online)
+      } else if (isVless) {
+        now.set('vless_reality', (now.get('vless_reality') || 0) + online)
+      }
       if (isHy2) now.set('hysteria2', (now.get('hysteria2') || 0) + online)
       if (n.role_cdn_back) now.set('cdn', (now.get('cdn') || 0) + online)
     }
-    // Prefer live catalog; fall back to last hour bucket from samples.
-    const sample = new Map(sumLatestByKey(week?.by_segment ?? []).map((r) => [r.key, r.online]))
-    const useNow = nodes.some((n) => n.enabled_in_analytics)
-    return order.map((key) => ({
-      key,
-      label: labels[key] || key,
-      online: useNow ? (now.get(key) ?? 0) : (sample.get(key) ?? 0),
+    const buckets = week?.by_segment ?? []
+    return SEGMENT_META.map((m) => ({
+      key: m.key,
+      label: m.label,
+      color: m.color,
+      hint: m.hint,
+      onlineNow: now.get(m.key) ?? 0,
+      points: seriesFromBuckets(buckets, m.key),
     }))
   }, [nodes, week])
-  const protoLatest = useMemo(() => sumLatestByKey(week?.by_protocol ?? []), [week])
-  const roleLatest = useMemo(() => sumLatestByKey(week?.by_role ?? []), [week])
+
+  const segmentTotal = useMemo(
+    () => segmentSeries.reduce((s, x) => s + x.onlineNow, 0),
+    [segmentSeries],
+  )
+  const attributedNodes = useMemo(
+    () =>
+      nodes.filter((n) => {
+        if (!n.enabled_in_analytics) return false
+        const proto = (n.protocol || n.protocol_derived || '').toLowerCase()
+        return (
+          proto === 'vless_reality' ||
+          proto === 'vless' ||
+          proto === 'hysteria2' ||
+          proto === 'hysteria' ||
+          proto === 'hy2' ||
+          n.role_cdn_back
+        )
+      }).length,
+    [nodes],
+  )
 
   async function syncNodes() {
     setSyncing(true)
@@ -260,15 +289,6 @@ export default function StatsPage() {
     } finally {
       setSavingKey('')
     }
-  }
-
-  function roleLabel(key: string) {
-    if (key === 'rn_front') return 'RN front'
-    if (key === 'rn_back') return 'RN back'
-    if (key === 'hp_front') return 'HP front'
-    if (key === 'hp_back') return 'HP back'
-    if (key === 'cdn_back') return 'CDN back'
-    return key
   }
 
   return (
@@ -418,107 +438,71 @@ export default function StatsPage() {
               </button>
             </nav>
 
-            {analyticsLoading && !week && nodes.length === 0 ? (
+            {analyticsLoading && nodes.length === 0 ? (
               <p className="muted">Загрузка…</p>
             ) : analyticsTab === 'week' ? (
-              <div className="stack" style={{ marginTop: '0.75rem', gap: '1rem' }}>
+              <div className="stack analytics-week" style={{ marginTop: '0.75rem', gap: '1rem' }}>
                 <div className="stats-current">
-                  <div className="stats-current-value mono">{week?.total_online_now ?? 0}</div>
+                  <div className="stats-current-value mono">{segmentTotal}</div>
                   <div className="stats-current-meta muted">
-                    <div>Онлайн сейчас · все панели</div>
+                    <div>Онлайн в сегментах · все панели</div>
                     <div>
-                      Доля top-3:{' '}
-                      <span className="mono">
-                        {(week?.top3_share_pct ?? 0).toFixed(1)}%
-                      </span>
+                      Нод с атрибутами: <span className="mono">{attributedNodes}</span> /{' '}
+                      <span className="mono">{nodes.length}</span>
                     </div>
                   </div>
                 </div>
 
-                <div>
-                  <h3 style={{ margin: '0 0 0.4rem' }}>Сегменты (сейчас / последний час)</h3>
-                  <p className="muted" style={{ marginTop: 0, fontSize: '0.8rem' }}>
-                    VLESS Reality · Hysteria · VLESS Reality + HP front (протокол VLESS + роль HP back, не в простом VLESS) · CDN.
+                {nodes.length === 0 ? (
+                  <p className="muted">
+                    Нет нод — откройте вкладку «Ноды» и нажмите «Синхронизировать из Remnawave».
                   </p>
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Сегмент</th>
-                          <th>Online</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {segmentLatest.map((r) => (
-                          <tr key={r.key}>
-                            <td>{r.label}</td>
-                            <td className="mono">{r.online}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                ) : attributedNodes === 0 ? (
+                  <p className="muted">
+                    Сегменты пустые: на вкладке «Ноды» выставьте протокол и роли (HP back / CDN back).
+                  </p>
+                ) : null}
+
+                <div className="analytics-segment-grid">
+                  {segmentSeries.map((s) => {
+                    const share = segmentTotal > 0 ? (s.onlineNow / segmentTotal) * 100 : 0
+                    return (
+                      <div key={s.key} className="analytics-segment-card">
+                        <div className="analytics-segment-head">
+                          <span
+                            className="analytics-segment-swatch"
+                            style={{ background: s.color }}
+                            aria-hidden
+                          />
+                          <div>
+                            <div className="analytics-segment-label">{s.label}</div>
+                            <div className="muted analytics-segment-hint">{s.hint}</div>
+                          </div>
+                        </div>
+                        <div className="analytics-segment-value mono">{s.onlineNow}</div>
+                        <div className="muted analytics-segment-share mono">
+                          {share.toFixed(1)}%
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div>
+                  <h3 style={{ margin: '0 0 0.5rem' }}>Неделя</h3>
+                  <div className="analytics-segment-legend">
+                    {segmentSeries.map((s) => (
+                      <span key={s.key} className="analytics-segment-legend-item">
+                        <span
+                          className="analytics-segment-swatch"
+                          style={{ background: s.color }}
+                          aria-hidden
+                        />
+                        {s.label}
+                      </span>
+                    ))}
                   </div>
-                  {protoLatest.length === 0 ? (
-                    <p className="muted" style={{ marginTop: '0.5rem' }}>
-                      Пока нет сэмплов — синхронизируйте ноды или подождите опрос.
-                    </p>
-                  ) : null}
-                </div>
-
-                <div>
-                  <h3 style={{ margin: '0 0 0.4rem' }}>По роли (последний час)</h3>
-                  {roleLatest.length === 0 ? (
-                    <p className="muted">Отметьте роли у нод во вкладке «Ноды».</p>
-                  ) : (
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Роль</th>
-                            <th>Online</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {roleLatest.map((r) => (
-                            <tr key={r.key}>
-                              <td>{roleLabel(r.key)}</td>
-                              <td className="mono">{r.online}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 style={{ margin: '0 0 0.4rem' }}>Топ нод</h3>
-                  {(week?.top_nodes ?? []).length === 0 ? (
-                    <p className="muted">Нет данных.</p>
-                  ) : (
-                    <div className="table-wrap">
-                      <table className="table analytics-top-table">
-                        <thead>
-                          <tr>
-                            <th>Панель</th>
-                            <th>Нода</th>
-                            <th>Протокол</th>
-                            <th>Online</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(week?.top_nodes ?? []).map((n) => (
-                            <tr key={`${n.panel_id}:${n.remna_uuid}`}>
-                              <td>{n.panel_name || n.panel_id.slice(0, 8)}</td>
-                              <td className="analytics-cell-name" title={n.name}>{n.name}</td>
-                              <td className="mono analytics-cell-proto">{n.protocol}</td>
-                              <td className="mono">{n.online}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  <SegmentWeekChart series={segmentSeries} />
                 </div>
               </div>
             ) : (

@@ -2317,6 +2317,100 @@ button.task-image-open {
   background: var(--danger);
 }
 
+.analytics-segment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.analytics-segment-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.analytics-segment-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+.analytics-segment-swatch {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  margin-top: 0.35rem;
+  flex: 0 0 auto;
+}
+.analytics-segment-label {
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+.analytics-segment-hint {
+  font-size: 0.75rem;
+  margin-top: 0.1rem;
+}
+.analytics-segment-value {
+  font-size: 1.85rem;
+  font-weight: 600;
+  line-height: 1;
+  margin-top: 0.35rem;
+}
+.analytics-segment-share {
+  font-size: 0.8rem;
+}
+.analytics-segment-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.5rem;
+}
+.analytics-segment-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.analytics-segment-legend-item .analytics-segment-swatch {
+  margin-top: 0;
+}
+.segment-week-chart {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.35rem 0.15rem;
+  background: color-mix(in srgb, var(--bg) 92%, #000);
+}
+.segment-week-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  aspect-ratio: 720 / 280;
+}
+.segment-week-grid {
+  stroke: color-mix(in srgb, var(--border) 75%, transparent);
+  stroke-width: 1;
+}
+.segment-week-axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+.segment-week-empty {
+  margin: 0.35rem 0.65rem 0.65rem;
+  font-size: 0.82rem;
+}
+@media (max-width: 720px) {
+  .analytics-segment-grid {
+    grid-template-columns: 1fr;
+  }
+  .analytics-segment-value {
+    font-size: 1.55rem;
+  }
+}
+
 .analytics-nodes-wrap {
   max-height: min(70vh, 640px);
   overflow: auto;
@@ -2400,15 +2494,6 @@ button.task-image-open {
   white-space: nowrap;
   text-align: center;
   width: 3.2rem;
-}
-.analytics-top-table .analytics-cell-name {
-  max-width: 14rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.analytics-top-table .analytics-cell-proto {
-  min-width: 7rem;
 }
 
 .stats-panel-tabs .stats-tab-online {
