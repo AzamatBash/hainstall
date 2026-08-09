@@ -2270,6 +2270,11 @@ button.task-image-open {
   width: 100%;
 }
 
+.online-chart-frame {
+  position: relative;
+  width: 100%;
+}
+
 .online-chart-svg {
   width: 100%;
   height: auto;
@@ -2312,8 +2317,51 @@ button.task-image-open {
   stroke-width: 1;
 }
 
-.online-chart-tip {
-  margin-top: 0.45rem;
-  font-size: 0.82rem;
+.online-chart-plaque {
+  position: absolute;
+  z-index: 4;
+  min-width: 9.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev) 94%, #000);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transform: translate(12px, calc(-100% - 10px));
+  line-height: 1.35;
+}
+
+.online-chart-plaque.flip-x {
+  transform: translate(calc(-100% - 12px), calc(-100% - 10px));
+}
+
+.online-chart-plaque.flip-y {
+  transform: translate(12px, 12px);
+}
+
+.online-chart-plaque.flip-x.flip-y {
+  transform: translate(calc(-100% - 12px), 12px);
+}
+
+.online-chart-plaque-date {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.online-chart-plaque-time {
+  font-size: 0.92rem;
+  font-weight: 600;
   color: var(--text);
+  margin-top: 0.1rem;
+}
+
+.online-chart-plaque-online {
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.online-chart-plaque-online .mono {
+  color: var(--accent);
+  font-weight: 600;
 }

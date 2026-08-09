@@ -9,6 +9,14 @@ type Props = {
   className?: string
 }
 
+type HoverInfo = {
+  x: number
+  y: number
+  date: string
+  time: string
+  online: number
+}
+
 function formatTick(ts: number, hours: number) {
   const d = new Date(ts)
   const opts: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Moscow' }
@@ -24,18 +32,21 @@ function formatTick(ts: number, hours: number) {
   })
 }
 
-function formatTooltip(ts: number, online: number) {
+function formatHover(ts: number, online: number): Omit<HoverInfo, 'x' | 'y'> {
   const d = new Date(ts)
-  const when = d.toLocaleString('ru-RU', {
+  const date = d.toLocaleDateString('ru-RU', {
     timeZone: 'Europe/Moscow',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
+  })
+  const time = d.toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   })
-  return `${when} (МСК) · ${online}`
+  return { date, time: `${time} МСК`, online }
 }
 
 /** Downsample for draw while keeping peaks (min/max per bucket). */
@@ -69,7 +80,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
   const padR = 14
   const padT = 16
   const padB = 28
-  const [hover, setHover] = useState<{ x: number; y: number; label: string } | null>(null)
+  const [hover, setHover] = useState<HoverInfo | null>(null)
   const dragRef = useRef<{ startX: number; startT: number } | null>(null)
   const [dragX, setDragX] = useState<number | null>(null)
 
@@ -135,7 +146,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
     setHover({
       x: xAt(p.t),
       y: yAt(p.online),
-      label: formatTooltip(p.t, p.online),
+      ...formatHover(p.t, p.online),
     })
     if (dragRef.current) setDragX(x)
   }
@@ -172,69 +183,95 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
         }
       : null
 
+  const tipLeftPct = hover ? (hover.x / width) * 100 : 0
+  const tipTopPct = hover ? (hover.y / height) * 100 : 0
+  const tipFlipX = tipLeftPct > 62
+  const tipFlipY = tipTopPct < 28
+
   return (
     <div className={`online-chart${className ? ` ${className}` : ''}`}>
-      <svg
-        className="online-chart-svg"
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="Онлайн пользователей"
-        onPointerMove={onMove}
-        onPointerLeave={() => {
-          setHover(null)
-          dragRef.current = null
-          setDragX(null)
-        }}
-        onPointerDown={onDown}
-        onPointerUp={onUp}
-      >
-        {yTicks.map((v) => {
-          const y = yAt(v)
-          return (
-            <g key={`y-${v}`}>
-              <line x1={padL} x2={width - padR} y1={y} y2={y} className="traffic-grid" />
-              <text x={padL - 6} y={y + 3} textAnchor="end" className="traffic-axis">
-                {v}
-              </text>
-            </g>
-          )
-        })}
-        {dragBand && dragBand.w > 2 ? (
-          <rect
-            x={dragBand.x}
-            y={padT}
-            width={dragBand.w}
-            height={height - padT - padB}
-            className="online-chart-brush"
-          />
-        ) : null}
-        {area ? <path d={area} className="online-chart-area" /> : null}
-        {path ? <path d={path} className="online-chart-line" /> : null}
-        {!points.length ? (
-          <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
-            Пока нет точек — подождите первый опрос (до 5 мин)
-          </text>
-        ) : null}
-        {hover ? (
-          <>
-            <line
-              x1={hover.x}
-              x2={hover.x}
-              y1={padT}
-              y2={height - padB}
-              className="online-chart-cross"
+      <div className="online-chart-frame">
+        <svg
+          className="online-chart-svg"
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="Онлайн пользователей"
+          onPointerMove={onMove}
+          onPointerLeave={() => {
+            setHover(null)
+            dragRef.current = null
+            setDragX(null)
+          }}
+          onPointerDown={onDown}
+          onPointerUp={onUp}
+        >
+          {yTicks.map((v) => {
+            const y = yAt(v)
+            return (
+              <g key={`y-${v}`}>
+                <line x1={padL} x2={width - padR} y1={y} y2={y} className="traffic-grid" />
+                <text x={padL - 6} y={y + 3} textAnchor="end" className="traffic-axis">
+                  {v}
+                </text>
+              </g>
+            )
+          })}
+          {dragBand && dragBand.w > 2 ? (
+            <rect
+              x={dragBand.x}
+              y={padT}
+              width={dragBand.w}
+              height={height - padT - padB}
+              className="online-chart-brush"
             />
-            <circle cx={hover.x} cy={hover.y} r={3.5} className="online-chart-dot" />
-          </>
+          ) : null}
+          {area ? <path d={area} className="online-chart-area" /> : null}
+          {path ? <path d={path} className="online-chart-line" /> : null}
+          {!points.length ? (
+            <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
+              Пока нет точек — подождите первый опрос (до 5 мин)
+            </text>
+          ) : null}
+          {hover ? (
+            <>
+              <line
+                x1={hover.x}
+                x2={hover.x}
+                y1={padT}
+                y2={height - padB}
+                className="online-chart-cross"
+              />
+              <circle cx={hover.x} cy={hover.y} r={4} className="online-chart-dot" />
+            </>
+          ) : null}
+          {xLabels.map((l) => (
+            <text
+              key={l.label + l.x}
+              x={l.x}
+              y={height - 8}
+              textAnchor="middle"
+              className="traffic-axis"
+            >
+              {l.label}
+            </text>
+          ))}
+        </svg>
+
+        {hover && !dragRef.current ? (
+          <div
+            className={`online-chart-plaque${tipFlipX ? ' flip-x' : ''}${tipFlipY ? ' flip-y' : ''}`}
+            style={{ left: `${tipLeftPct}%`, top: `${tipTopPct}%` }}
+            role="tooltip"
+          >
+            <div className="online-chart-plaque-date">{hover.date}</div>
+            <div className="online-chart-plaque-time">{hover.time}</div>
+            <div className="online-chart-plaque-online">
+              Онлайн: <span className="mono">{hover.online}</span>
+            </div>
+          </div>
         ) : null}
-        {xLabels.map((l) => (
-          <text key={l.label + l.x} x={l.x} y={height - 8} textAnchor="middle" className="traffic-axis">
-            {l.label}
-          </text>
-        ))}
-      </svg>
-      {hover ? <div className="online-chart-tip mono">{hover.label}</div> : null}
+      </div>
     </div>
   )
 }
