@@ -459,33 +459,29 @@ export default function StatsPage() {
                     <div className="stats-traffic-block">
                       <h2 style={{ marginTop: '1.5rem', marginBottom: '0.35rem' }}>Общий трафик</h2>
                       <p className="muted stats-lead" style={{ marginTop: 0 }}>
-                        Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Тот же опрос раз в 5
-                        минут, история до 31 дня.
+                        Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут,
+                        история до 31 дня.
                       </p>
 
-                      <div className="stats-current stats-current-rates">
-                        <div className="stats-rate">
-                          <div className="stats-rate-label muted">Отдача TX</div>
-                          <div className="stats-current-value mono stats-current-value-traffic">
-                            {trafficDown != null
-                              ? formatBitrateShort(trafficDown)
-                              : trafficError
-                                ? '—'
-                                : '…'}
-                          </div>
+                      <div className="stats-current">
+                        <div className="stats-current-value mono">
+                          {trafficDown != null
+                            ? formatBitrateShort(trafficDown)
+                            : trafficError
+                              ? '—'
+                              : '…'}
                         </div>
-                        <div className="stats-rate">
-                          <div className="stats-rate-label muted">Загрузка RX</div>
-                          <div className="stats-current-value mono stats-current-value-traffic">
-                            {trafficUp != null
-                              ? formatBitrateShort(trafficUp)
-                              : trafficError
-                                ? '—'
-                                : '…'}
-                          </div>
+                        <div className="stats-current-value mono stats-current-value-rx">
+                          {trafficUp != null
+                            ? formatBitrateShort(trafficUp)
+                            : trafficError
+                              ? '—'
+                              : '…'}
                         </div>
                         <div className="stats-current-meta muted">
-                          <div>Общий трафик · {active.name}</div>
+                          <div>
+                            Отдача TX · Загрузка RX · {active.name}
+                          </div>
                           {trafficAt ? <div>Опрос: {formatAt(trafficAt)}</div> : null}
                           {trafficError ? <div className="error">{trafficError}</div> : null}
                         </div>
@@ -507,7 +503,11 @@ export default function StatsPage() {
                       {chartLoading && trafficPoints.length === 0 ? (
                         <p className="muted">Загрузка графика…</p>
                       ) : (
-                        <TrafficMirrorChart points={displayTrafficPoints} hours={hours} />
+                        <TrafficMirrorChart
+                          points={displayTrafficPoints}
+                          hours={hours}
+                          size="stats"
+                        />
                       )}
                     </div>
                   </div>

@@ -9,9 +9,11 @@ export type TrafficPoint = {
 
 type Props = {
   points: TrafficPoint[]
-  /** Selected window length in hours (legend label). */
+  /** Selected window length in hours (legend / axis). */
   hours?: number
   className?: string
+  /** `stats` matches OnlineUsersChart block size on /stats; default is compact (node detail). */
+  size?: 'compact' | 'stats'
 }
 
 const MAX_DRAW_POINTS = 1200
@@ -44,21 +46,36 @@ function niceMax(v: number): number {
   return Math.ceil(v / 500) * 500
 }
 
-function formatAxisTime(ts: number): string {
+function formatAxisTime(ts: number, hours: number) {
   const d = new Date(ts)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
+  const opts: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Moscow' }
+  if (hours <= 24) {
+    return d.toLocaleTimeString('ru-RU', { ...opts, hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleString('ru-RU', {
+    ...opts,
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 /** Mirrored TX/RX area chart (panel style). */
-export default function TrafficMirrorChart({ points, hours = 1, className }: Props) {
+export default function TrafficMirrorChart({
+  points,
+  hours = 1,
+  className,
+  size = 'compact',
+}: Props) {
+  const stats = size === 'stats'
   const width = 720
-  const height = 200
-  const padL = 48
+  const height = stats ? 260 : 200
+  const padL = stats ? 44 : 48
   const padR = 12
-  const padT = 14
-  const padB = 28
+  const padT = stats ? 18 : 14
+  const padB = stats ? 30 : 28
+  const maxPoints = hours >= 168 ? 800 : MAX_DRAW_POINTS
 
   const { pathUp, pathDown, areaUp, areaDown, maxMbit, yTicks, xLabels, lastUp, lastDown } =
     useMemo(() => {
@@ -73,7 +90,7 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
         lastUp: 0,
         lastDown: 0,
       }
-      const drawn = downsample(points, MAX_DRAW_POINTS)
+      const drawn = downsample(points, maxPoints)
       if (!drawn.length) return empty
 
       // down_bps = host TX (outbound), up_bps = host RX (inbound)
@@ -113,10 +130,11 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
       const areaRx = `${rxPath} L${x1.toFixed(1)},${midY.toFixed(1)} L${x0.toFixed(1)},${midY.toFixed(1)} Z`
 
       const ticks = [maxM, maxM / 2, 0, -maxM / 2, -maxM]
+      const labelCount = hours <= 1 ? 3 : hours <= 24 ? 4 : 5
       const labels: Array<{ x: number; label: string }> = []
-      for (let i = 0; i < 6; i++) {
-        const t = minT + (spanT * i) / 5
-        labels.push({ x: xAt(t), label: formatAxisTime(t) })
+      for (let i = 0; i < labelCount; i++) {
+        const t = minT + (spanT * i) / Math.max(labelCount - 1, 1)
+        labels.push({ x: xAt(t), label: formatAxisTime(t, hours) })
       }
 
       return {
@@ -130,7 +148,7 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
         lastUp: txVals[txVals.length - 1] ?? 0,
         lastDown: rxVals[rxVals.length - 1] ?? 0,
       }
-    }, [points, width, height, padL, padR, padT, padB])
+    }, [points, hours, maxPoints, width, height, padL, padR, padT, padB])
 
   const innerH = height - padT - padB
   const midY = padT + innerH / 2
@@ -144,8 +162,58 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
           ? 'последние 7 дней · Mbit/s'
           : 'последние 30 дней · Mbit/s'
 
+  const rootClass = stats
+    ? `online-chart traffic-chart-stats${className ? ` ${className}` : ''}`
+    : `traffic-chart${className ? ` ${className}` : ''}`
+
+  const svg = (
+    <svg
+      className={stats ? 'online-chart-svg' : 'traffic-chart-svg'}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`Трафик: отдача ${lastUp.toFixed(1)} Mbit/s, загрузка ${lastDown.toFixed(1)} Mbit/s`}
+    >
+      {yTicks.map((tick) => {
+        const abs = Math.abs(tick)
+        const y =
+          tick >= 0
+            ? midY - (abs / maxMbit) * (innerH / 2)
+            : midY + (abs / maxMbit) * (innerH / 2)
+        return (
+          <g key={`yt-${tick}`}>
+            <line
+              x1={padL}
+              x2={width - padR}
+              y1={y}
+              y2={y}
+              className={tick === 0 ? 'traffic-grid zero' : 'traffic-grid'}
+            />
+            <text x={padL - 6} y={y + 3} textAnchor="end" className="traffic-axis">
+              {tick === 0 ? '0' : String(Math.round(abs))}
+            </text>
+          </g>
+        )
+      })}
+      {areaUp ? <path d={areaUp} className="traffic-area tx" /> : null}
+      {areaDown ? <path d={areaDown} className="traffic-area rx" /> : null}
+      {pathUp ? <path d={pathUp} className="traffic-line tx" /> : null}
+      {pathDown ? <path d={pathDown} className="traffic-line rx" /> : null}
+      {!points.length ? (
+        <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
+          Пока нет точек — подождите первый опрос (до 5 мин)
+        </text>
+      ) : null}
+      {xLabels.map((l) => (
+        <text key={l.label + l.x} x={l.x} y={height - 8} textAnchor="middle" className="traffic-axis">
+          {l.label}
+        </text>
+      ))}
+    </svg>
+  )
+
   return (
-    <div className={`traffic-chart${className ? ` ${className}` : ''}`}>
+    <div className={rootClass}>
       <div className="traffic-chart-legend">
         <span className="traffic-legend-item tx">
           <span className="traffic-legend-swatch" aria-hidden />
@@ -163,49 +231,7 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
         </span>
         <span className="traffic-chart-window muted">{windowLabel}</span>
       </div>
-      <svg
-        className="traffic-chart-svg"
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={`Трафик: отдача ${lastUp.toFixed(1)} Mbit/s, загрузка ${lastDown.toFixed(1)} Mbit/s`}
-      >
-        {yTicks.map((tick) => {
-          const abs = Math.abs(tick)
-          const y =
-            tick >= 0
-              ? midY - (abs / maxMbit) * (innerH / 2)
-              : midY + (abs / maxMbit) * (innerH / 2)
-          return (
-            <g key={`yt-${tick}`}>
-              <line
-                x1={padL}
-                x2={width - padR}
-                y1={y}
-                y2={y}
-                className={tick === 0 ? 'traffic-grid zero' : 'traffic-grid'}
-              />
-              <text x={padL - 6} y={y + 3} textAnchor="end" className="traffic-axis">
-                {tick === 0 ? '0' : String(Math.round(abs))}
-              </text>
-            </g>
-          )
-        })}
-        {areaUp ? <path d={areaUp} className="traffic-area tx" /> : null}
-        {areaDown ? <path d={areaDown} className="traffic-area rx" /> : null}
-        {pathUp ? <path d={pathUp} className="traffic-line tx" /> : null}
-        {pathDown ? <path d={pathDown} className="traffic-line rx" /> : null}
-        {!points.length ? (
-          <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
-            Накапливаем историю…
-          </text>
-        ) : null}
-        {xLabels.map((l) => (
-          <text key={l.label + l.x} x={l.x} y={height - 6} textAnchor="middle" className="traffic-axis">
-            {l.label}
-          </text>
-        ))}
-      </svg>
+      {stats ? <div className="online-chart-frame">{svg}</div> : svg}
     </div>
   )
 }

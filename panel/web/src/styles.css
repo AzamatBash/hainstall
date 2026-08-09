@@ -2530,24 +2530,27 @@ button.task-image-open {
   color: var(--accent);
 }
 
-.stats-current-value-traffic {
-  font-size: 1.75rem;
-}
-
-.stats-current-rates {
-  align-items: flex-end;
-  gap: 1.25rem;
-}
-
-.stats-rate-label {
-  font-size: 0.8rem;
-  margin-bottom: 0.25rem;
+.stats-current-value-rx {
+  color: var(--ok);
 }
 
 .stats-traffic-block {
   margin-top: 0.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.stats-traffic-block > h2,
+.stats-traffic-block > .stats-lead {
+  margin-bottom: 0;
+}
+
+.traffic-chart-stats .traffic-chart-legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
 }
 
 .stats-current-meta {
