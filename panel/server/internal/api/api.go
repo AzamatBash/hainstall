@@ -16,6 +16,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/opsagent"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/remna"
+	"github.com/azabash/hapanel/panel/internal/remnastats"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
 
@@ -27,6 +28,7 @@ type Options struct {
 	PanelIP     string
 	LLMProxy    string
 	ImagesDir   string
+	RemnaStats  *remnastats.Poller
 }
 
 type Server struct {
@@ -35,6 +37,7 @@ type Server struct {
 	agent      *agent.Client
 	remna      *remna.Client
 	ops        *opsagent.Runner
+	remnaStats *remnastats.Poller
 	secretsKey string
 	imagesDir  string
 	logger     *slog.Logger
@@ -69,6 +72,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		agent:                ag,
 		remna:                remna.New(),
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
+		remnaStats:           opt.RemnaStats,
 		secretsKey:           opt.SecretsKey,
 		imagesDir:            opt.ImagesDir,
 		logger:               logger,
@@ -134,6 +138,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/remna-panels", s.requireAuth(s.handleCreateRemnaPanel))
 	s.mux.HandleFunc("PUT /api/remna-panels/{id}", s.requireAuth(s.handleUpdateRemnaPanel))
 	s.mux.HandleFunc("DELETE /api/remna-panels/{id}", s.requireAuth(s.handleDeleteRemnaPanel))
+	s.mux.HandleFunc("GET /api/remna-panels/{id}/online", s.requireAuth(s.handleRemnaPanelOnline))
 
 	s.mux.HandleFunc("GET /api/providers", s.requireAuth(s.handleListProviders))
 	s.mux.HandleFunc("POST /api/providers", s.requireAuth(s.handleCreateProvider))

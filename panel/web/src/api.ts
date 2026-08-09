@@ -50,6 +50,9 @@ export interface RemnaPanel {
   base_url: string
   has_api_key: boolean
   created_at: string
+  online?: number
+  online_at?: string
+  online_error?: string
 }
 
 export type TaskStatus = 'todo' | 'doing' | 'done'

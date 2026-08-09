@@ -17,6 +17,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/api"
 	"github.com/azabash/hapanel/panel/internal/auth"
 	"github.com/azabash/hapanel/panel/internal/config"
+	"github.com/azabash/hapanel/panel/internal/remnastats"
 	"github.com/azabash/hapanel/panel/internal/snapshot"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
@@ -53,6 +54,8 @@ func main() {
 	if secretsKey == "" {
 		secretsKey = cfg.JWTSecret
 	}
+	remnaStats := remnastats.New(st, secretsKey, logger)
+
 	apiSrv := api.New(st, au, ag, logger, api.Options{
 		SecretsKey:  secretsKey,
 		GeminiKey:   cfg.GeminiAPIKey,
@@ -61,6 +64,7 @@ func main() {
 		PanelIP:     cfg.PanelIP,
 		LLMProxy:    cfg.LLMHTTPProxy,
 		ImagesDir:   imagesDir,
+		RemnaStats:  remnaStats,
 	})
 
 	mux := http.NewServeMux()
@@ -85,6 +89,7 @@ func main() {
 	defer stop()
 
 	snapshot.Start(ctx, st, ag, logger)
+	remnaStats.Start(ctx)
 
 	go func() {
 		logger.Info("panel listening",

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-export type BrandNavActive = 'panel' | 'tasks'
+export type BrandNavActive = 'panel' | 'tasks' | 'stats'
 
 export default function BrandNav({ active }: { active: BrandNavActive }) {
   return (
@@ -13,6 +13,12 @@ export default function BrandNav({ active }: { active: BrandNavActive }) {
         className={`brand brand-tasks${active === 'tasks' ? ' active' : ''}`}
       >
         ta<span>sks</span>
+      </Link>
+      <Link
+        to="/stats"
+        className={`brand brand-stats${active === 'stats' ? ' active' : ''}`}
+      >
+        st<span>ats</span>
       </Link>
     </nav>
   )

@@ -50,7 +50,7 @@ func (s *Server) handleListRemnaPanels(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(panels))
 	for _, p := range panels {
-		out = append(out, publicRemnaPanel(p))
+		out = append(out, s.publicRemnaPanelWithOnline(p))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"panels": out})
 }
@@ -609,6 +609,111 @@ func publicRemnaPanel(p store.RemnaPanel) map[string]any {
 		"has_api_key": p.HasAPIKey,
 		"created_at":  p.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+func (s *Server) publicRemnaPanelWithOnline(p store.RemnaPanel) map[string]any {
+	m := publicRemnaPanel(p)
+	if sample, err := s.store.LatestRemnaOnlineSample(p.ID); err == nil && sample != nil {
+		m["online"] = sample.Online
+		m["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+	}
+	if s.remnaStats != nil {
+		if last, ok := s.remnaStats.LastFor(p.ID); ok {
+			if last.Err != "" {
+				m["online_error"] = last.Err
+				if !last.At.IsZero() && m["online_at"] == nil {
+					m["online_at"] = last.At.Format(time.RFC3339)
+				}
+			} else {
+				m["online"] = last.Online
+				if !last.At.IsZero() {
+					m["online_at"] = last.At.Format(time.RFC3339)
+				}
+				delete(m, "online_error")
+			}
+		}
+	}
+	return m
+}
+
+const (
+	remnaOnlineDefaultHours = 24
+	remnaOnlineMaxHours     = 31 * 24
+)
+
+func remnaOnlineWindowHours(r *http.Request) int {
+	raw := strings.TrimSpace(r.URL.Query().Get("hours"))
+	if raw == "" {
+		return remnaOnlineDefaultHours
+	}
+	n := 0
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return remnaOnlineDefaultHours
+		}
+		n = n*10 + int(c-'0')
+		if n > remnaOnlineMaxHours {
+			return remnaOnlineMaxHours
+		}
+	}
+	if n <= 0 {
+		return remnaOnlineDefaultHours
+	}
+	if n > remnaOnlineMaxHours {
+		return remnaOnlineMaxHours
+	}
+	return n
+}
+
+func (s *Server) handleRemnaPanelOnline(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := s.store.GetRemnaPanel(id)
+	if err != nil {
+		s.logger.Error("get remna panel", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if p == nil {
+		writeErr(w, http.StatusNotFound, "remna-панель не найдена")
+		return
+	}
+	hours := remnaOnlineWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	points, err := s.store.ListRemnaOnlineSamples(id, since)
+	if err != nil {
+		s.logger.Error("list remna online", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := map[string]any{
+		"panel_id": id,
+		"hours":    hours,
+		"points":   points,
+	}
+	if s.remnaStats != nil {
+		if last, ok := s.remnaStats.LastFor(id); ok {
+			if last.Err != "" {
+				out["online_error"] = last.Err
+				if !last.At.IsZero() {
+					out["online_at"] = last.At.Format(time.RFC3339)
+				}
+			} else {
+				out["current"] = last.Online
+				if !last.At.IsZero() {
+					out["online_at"] = last.At.Format(time.RFC3339)
+				}
+			}
+		}
+	}
+	if _, has := out["current"]; !has {
+		if sample, err := s.store.LatestRemnaOnlineSample(id); err == nil && sample != nil {
+			out["current"] = sample.Online
+			if out["online_at"] == nil {
+				out["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func publicRemnaLink(l store.BackendRemnaLink) map[string]any {

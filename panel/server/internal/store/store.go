@@ -172,6 +172,13 @@ CREATE TABLE IF NOT EXISTS task_images (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id);
+CREATE TABLE IF NOT EXISTS remna_online_samples (
+  panel_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  PRIMARY KEY (panel_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_online_panel_ts ON remna_online_samples(panel_id, ts);
 `)
 	if err != nil {
 		return err

@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import NodesPage from './pages/NodesPage'
 import NodeDetailPage from './pages/NodeDetailPage'
 import TasksPage from './pages/TasksPage'
+import StatsPage from './pages/StatsPage'
 
 function Authed({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
@@ -69,6 +70,14 @@ export default function App() {
         element={
           <Authed>
             <TasksPage />
+          </Authed>
+        }
+      />
+      <Route
+        path="/stats"
+        element={
+          <Authed>
+            <StatsPage />
           </Authed>
         }
       />
