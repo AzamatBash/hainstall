@@ -1,6 +1,6 @@
 services:
   panel:
-    image: azamatbash/hapanel@sha256:869e32eb523196880261e58f7151c8ff4bb5d14c71ff81d723fae683d05dca5f
+    image: azamatbash/hapanel@sha256:749403dbc073e2d4af90086cac6f43c9f5b5c7ed5d51da143f487e915a83a778
     # Equivalent tags on Hub: azamatbash/hapanel:0.1.0 and :latest (same digest).
     # Optional local rebuild from sources (will NOT match prod digest):
     #   docker compose build

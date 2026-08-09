@@ -88,6 +88,7 @@ export default function StatsPage() {
   const [onlineAt, setOnlineAt] = useState('')
   const [onlineError, setOnlineError] = useState('')
   const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null)
+  const [trafficZoom, setTrafficZoom] = useState<{ from: number; to: number } | null>(null)
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
   const [trafficDown, setTrafficDown] = useState<number | null>(null)
   const [trafficUp, setTrafficUp] = useState<number | null>(null)
@@ -216,6 +217,7 @@ export default function StatsPage() {
 
   useEffect(() => {
     setZoom(null)
+    setTrafficZoom(null)
     if (mode === 'stats' && activeId) void loadOnline(activeId, hours)
   }, [mode, activeId, hours, loadOnline])
 
@@ -239,12 +241,15 @@ export default function StatsPage() {
   }, [points, zoom])
 
   const displayTrafficPoints = useMemo((): TrafficPoint[] => {
-    return trafficPoints.map((p) => ({
+    const src = !trafficZoom
+      ? trafficPoints
+      : trafficPoints.filter((p) => p.t >= trafficZoom.from && p.t <= trafficZoom.to)
+    return src.map((p) => ({
       t: p.t,
       down_bps: Number(p.down_bps) || 0,
       up_bps: Number(p.up_bps) || 0,
     }))
-  }, [trafficPoints])
+  }, [trafficPoints, trafficZoom])
 
   const segmentSeries = useMemo(() => {
     const now = new Map<string, number>()
@@ -498,6 +503,15 @@ export default function StatsPage() {
                             {p.label}
                           </button>
                         ))}
+                        {trafficZoom && (
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            type="button"
+                            onClick={() => setTrafficZoom(null)}
+                          >
+                            Сбросить зум
+                          </button>
+                        )}
                       </div>
 
                       {chartLoading && trafficPoints.length === 0 ? (
@@ -507,8 +521,12 @@ export default function StatsPage() {
                           points={displayTrafficPoints}
                           hours={hours}
                           size="stats"
+                          onZoom={(from, to) => setTrafficZoom({ from, to })}
                         />
                       )}
+                      <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
+                        На телефоне: тап по графику. На ПК: наведение. Протяните пальцем/мышью — зум.
+                      </p>
                     </div>
                   </div>
                 )}

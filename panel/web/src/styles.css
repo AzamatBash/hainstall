@@ -2604,6 +2604,10 @@ button.task-image-open {
   stroke-width: 1.5;
 }
 
+.online-chart-dot.traffic-dot-rx {
+  fill: var(--ok);
+}
+
 .online-chart-brush {
   fill: color-mix(in srgb, var(--accent) 18%, transparent);
   stroke: color-mix(in srgb, var(--accent) 45%, transparent);
