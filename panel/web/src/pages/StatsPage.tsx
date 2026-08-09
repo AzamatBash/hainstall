@@ -82,7 +82,8 @@ export default function StatsPage() {
   const [mode, setMode] = useState<Mode>('stats')
   const [panels, setPanels] = useState<RemnaPanel[]>([])
   const [activeId, setActiveId] = useState('')
-  const [hours, setHours] = useState<HoursPreset>(24)
+  const [onlineHours, setOnlineHours] = useState<HoursPreset>(24)
+  const [trafficHours, setTrafficHours] = useState<HoursPreset>(24)
   const [points, setPoints] = useState<OnlinePoint[]>([])
   const [current, setCurrent] = useState<number | null>(null)
   const [onlineAt, setOnlineAt] = useState('')
@@ -95,7 +96,8 @@ export default function StatsPage() {
   const [trafficAt, setTrafficAt] = useState('')
   const [trafficError, setTrafficError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [chartLoading, setChartLoading] = useState(false)
+  const [onlineLoading, setOnlineLoading] = useState(false)
+  const [trafficLoading, setTrafficLoading] = useState(false)
   const [error, setError] = useState('')
 
   const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>('week')
@@ -107,6 +109,10 @@ export default function StatsPage() {
 
   const activeRef = useRef(activeId)
   activeRef.current = activeId
+  const onlineHoursRef = useRef(onlineHours)
+  onlineHoursRef.current = onlineHours
+  const trafficHoursRef = useRef(trafficHours)
+  trafficHoursRef.current = trafficHours
 
   const loadPanels = useCallback(async () => {
     setError('')
@@ -125,12 +131,48 @@ export default function StatsPage() {
     }
   }, [])
 
-  const loadOnline = useCallback(async (panelId: string, windowHours: number) => {
+  const loadOnlineSeries = useCallback(async (panelId: string, windowHours: number) => {
     if (!panelId) {
       setPoints([])
       setCurrent(null)
       setOnlineAt('')
       setOnlineError('')
+      return
+    }
+    setOnlineLoading(true)
+    setError('')
+    try {
+      const onlineRes = await api<{
+        points: OnlinePoint[]
+        current?: number
+        online_at?: string
+        online_error?: string
+      }>(`/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`)
+      setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
+      setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
+      setOnlineAt(onlineRes.online_at || '')
+      setOnlineError(onlineRes.online_error || '')
+      setPanels((list) =>
+        list.map((p) =>
+          p.id === panelId
+            ? {
+                ...p,
+                online: typeof onlineRes.current === 'number' ? onlineRes.current : p.online,
+                online_at: onlineRes.online_at || p.online_at,
+                online_error: onlineRes.online_error || undefined,
+              }
+            : p,
+        ),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translateError(String(err)))
+    } finally {
+      setOnlineLoading(false)
+    }
+  }, [])
+
+  const loadTrafficSeries = useCallback(async (panelId: string, windowHours: number) => {
+    if (!panelId) {
       setTrafficPoints([])
       setTrafficDown(null)
       setTrafficUp(null)
@@ -138,28 +180,16 @@ export default function StatsPage() {
       setTrafficError('')
       return
     }
-    setChartLoading(true)
+    setTrafficLoading(true)
     setError('')
     try {
-      const [onlineRes, trafficRes] = await Promise.all([
-        api<{
-          points: OnlinePoint[]
-          current?: number
-          online_at?: string
-          online_error?: string
-        }>(`/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`),
-        api<{
-          points: TrafficPoint[]
-          current_down_bps?: number
-          current_up_bps?: number
-          traffic_at?: string
-          traffic_error?: string
-        }>(`/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`),
-      ])
-      setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
-      setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
-      setOnlineAt(onlineRes.online_at || '')
-      setOnlineError(onlineRes.online_error || '')
+      const trafficRes = await api<{
+        points: TrafficPoint[]
+        current_down_bps?: number
+        current_up_bps?: number
+        traffic_at?: string
+        traffic_error?: string
+      }>(`/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`)
       setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
       setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
       setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
@@ -170,9 +200,6 @@ export default function StatsPage() {
           p.id === panelId
             ? {
                 ...p,
-                online: typeof onlineRes.current === 'number' ? onlineRes.current : p.online,
-                online_at: onlineRes.online_at || p.online_at,
-                online_error: onlineRes.online_error || undefined,
                 down_bps:
                   typeof trafficRes.current_down_bps === 'number'
                     ? trafficRes.current_down_bps
@@ -190,7 +217,7 @@ export default function StatsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : translateError(String(err)))
     } finally {
-      setChartLoading(false)
+      setTrafficLoading(false)
     }
   }, [])
 
@@ -217,9 +244,13 @@ export default function StatsPage() {
 
   useEffect(() => {
     setZoom(null)
+    if (mode === 'stats' && activeId) void loadOnlineSeries(activeId, onlineHours)
+  }, [mode, activeId, onlineHours, loadOnlineSeries])
+
+  useEffect(() => {
     setTrafficZoom(null)
-    if (mode === 'stats' && activeId) void loadOnline(activeId, hours)
-  }, [mode, activeId, hours, loadOnline])
+    if (mode === 'stats' && activeId) void loadTrafficSeries(activeId, trafficHours)
+  }, [mode, activeId, trafficHours, loadTrafficSeries])
 
   useEffect(() => {
     if (mode === 'analytics') void loadAnalytics()
@@ -228,11 +259,14 @@ export default function StatsPage() {
   useEffect(() => {
     const id = window.setInterval(() => {
       void loadPanels()
-      if (mode === 'stats' && activeRef.current) void loadOnline(activeRef.current, hours)
+      if (mode === 'stats' && activeRef.current) {
+        void loadOnlineSeries(activeRef.current, onlineHoursRef.current)
+        void loadTrafficSeries(activeRef.current, trafficHoursRef.current)
+      }
       if (mode === 'analytics') void loadAnalytics()
     }, 60_000)
     return () => window.clearInterval(id)
-  }, [mode, hours, loadPanels, loadOnline, loadAnalytics])
+  }, [mode, loadPanels, loadOnlineSeries, loadTrafficSeries, loadAnalytics])
 
   const active = panels.find((p) => p.id === activeId) || null
   const displayPoints = useMemo((): MetricPoint[] => {
@@ -428,8 +462,8 @@ export default function StatsPage() {
                         <button
                           key={p.hours}
                           type="button"
-                          className={`btn btn-sm${hours === p.hours ? ' btn-primary' : ''}`}
-                          onClick={() => setHours(p.hours)}
+                          className={`btn btn-sm${onlineHours === p.hours ? ' btn-primary' : ''}`}
+                          onClick={() => setOnlineHours(p.hours)}
                         >
                           {p.label}
                         </button>
@@ -445,12 +479,12 @@ export default function StatsPage() {
                       )}
                     </div>
 
-                    {chartLoading && points.length === 0 ? (
+                    {onlineLoading && points.length === 0 ? (
                       <p className="muted">Загрузка графика…</p>
                     ) : (
                       <OnlineUsersChart
                         points={displayPoints}
-                        hours={hours}
+                        hours={onlineHours}
                         onZoom={(from, to) => setZoom({ from, to })}
                         valueLabel="Онлайн"
                         ariaLabel="Онлайн пользователей"
@@ -497,8 +531,8 @@ export default function StatsPage() {
                           <button
                             key={`traffic-${p.hours}`}
                             type="button"
-                            className={`btn btn-sm${hours === p.hours ? ' btn-primary' : ''}`}
-                            onClick={() => setHours(p.hours)}
+                            className={`btn btn-sm${trafficHours === p.hours ? ' btn-primary' : ''}`}
+                            onClick={() => setTrafficHours(p.hours)}
                           >
                             {p.label}
                           </button>
@@ -514,12 +548,12 @@ export default function StatsPage() {
                         )}
                       </div>
 
-                      {chartLoading && trafficPoints.length === 0 ? (
+                      {trafficLoading && trafficPoints.length === 0 ? (
                         <p className="muted">Загрузка графика…</p>
                       ) : (
                         <TrafficMirrorChart
                           points={displayTrafficPoints}
-                          hours={hours}
+                          hours={trafficHours}
                           size="stats"
                           onZoom={(from, to) => setTrafficZoom({ from, to })}
                         />
