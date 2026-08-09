@@ -11,8 +11,8 @@ cd "$ROOT"
 VERSION="${VERSION:-0.1.0}"
 PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel}"
 NODE_IMAGE="${NODE_IMAGE:-azamatbash/hanode}"
-PROD_CONFIG_ID="sha256:bb2770f96b3b9343cff376f8d0f9975078c40c6e9f80f61b0e27a3f86646e21e"
-PROD_HUB_DIGEST="sha256:5c58094ba9339c261b4299e88aad065f78fb7578bd7cd3ca07703ca03c2fd8b2"
+PROD_CONFIG_ID="sha256:232d97e5c801fcaf7e71ccf708eedd2e343540a6d46d26346a50ed2692c95216"
+PROD_HUB_DIGEST="sha256:756e0efbd28dd0dbb21f83ae411b124d04520fc3f0f0e9022dc0dc45448f63f4"
 
 if [[ "${REBUILD_PANEL:-}" == "1" ]]; then
   echo "==> REBUILD_PANEL=1 — building from sources (will NOT match prod digest)"
