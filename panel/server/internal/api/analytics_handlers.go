@@ -31,7 +31,9 @@ func (s *Server) handleAnalyticsNodePatch(w http.ResponseWriter, r *http.Request
 		ProtocolOverride   *string `json:"protocol_override"`
 		RoleRNFront        *bool   `json:"role_rn_front"`
 		RoleRNBack         *bool   `json:"role_rn_back"`
+		RoleHPFront        *bool   `json:"role_hp_front"`
 		RoleHPBack         *bool   `json:"role_hp_back"`
+		RoleCDNBack        *bool   `json:"role_cdn_back"`
 		EnabledInAnalytics *bool   `json:"enabled_in_analytics"`
 		Notes              *string `json:"notes"`
 	}
@@ -43,7 +45,9 @@ func (s *Server) handleAnalyticsNodePatch(w http.ResponseWriter, r *http.Request
 		ProtocolOverride:   body.ProtocolOverride,
 		RoleRNFront:        body.RoleRNFront,
 		RoleRNBack:         body.RoleRNBack,
+		RoleHPFront:        body.RoleHPFront,
 		RoleHPBack:         body.RoleHPBack,
+		RoleCDNBack:        body.RoleCDNBack,
 		EnabledInAnalytics: body.EnabledInAnalytics,
 		Notes:              body.Notes,
 	})

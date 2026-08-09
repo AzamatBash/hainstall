@@ -2318,15 +2318,83 @@ button.task-image-open {
 }
 
 .analytics-nodes-wrap {
-  overflow-x: auto;
+  max-height: min(70vh, 640px);
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 .analytics-nodes-table {
-  min-width: 920px;
+  min-width: 1180px;
   font-size: 0.85rem;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.analytics-nodes-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: color-mix(in srgb, var(--bg-elev, var(--bg-soft)) 92%, #000);
+  box-shadow: 0 1px 0 var(--border);
+  white-space: nowrap;
+}
+.analytics-nodes-table th,
+.analytics-nodes-table td {
+  padding: 0.45rem 0.55rem;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  vertical-align: top;
+}
+.analytics-nodes-table th:last-child,
+.analytics-nodes-table td:last-child {
+  border-right: none;
 }
 .analytics-nodes-table select {
   max-width: 8.5rem;
+  width: 100%;
+}
+.analytics-cell-name {
+  min-width: 11rem;
+  max-width: 16rem;
+}
+.analytics-node-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-node-addr {
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-cell-inbound {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+.analytics-cell-proto {
+  min-width: 7.5rem;
+  white-space: nowrap;
+}
+.analytics-cell-online,
+.analytics-cell-check {
+  white-space: nowrap;
+  text-align: center;
+}
+.analytics-cell-check {
+  width: 3.2rem;
+}
+.analytics-top-table .analytics-cell-name {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-top-table .analytics-cell-proto {
+  min-width: 7rem;
 }
 
 .stats-panel-tabs .stats-tab-online {

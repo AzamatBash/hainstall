@@ -68,7 +68,9 @@ export interface AnalyticsNode {
   protocol: string
   role_rn_front: boolean
   role_rn_back: boolean
+  role_hp_front: boolean
   role_hp_back: boolean
+  role_cdn_back: boolean
   enabled_in_analytics: boolean
   notes?: string
   users_online: number
@@ -96,6 +98,7 @@ export interface AnalyticsNodeRank {
 export interface WeekAnalytics {
   range_hours: number
   bucket_ms: number
+  by_segment?: AnalyticsBucket[]
   by_protocol: AnalyticsBucket[]
   by_role: AnalyticsBucket[]
   top_nodes: AnalyticsNodeRank[]

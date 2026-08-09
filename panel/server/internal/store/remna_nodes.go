@@ -23,7 +23,9 @@ type RemnaNodeCatalog struct {
 	Protocol           string `json:"protocol"` // effective: override || derived
 	RoleRNFront        bool   `json:"role_rn_front"`
 	RoleRNBack         bool   `json:"role_rn_back"`
+	RoleHPFront        bool   `json:"role_hp_front"`
 	RoleHPBack         bool   `json:"role_hp_back"`
+	RoleCDNBack        bool   `json:"role_cdn_back"`
 	EnabledInAnalytics bool   `json:"enabled_in_analytics"`
 	Notes              string `json:"notes"`
 	UsersOnline        int    `json:"users_online"`
@@ -139,7 +141,9 @@ type RemnaNodePatch struct {
 	ProtocolOverride   *string
 	RoleRNFront        *bool
 	RoleRNBack         *bool
+	RoleHPFront        *bool
 	RoleHPBack         *bool
+	RoleCDNBack        *bool
 	EnabledInAnalytics *bool
 	Notes              *string
 }
@@ -159,8 +163,14 @@ func (s *Store) PatchRemnaNodeCatalog(panelID, remnaUUID string, p RemnaNodePatc
 	if p.RoleRNBack != nil {
 		cur.RoleRNBack = *p.RoleRNBack
 	}
+	if p.RoleHPFront != nil {
+		cur.RoleHPFront = *p.RoleHPFront
+	}
 	if p.RoleHPBack != nil {
 		cur.RoleHPBack = *p.RoleHPBack
+	}
+	if p.RoleCDNBack != nil {
+		cur.RoleCDNBack = *p.RoleCDNBack
 	}
 	if p.EnabledInAnalytics != nil {
 		cur.EnabledInAnalytics = *p.EnabledInAnalytics
@@ -172,11 +182,12 @@ func (s *Store) PatchRemnaNodeCatalog(panelID, remnaUUID string, p RemnaNodePatc
 	_, err = s.db.Exec(`
 UPDATE remna_node_catalog SET
   protocol_override = ?,
-  role_rn_front = ?, role_rn_back = ?, role_hp_back = ?,
+  role_rn_front = ?, role_rn_back = ?, role_hp_front = ?, role_hp_back = ?, role_cdn_back = ?,
   enabled_in_analytics = ?, notes = ?, updated_at = ?
 WHERE panel_id = ? AND remna_uuid = ?`,
 		cur.ProtocolOverride,
-		boolInt(cur.RoleRNFront), boolInt(cur.RoleRNBack), boolInt(cur.RoleHPBack),
+		boolInt(cur.RoleRNFront), boolInt(cur.RoleRNBack),
+		boolInt(cur.RoleHPFront), boolInt(cur.RoleHPBack), boolInt(cur.RoleCDNBack),
 		boolInt(cur.EnabledInAnalytics), cur.Notes, now,
 		panelID, remnaUUID,
 	)
@@ -197,12 +208,12 @@ func scanRemnaNodeCatalog(scanner interface {
 	Scan(dest ...any) error
 }) (*RemnaNodeCatalog, error) {
 	var n RemnaNodeCatalog
-	var roleF, roleB, roleH, enabled, nodeOK int
+	var roleF, roleB, roleHPF, roleHPB, roleCDN, enabled, nodeOK int
 	err := scanner.Scan(
 		&n.PanelID, &n.PanelName, &n.RemnaUUID, &n.Name, &n.Address,
 		&n.ConfigProfileUUID, &n.InboundUUIDsJSON, &n.InboundTags,
 		&n.ProtocolDerived, &n.ProtocolOverride,
-		&roleF, &roleB, &roleH, &enabled, &n.Notes,
+		&roleF, &roleB, &roleHPF, &roleHPB, &roleCDN, &enabled, &n.Notes,
 		&n.UsersOnline, &nodeOK, &n.LastSeenAt, &n.UpdatedAt,
 	)
 	if err != nil {
@@ -210,7 +221,9 @@ func scanRemnaNodeCatalog(scanner interface {
 	}
 	n.RoleRNFront = roleF != 0
 	n.RoleRNBack = roleB != 0
-	n.RoleHPBack = roleH != 0
+	n.RoleHPFront = roleHPF != 0
+	n.RoleHPBack = roleHPB != 0
+	n.RoleCDNBack = roleCDN != 0
 	n.EnabledInAnalytics = enabled != 0
 	n.NodeOK = nodeOK != 0
 	n.Protocol = effectiveProtocol(n.ProtocolOverride, n.ProtocolDerived)
@@ -233,7 +246,8 @@ const remnaNodeSelect = `
 SELECT c.panel_id, COALESCE(p.name, ''), c.remna_uuid, c.name, c.address,
   c.config_profile_uuid, c.inbound_uuids_json, c.inbound_tags,
   c.protocol_derived, c.protocol_override,
-  c.role_rn_front, c.role_rn_back, c.role_hp_back, c.enabled_in_analytics, c.notes,
+  c.role_rn_front, c.role_rn_back, c.role_hp_front, c.role_hp_back, c.role_cdn_back,
+  c.enabled_in_analytics, c.notes,
   c.users_online, c.node_ok, c.last_seen_at, c.updated_at
 FROM remna_node_catalog c
 LEFT JOIN remna_panels p ON p.id = c.panel_id
@@ -290,13 +304,49 @@ type AnalyticsNodeRank struct {
 
 // WeekAnalytics is consolidated analytics across all Remna panels.
 type WeekAnalytics struct {
-	RangeHours     int                  `json:"range_hours"`
-	BucketMs       int64                `json:"bucket_ms"`
-	ByProtocol     []AnalyticsBucket    `json:"by_protocol"`
-	ByRole         []AnalyticsBucket    `json:"by_role"`
-	TopNodes       []AnalyticsNodeRank  `json:"top_nodes"`
-	Top3SharePct   float64              `json:"top3_share_pct"`
-	TotalOnlineNow int                  `json:"total_online_now"`
+	RangeHours     int                 `json:"range_hours"`
+	BucketMs       int64               `json:"bucket_ms"`
+	BySegment      []AnalyticsBucket   `json:"by_segment"`
+	ByProtocol     []AnalyticsBucket   `json:"by_protocol"`
+	ByRole         []AnalyticsBucket   `json:"by_role"`
+	TopNodes       []AnalyticsNodeRank `json:"top_nodes"`
+	Top3SharePct   float64             `json:"top3_share_pct"`
+	TotalOnlineNow int                 `json:"total_online_now"`
+}
+
+// analyticsSegments returns QoS buckets for a node (may be multiple).
+func analyticsSegments(n RemnaNodeCatalog) []string {
+	proto := strings.ToLower(strings.TrimSpace(n.Protocol))
+	isVless := proto == "vless_reality" || proto == "vless"
+	isHy2 := proto == "hysteria2" || proto == "hysteria" || proto == "hy2"
+	out := make([]string, 0, 3)
+	if isVless && n.RoleHPFront {
+		out = append(out, "vless_reality_hp_front")
+	} else if isVless {
+		out = append(out, "vless_reality")
+	}
+	if isHy2 {
+		out = append(out, "hysteria2")
+	}
+	if n.RoleCDNBack {
+		out = append(out, "cdn")
+	}
+	return out
+}
+
+func segmentLabel(key string) string {
+	switch key {
+	case "vless_reality":
+		return "VLESS Reality"
+	case "hysteria2":
+		return "Hysteria"
+	case "vless_reality_hp_front":
+		return "VLESS Reality + HP front"
+	case "cdn":
+		return "CDN"
+	default:
+		return key
+	}
 }
 
 // BuildWeekAnalytics aggregates per-node samples with catalog attributes.
@@ -376,6 +426,7 @@ ORDER BY ts ASC`, cutoff)
 		group  string
 	}
 	protoAcc := map[accKey]int{}
+	segmentAcc := map[accKey]int{}
 	roleAcc := map[accKey]int{}
 	for nb, v := range lastInBucket {
 		n := v.node
@@ -385,20 +436,35 @@ ORDER BY ts ASC`, cutoff)
 		}
 		b := nb.bucket
 		protoAcc[accKey{b, proto}] += v.online
+		for _, seg := range analyticsSegments(n) {
+			segmentAcc[accKey{b, seg}] += v.online
+		}
 		if n.RoleRNFront {
 			roleAcc[accKey{b, "rn_front"}] += v.online
 		}
 		if n.RoleRNBack {
 			roleAcc[accKey{b, "rn_back"}] += v.online
 		}
+		if n.RoleHPFront {
+			roleAcc[accKey{b, "hp_front"}] += v.online
+		}
 		if n.RoleHPBack {
 			roleAcc[accKey{b, "hp_back"}] += v.online
+		}
+		if n.RoleCDNBack {
+			roleAcc[accKey{b, "cdn_back"}] += v.online
 		}
 	}
 
 	byProto := make([]AnalyticsBucket, 0, len(protoAcc))
 	for k, v := range protoAcc {
 		byProto = append(byProto, AnalyticsBucket{TS: k.bucket, Key: k.group, Online: v})
+	}
+	bySegment := make([]AnalyticsBucket, 0, len(segmentAcc))
+	for k, v := range segmentAcc {
+		bySegment = append(bySegment, AnalyticsBucket{
+			TS: k.bucket, Key: k.group, Label: segmentLabel(k.group), Online: v,
+		})
 	}
 	byRole := make([]AnalyticsBucket, 0, len(roleAcc))
 	for k, v := range roleAcc {
@@ -408,8 +474,12 @@ ORDER BY ts ASC`, cutoff)
 			label = "RN front"
 		case "rn_back":
 			label = "RN back"
+		case "hp_front":
+			label = "HP front"
 		case "hp_back":
 			label = "HP back"
+		case "cdn_back":
+			label = "CDN back"
 		}
 		byRole = append(byRole, AnalyticsBucket{TS: k.bucket, Key: k.group, Label: label, Online: v})
 	}
@@ -456,6 +526,7 @@ ORDER BY ts ASC`, cutoff)
 	return &WeekAnalytics{
 		RangeHours:     hours,
 		BucketMs:       bucketMs,
+		BySegment:      bySegment,
 		ByProtocol:     byProto,
 		ByRole:         byRole,
 		TopNodes:       top,

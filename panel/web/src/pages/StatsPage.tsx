@@ -190,6 +190,35 @@ export default function StatsPage() {
     return points.filter((p) => p.t >= zoom.from && p.t <= zoom.to)
   }, [points, zoom])
 
+  const segmentLatest = useMemo(() => {
+    const labels: Record<string, string> = {
+      vless_reality: 'VLESS Reality',
+      hysteria2: 'Hysteria',
+      vless_reality_hp_front: 'VLESS Reality + HP front',
+      cdn: 'CDN',
+    }
+    const order = ['vless_reality', 'hysteria2', 'vless_reality_hp_front', 'cdn']
+    const now = new Map<string, number>()
+    for (const n of nodes) {
+      if (!n.enabled_in_analytics) continue
+      const proto = (n.protocol || n.protocol_derived || '').toLowerCase()
+      const isVless = proto === 'vless_reality' || proto === 'vless'
+      const isHy2 = proto === 'hysteria2' || proto === 'hysteria' || proto === 'hy2'
+      const online = Number(n.users_online) || 0
+      if (isVless && n.role_hp_front) now.set('vless_reality_hp_front', (now.get('vless_reality_hp_front') || 0) + online)
+      else if (isVless) now.set('vless_reality', (now.get('vless_reality') || 0) + online)
+      if (isHy2) now.set('hysteria2', (now.get('hysteria2') || 0) + online)
+      if (n.role_cdn_back) now.set('cdn', (now.get('cdn') || 0) + online)
+    }
+    // Prefer live catalog; fall back to last hour bucket from samples.
+    const sample = new Map(sumLatestByKey(week?.by_segment ?? []).map((r) => [r.key, r.online]))
+    const useNow = nodes.some((n) => n.enabled_in_analytics)
+    return order.map((key) => ({
+      key,
+      label: labels[key] || key,
+      online: useNow ? (now.get(key) ?? 0) : (sample.get(key) ?? 0),
+    }))
+  }, [nodes, week])
   const protoLatest = useMemo(() => sumLatestByKey(week?.by_protocol ?? []), [week])
   const roleLatest = useMemo(() => sumLatestByKey(week?.by_role ?? []), [week])
 
@@ -237,7 +266,9 @@ export default function StatsPage() {
   function roleLabel(key: string) {
     if (key === 'rn_front') return 'RN front'
     if (key === 'rn_back') return 'RN back'
+    if (key === 'hp_front') return 'HP front'
     if (key === 'hp_back') return 'HP back'
+    if (key === 'cdn_back') return 'CDN back'
     return key
   }
 
@@ -406,29 +437,33 @@ export default function StatsPage() {
                 </div>
 
                 <div>
-                  <h3 style={{ margin: '0 0 0.4rem' }}>По протоколу (последний час)</h3>
-                  {protoLatest.length === 0 ? (
-                    <p className="muted">Пока нет сэмплов — нажмите «Синхронизировать» во вкладке Ноды или подождите опрос.</p>
-                  ) : (
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Протокол</th>
-                            <th>Online</th>
+                  <h3 style={{ margin: '0 0 0.4rem' }}>Сегменты (сейчас / последний час)</h3>
+                  <p className="muted" style={{ marginTop: 0, fontSize: '0.8rem' }}>
+                    VLESS Reality · Hysteria · VLESS Reality + HP front · CDN. Отметьте HP front / CDN back у нод.
+                  </p>
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Сегмент</th>
+                          <th>Online</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {segmentLatest.map((r) => (
+                          <tr key={r.key}>
+                            <td>{r.label}</td>
+                            <td className="mono">{r.online}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {protoLatest.map((r) => (
-                            <tr key={r.key}>
-                              <td className="mono">{r.key}</td>
-                              <td className="mono">{r.online}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {protoLatest.length === 0 ? (
+                    <p className="muted" style={{ marginTop: '0.5rem' }}>
+                      Пока нет сэмплов — синхронизируйте ноды или подождите опрос.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div>
@@ -463,7 +498,7 @@ export default function StatsPage() {
                     <p className="muted">Нет данных.</p>
                   ) : (
                     <div className="table-wrap">
-                      <table className="table">
+                      <table className="table analytics-top-table">
                         <thead>
                           <tr>
                             <th>Панель</th>
@@ -476,8 +511,8 @@ export default function StatsPage() {
                           {(week?.top_nodes ?? []).map((n) => (
                             <tr key={`${n.panel_id}:${n.remna_uuid}`}>
                               <td>{n.panel_name || n.panel_id.slice(0, 8)}</td>
-                              <td>{n.name}</td>
-                              <td className="mono">{n.protocol}</td>
+                              <td className="analytics-cell-name" title={n.name}>{n.name}</td>
+                              <td className="mono analytics-cell-proto">{n.protocol}</td>
                               <td className="mono">{n.online}</td>
                             </tr>
                           ))}
@@ -517,7 +552,9 @@ export default function StatsPage() {
                           <th>Override</th>
                           <th>RN front</th>
                           <th>RN back</th>
+                          <th>HP front</th>
                           <th>HP back</th>
+                          <th>CDN back</th>
                           <th>В аналит.</th>
                         </tr>
                       </thead>
@@ -527,22 +564,22 @@ export default function StatsPage() {
                           const busy = savingKey === key
                           return (
                             <tr key={key} className={busy ? 'muted' : undefined}>
-                              <td>{n.panel_name || '—'}</td>
-                              <td>
-                                <div>{n.name}</div>
-                                <div className="muted mono" style={{ fontSize: '0.75rem' }}>
+                              <td className="analytics-cell-panel">{n.panel_name || '—'}</td>
+                              <td className="analytics-cell-name">
+                                <div className="analytics-node-title" title={n.name}>{n.name}</div>
+                                <div className="muted mono analytics-node-addr" title={n.address}>
                                   {n.address}
                                 </div>
                               </td>
-                              <td className="mono">
+                              <td className="mono analytics-cell-online">
                                 {n.users_online}
                                 {!n.node_ok ? <span className="error"> · off</span> : null}
                               </td>
-                              <td className="mono" style={{ fontSize: '0.8rem', maxWidth: 140 }}>
+                              <td className="mono analytics-cell-inbound" title={n.inbound_tags || ''}>
                                 {n.inbound_tags || '—'}
                               </td>
-                              <td className="mono">{n.protocol_derived || 'unknown'}</td>
-                              <td>
+                              <td className="mono analytics-cell-proto">{n.protocol_derived || 'unknown'}</td>
+                              <td className="analytics-cell-override">
                                 <select
                                   value={n.protocol_override || ''}
                                   disabled={busy}
@@ -557,7 +594,7 @@ export default function StatsPage() {
                                   ))}
                                 </select>
                               </td>
-                              <td>
+                              <td className="analytics-cell-check">
                                 <input
                                   type="checkbox"
                                   checked={n.role_rn_front}
@@ -567,7 +604,7 @@ export default function StatsPage() {
                                   }
                                 />
                               </td>
-                              <td>
+                              <td className="analytics-cell-check">
                                 <input
                                   type="checkbox"
                                   checked={n.role_rn_back}
@@ -577,7 +614,17 @@ export default function StatsPage() {
                                   }
                                 />
                               </td>
-                              <td>
+                              <td className="analytics-cell-check">
+                                <input
+                                  type="checkbox"
+                                  checked={!!n.role_hp_front}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    void patchNode(n, { role_hp_front: e.target.checked })
+                                  }
+                                />
+                              </td>
+                              <td className="analytics-cell-check">
                                 <input
                                   type="checkbox"
                                   checked={n.role_hp_back}
@@ -587,7 +634,17 @@ export default function StatsPage() {
                                   }
                                 />
                               </td>
-                              <td>
+                              <td className="analytics-cell-check">
+                                <input
+                                  type="checkbox"
+                                  checked={!!n.role_cdn_back}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    void patchNode(n, { role_cdn_back: e.target.checked })
+                                  }
+                                />
+                              </td>
+                              <td className="analytics-cell-check">
                                 <input
                                   type="checkbox"
                                   checked={n.enabled_in_analytics}

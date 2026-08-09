@@ -191,7 +191,9 @@ CREATE TABLE IF NOT EXISTS remna_node_catalog (
   protocol_override TEXT NOT NULL DEFAULT '',
   role_rn_front INTEGER NOT NULL DEFAULT 0,
   role_rn_back INTEGER NOT NULL DEFAULT 0,
+  role_hp_front INTEGER NOT NULL DEFAULT 0,
   role_hp_back INTEGER NOT NULL DEFAULT 0,
+  role_cdn_back INTEGER NOT NULL DEFAULT 0,
   enabled_in_analytics INTEGER NOT NULL DEFAULT 1,
   notes TEXT NOT NULL DEFAULT '',
   users_online INTEGER NOT NULL DEFAULT 0,
@@ -212,6 +214,12 @@ CREATE TABLE IF NOT EXISTS remna_node_online_samples (
 CREATE INDEX IF NOT EXISTS idx_remna_node_online_ts ON remna_node_online_samples(ts);
 `)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureColumn("remna_node_catalog", "role_hp_front", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("remna_node_catalog", "role_cdn_back", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// Existing DBs: remna_node_name → remna_address (no-op if already renamed / never existed).
