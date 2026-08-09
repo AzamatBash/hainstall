@@ -77,6 +77,7 @@ export default function SegmentWeekChart({ series }: Props) {
       <svg
         className="segment-week-chart-svg"
         viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
         role="img"
         aria-label="Онлайн по сегментам за неделю"
       >

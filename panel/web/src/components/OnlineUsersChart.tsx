@@ -233,7 +233,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
         <svg
           className="online-chart-svg"
           viewBox={`0 0 ${width} ${height}`}
-          preserveAspectRatio="xMidYMid meet"
+          preserveAspectRatio="none"
           role="img"
           aria-label="Онлайн пользователей"
           onPointerMove={onMove}

@@ -2394,9 +2394,9 @@ button.task-image-open {
 }
 .segment-week-chart-svg {
   width: 100%;
-  height: auto;
+  height: clamp(220px, 38vh, 320px);
   display: block;
-  aspect-ratio: 720 / 280;
+  overflow: hidden;
 }
 .segment-week-grid {
   stroke: color-mix(in srgb, var(--border) 75%, transparent);
@@ -2547,15 +2547,14 @@ button.task-image-open {
 
 .online-chart-svg {
   width: 100%;
-  height: auto;
-  aspect-ratio: 720 / 260;
-  max-height: min(52vh, 320px);
+  height: clamp(240px, 44vh, 420px);
   display: block;
   cursor: crosshair;
   touch-action: none;
   background: color-mix(in srgb, var(--bg) 70%, transparent);
   border: 1px solid var(--border);
   border-radius: 8px;
+  overflow: hidden;
 }
 
 .online-chart-area {
