@@ -15,6 +15,9 @@ type Props = {
   ariaLabel?: string
   emptyHint?: string
   tapHint?: string
+  /** Current value for the compact legend (defaults to last point). */
+  current?: number | null
+  showLegend?: boolean
 }
 
 type PointInfo = {
@@ -118,6 +121,8 @@ export default function OnlineUsersChart({
   ariaLabel = 'Онлайн пользователей',
   emptyHint = 'Пока нет точек — подождите первый опрос (до 5 мин)',
   tapHint = 'Нажмите на график, чтобы увидеть дату и значение',
+  current = null,
+  showLegend = false,
 }: Props) {
   const width = 720
   const height = 260
@@ -258,8 +263,36 @@ export default function OnlineUsersChart({
   const tipFlipX = tipLeftPct > 62
   const tipFlipY = tipTopPct < 28
 
+  const legendValue =
+    current != null && Number.isFinite(current)
+      ? current
+      : points.length
+        ? points[points.length - 1].value
+        : null
+
+  const windowLabel =
+    hours <= 1
+      ? 'последний час'
+      : hours < 48
+        ? `последние ${hours} ч`
+        : hours <= 168
+          ? 'последние 7 дней'
+          : 'последние 30 дней'
+
   return (
     <div className={`online-chart${className ? ` ${className}` : ''}`}>
+      {showLegend ? (
+        <div className="traffic-chart-legend">
+          <span className="traffic-legend-item tx">
+            <span className="traffic-legend-swatch" aria-hidden />
+            Онлайн пользователей
+            {legendValue != null ? (
+              <span className="traffic-legend-val">{formatValue(legendValue)}</span>
+            ) : null}
+          </span>
+          <span className="traffic-chart-window muted">{windowLabel}</span>
+        </div>
+      ) : null}
       <div className="online-chart-frame">
         <svg
           className="online-chart-svg"

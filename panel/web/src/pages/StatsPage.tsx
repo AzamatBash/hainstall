@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
-  formatBitrateShort,
   type AnalyticsNode,
   type RemnaPanel,
   type WeekAnalytics,
@@ -472,12 +471,7 @@ export default function StatsPage() {
 
                 {active && (
                   <div className="stack stats-body">
-                    <div className="stats-current">
-                      <div className="stats-current-value mono">
-                        {current != null ? current : onlineError ? '—' : '…'}
-                      </div>
-                      {onlineError ? <div className="error">{onlineError}</div> : null}
-                    </div>
+                    {onlineError ? <div className="error">{onlineError}</div> : null}
 
                     <div className="row stats-presets" style={{ flexWrap: 'wrap', gap: '0.4rem' }}>
                       {PRESETS.map((p) => (
@@ -511,6 +505,8 @@ export default function StatsPage() {
                         valueLabel="Онлайн"
                         ariaLabel="Онлайн пользователей"
                         tapHint="Нажмите на график, чтобы увидеть дату и онлайн"
+                        current={current}
+                        showLegend
                       />
                     )}
                     <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
@@ -529,23 +525,7 @@ export default function StatsPage() {
                           .join(' ')}
                       />
 
-                      <div className="stats-current">
-                        <div className="stats-current-value mono">
-                          {trafficDown != null
-                            ? formatBitrateShort(trafficDown)
-                            : trafficError
-                              ? '—'
-                              : '…'}
-                        </div>
-                        <div className="stats-current-value mono stats-current-value-rx">
-                          {trafficUp != null
-                            ? formatBitrateShort(trafficUp)
-                            : trafficError
-                              ? '—'
-                              : '…'}
-                        </div>
-                        {trafficError ? <div className="error">{trafficError}</div> : null}
-                      </div>
+                      {trafficError ? <div className="error">{trafficError}</div> : null}
 
                       <div className="row stats-presets" style={{ flexWrap: 'wrap', gap: '0.4rem' }}>
                         {PRESETS.map((p) => (
@@ -577,6 +557,8 @@ export default function StatsPage() {
                           hours={trafficHours}
                           size="stats"
                           onZoom={(from, to) => setTrafficZoom({ from, to })}
+                          currentDownBps={trafficDown}
+                          currentUpBps={trafficUp}
                         />
                       )}
                       <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>

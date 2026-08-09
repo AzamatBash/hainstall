@@ -2581,7 +2581,8 @@ button.task-image-open {
   gap: 0.85rem;
 }
 
-.traffic-chart-stats .traffic-chart-legend {
+.traffic-chart-stats .traffic-chart-legend,
+.online-chart > .traffic-chart-legend {
   margin-bottom: 0.5rem;
   padding: 0;
 }

@@ -21,6 +21,8 @@ type Props = {
   /** `stats` matches OnlineUsersChart block size + hover/zoom on /stats. */
   size?: 'compact' | 'stats'
   onZoom?: (from: number, to: number) => void
+  currentDownBps?: number | null
+  currentUpBps?: number | null
 }
 
 type PointInfo = {
@@ -123,6 +125,8 @@ export default function TrafficMirrorChart({
   className,
   size = 'compact',
   onZoom,
+  currentDownBps = null,
+  currentUpBps = null,
 }: Props) {
   const stats = size === 'stats'
   const width = 720
@@ -244,6 +248,12 @@ export default function TrafficMirrorChart({
   const innerH = height - padT - padB
   const midY = padT + innerH / 2
   const last = points.length ? points[points.length - 1] : null
+  const legendDown =
+    currentDownBps != null && Number.isFinite(currentDownBps)
+      ? currentDownBps
+      : last?.down_bps
+  const legendUp =
+    currentUpBps != null && Number.isFinite(currentUpBps) ? currentUpBps : last?.up_bps
   const windowLabel =
     hours <= 1
       ? 'последний час · Mbit/s'
@@ -444,15 +454,15 @@ export default function TrafficMirrorChart({
         <span className="traffic-legend-item tx">
           <span className="traffic-legend-swatch" aria-hidden />
           Отдача TX
-          {last ? (
-            <span className="traffic-legend-val">{formatBitrateShort(last.down_bps)}</span>
+          {legendDown != null ? (
+            <span className="traffic-legend-val">{formatBitrateShort(legendDown)}</span>
           ) : null}
         </span>
         <span className="traffic-legend-item rx">
           <span className="traffic-legend-swatch" aria-hidden />
           Загрузка RX
-          {last ? (
-            <span className="traffic-legend-val">{formatBitrateShort(last.up_bps)}</span>
+          {legendUp != null ? (
+            <span className="traffic-legend-val">{formatBitrateShort(legendUp)}</span>
           ) : null}
         </span>
         <span className="traffic-chart-window muted">{windowLabel}</span>
