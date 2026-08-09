@@ -11,10 +11,12 @@ type Props = {
 
 function formatTick(ts: number, hours: number) {
   const d = new Date(ts)
+  const opts: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Moscow' }
   if (hours <= 24) {
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleTimeString('ru-RU', { ...opts, hour: '2-digit', minute: '2-digit' })
   }
   return d.toLocaleString('ru-RU', {
+    ...opts,
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -25,6 +27,7 @@ function formatTick(ts: number, hours: number) {
 function formatTooltip(ts: number, online: number) {
   const d = new Date(ts)
   const when = d.toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -32,7 +35,7 @@ function formatTooltip(ts: number, online: number) {
     minute: '2-digit',
     second: '2-digit',
   })
-  return `${when} · ${online}`
+  return `${when} (МСК) · ${online}`
 }
 
 /** Downsample for draw while keeping peaks (min/max per bucket). */
