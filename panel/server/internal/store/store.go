@@ -155,6 +155,23 @@ CREATE TABLE IF NOT EXISTS traffic_samples (
   PRIMARY KEY (node_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_samples_node_ts ON traffic_samples(node_id, ts);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  remna_panel_id TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'todo',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_images (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id);
 `)
 	if err != nil {
 		return err

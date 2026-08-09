@@ -12,6 +12,7 @@ import {
   translateError,
 } from '../api'
 import { copyToClipboard, downloadTextFile } from '../clipboard'
+import BrandNav from '../components/BrandNav'
 import CountryPicker from '../components/CountryPicker'
 import {
   getNodesCacheMap,
@@ -647,9 +648,7 @@ export default function NodesPage() {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand">
-          ha<span>panel</span>
-        </div>
+        <BrandNav active="panel" />
         {filterTab !== 'remna' && filterTab !== 'agent' && (
           <label className="nodes-search" title="Поиск по имени, IP ноды, адресу из Remnawave или бэкенда">
             <span className="nodes-search-icon" aria-hidden>

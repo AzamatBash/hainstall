@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/refraction-networking/utls v1.6.7
 	golang.org/x/crypto v0.21.0
+	golang.org/x/net v0.23.0
 	modernc.org/sqlite v1.34.5
 )
 

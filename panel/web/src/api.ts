@@ -52,6 +52,25 @@ export interface RemnaPanel {
   created_at: string
 }
 
+export type TaskStatus = 'todo' | 'doing' | 'done'
+
+export interface TaskImage {
+  id: string
+  mime: string
+  url: string
+}
+
+export interface Task {
+  id: string
+  remna_panel_id: string
+  remna_panel_name?: string
+  description: string
+  status: TaskStatus
+  created_at: string
+  updated_at: string
+  images?: TaskImage[]
+}
+
 export interface Provider {
   id: string
   name: string

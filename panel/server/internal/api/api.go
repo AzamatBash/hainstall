@@ -26,6 +26,7 @@ type Options struct {
 	LLMProvider string
 	PanelIP     string
 	LLMProxy    string
+	ImagesDir   string
 }
 
 type Server struct {
@@ -35,6 +36,7 @@ type Server struct {
 	remna      *remna.Client
 	ops        *opsagent.Runner
 	secretsKey string
+	imagesDir  string
 	logger     *slog.Logger
 	mux        *http.ServeMux
 
@@ -68,6 +70,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		remna:                remna.New(),
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		secretsKey:           opt.SecretsKey,
+		imagesDir:            opt.ImagesDir,
 		logger:               logger,
 		mux:                  http.NewServeMux(),
 		remnaCache:           make(map[string]remnaStatsCacheEntry),
@@ -142,6 +145,15 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("POST /api/agent/deploy", s.requireAuth(s.handleAgentDeploy))
 	s.mux.HandleFunc("GET /api/agent/jobs/{id}", s.requireAuth(s.handleAgentJob))
+
+	s.mux.HandleFunc("GET /api/tasks", s.requireAuth(s.handleListTasks))
+	s.mux.HandleFunc("POST /api/tasks", s.requireAuth(s.handleCreateTask))
+	s.mux.HandleFunc("GET /api/tasks/{id}", s.requireAuth(s.handleGetTask))
+	s.mux.HandleFunc("PATCH /api/tasks/{id}", s.requireAuth(s.handleUpdateTask))
+	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.requireAuth(s.handleDeleteTask))
+	s.mux.HandleFunc("POST /api/tasks/{id}/images", s.requireAuth(s.handleUploadTaskImage))
+	s.mux.HandleFunc("GET /api/tasks/{id}/images/{imageId}", s.requireAuth(s.handleGetTaskImage))
+	s.mux.HandleFunc("DELETE /api/tasks/{id}/images/{imageId}", s.requireAuth(s.handleDeleteTaskImage))
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -864,21 +876,21 @@ func (s *Server) proxyNode(w http.ResponseWriter, r *http.Request, fn nodeProxyF
 
 func (s *Server) publicNode(n store.Node) map[string]any {
 	m := map[string]any{
-		"id":                   n.ID,
-		"name":                 n.Name,
-		"url":                  n.URL,
-		"country":              n.Country,
-		"sort_order":           n.SortOrder,
-		"remna_panel_id":       n.RemnaPanelID,
-		"remna_panel_name":     "",
-		"provider_id":          n.ProviderID,
-		"provider_name":        "",
-		"provider_favicon":     "",
-		"provider_login_url":   "",
-		"provider_account_id":  n.ProviderAccountID,
+		"id":                     n.ID,
+		"name":                   n.Name,
+		"url":                    n.URL,
+		"country":                n.Country,
+		"sort_order":             n.SortOrder,
+		"remna_panel_id":         n.RemnaPanelID,
+		"remna_panel_name":       "",
+		"provider_id":            n.ProviderID,
+		"provider_name":          "",
+		"provider_favicon":       "",
+		"provider_login_url":     "",
+		"provider_account_id":    n.ProviderAccountID,
 		"provider_account_login": "",
-		"created_at":           n.CreatedAt.Format(time.RFC3339),
-		"status":               n.Status,
+		"created_at":             n.CreatedAt.Format(time.RFC3339),
+		"status":                 n.Status,
 	}
 	if n.RemnaPanelID != "" {
 		if p, err := s.store.GetRemnaPanel(n.RemnaPanelID); err == nil && p != nil {

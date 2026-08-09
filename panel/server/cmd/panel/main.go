@@ -30,6 +30,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	imagesDir := filepath.Join(filepath.Dir(cfg.DBPath), "task-images")
+	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
+		logger.Error("create task images dir", "err", err)
+		os.Exit(1)
+	}
+
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
 		logger.Error("open store", "err", err)
@@ -54,6 +60,7 @@ func main() {
 		LLMProvider: cfg.LLMProvider,
 		PanelIP:     cfg.PanelIP,
 		LLMProxy:    cfg.LLMHTTPProxy,
+		ImagesDir:   imagesDir,
 	})
 
 	mux := http.NewServeMux()

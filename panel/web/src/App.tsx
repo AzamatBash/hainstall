@@ -1,9 +1,11 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, setToken } from './api'
+import BrandNav from './components/BrandNav'
 import LoginPage from './pages/LoginPage'
 import NodesPage from './pages/NodesPage'
 import NodeDetailPage from './pages/NodeDetailPage'
+import TasksPage from './pages/TasksPage'
 
 function Authed({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
@@ -32,9 +34,7 @@ function Authed({ children }: { children: ReactNode }) {
     return (
       <div className="shell">
         <header className="topbar">
-          <div className="brand">
-            ha<span>panel</span>
-          </div>
+          <BrandNav active="panel" />
         </header>
         <p className="muted">Проверка сессии…</p>
       </div>
@@ -61,6 +61,14 @@ export default function App() {
         element={
           <Authed>
             <NodeDetailPage />
+          </Authed>
+        }
+      />
+      <Route
+        path="/tasks"
+        element={
+          <Authed>
+            <TasksPage />
           </Authed>
         }
       />
