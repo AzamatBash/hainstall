@@ -31,6 +31,7 @@ func publicTask(t store.Task) map[string]any {
 		"id":               t.ID,
 		"remna_panel_id":   t.RemnaPanelID,
 		"remna_panel_name": t.RemnaPanelName,
+		"title":            t.Title,
 		"description":      t.Description,
 		"status":           string(t.Status),
 		"created_at":       t.CreatedAt.Format(time.RFC3339),
@@ -69,6 +70,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RemnaPanelID string `json:"remna_panel_id"`
+		Title        string `json:"title"`
 		Description  string `json:"description"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
@@ -76,13 +78,14 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.RemnaPanelID = strings.TrimSpace(body.RemnaPanelID)
+	body.Title = strings.TrimSpace(body.Title)
 	body.Description = strings.TrimSpace(body.Description)
 	if body.RemnaPanelID == "" {
 		writeErr(w, http.StatusBadRequest, "выберите панель")
 		return
 	}
-	if body.Description == "" {
-		writeErr(w, http.StatusBadRequest, "описание обязательно")
+	if body.Title == "" {
+		writeErr(w, http.StatusBadRequest, "название обязательно")
 		return
 	}
 	p, err := s.store.GetRemnaPanel(body.RemnaPanelID)
@@ -94,7 +97,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "remna-панель не найдена")
 		return
 	}
-	t, err := s.store.CreateTask(body.RemnaPanelID, body.Description)
+	t, err := s.store.CreateTask(body.RemnaPanelID, body.Title, body.Description)
 	if err != nil {
 		s.logger.Error("create task", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -122,6 +125,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
 		Status       *string `json:"status"`
+		Title        *string `json:"title"`
 		Description  *string `json:"description"`
 		RemnaPanelID *string `json:"remna_panel_id"`
 	}
@@ -129,8 +133,8 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	if body.Status == nil && body.Description == nil && body.RemnaPanelID == nil {
-		writeErr(w, http.StatusBadRequest, "укажите status, description или remna_panel_id")
+	if body.Status == nil && body.Title == nil && body.Description == nil && body.RemnaPanelID == nil {
+		writeErr(w, http.StatusBadRequest, "укажите status, title, description или remna_panel_id")
 		return
 	}
 	fields := store.TaskUpdate{}
@@ -141,6 +145,14 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fields.Status = &st
+	}
+	if body.Title != nil {
+		t := strings.TrimSpace(*body.Title)
+		if t == "" {
+			writeErr(w, http.StatusBadRequest, "название обязательно")
+			return
+		}
+		fields.Title = &t
 	}
 	if body.Description != nil {
 		d := strings.TrimSpace(*body.Description)

@@ -118,6 +118,7 @@ export interface Task {
   id: string
   remna_panel_id: string
   remna_panel_name?: string
+  title: string
   description: string
   status: TaskStatus
   created_at: string

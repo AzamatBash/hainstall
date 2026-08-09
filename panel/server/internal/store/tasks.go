@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,7 @@ type Task struct {
 	ID             string      `json:"id"`
 	RemnaPanelID   string      `json:"remna_panel_id"`
 	RemnaPanelName string      `json:"remna_panel_name,omitempty"`
+	Title          string      `json:"title"`
 	Description    string      `json:"description"`
 	Status         TaskStatus  `json:"status"`
 	CreatedAt      time.Time   `json:"created_at"`
@@ -46,13 +48,14 @@ type TaskImage struct {
 
 type TaskUpdate struct {
 	Status       *string
+	Title        *string
 	Description  *string
 	RemnaPanelID *string
 }
 
 func (s *Store) ListTasks() ([]Task, error) {
 	rows, err := s.db.Query(`
-SELECT t.id, t.remna_panel_id, COALESCE(p.name, ''), t.description, t.status, t.created_at, t.updated_at
+SELECT t.id, t.remna_panel_id, COALESCE(p.name, ''), t.title, t.description, t.status, t.created_at, t.updated_at
 FROM tasks t
 LEFT JOIN remna_panels p ON p.id = t.remna_panel_id
 ORDER BY t.updated_at DESC`)
@@ -91,7 +94,7 @@ ORDER BY t.updated_at DESC`)
 
 func (s *Store) GetTask(id string) (*Task, error) {
 	row := s.db.QueryRow(`
-SELECT t.id, t.remna_panel_id, COALESCE(p.name, ''), t.description, t.status, t.created_at, t.updated_at
+SELECT t.id, t.remna_panel_id, COALESCE(p.name, ''), t.title, t.description, t.status, t.created_at, t.updated_at
 FROM tasks t
 LEFT JOIN remna_panels p ON p.id = t.remna_panel_id
 WHERE t.id = ?`, id)
@@ -110,11 +113,12 @@ WHERE t.id = ?`, id)
 	return &t, nil
 }
 
-func (s *Store) CreateTask(remnaPanelID, description string) (*Task, error) {
+func (s *Store) CreateTask(remnaPanelID, title, description string) (*Task, error) {
 	now := time.Now().UTC()
 	t := Task{
 		ID:           uuid.NewString(),
 		RemnaPanelID: remnaPanelID,
+		Title:        strings.TrimSpace(title),
 		Description:  description,
 		Status:       TaskTodo,
 		CreatedAt:    now,
@@ -122,9 +126,9 @@ func (s *Store) CreateTask(remnaPanelID, description string) (*Task, error) {
 		Images:       []TaskImage{},
 	}
 	_, err := s.db.Exec(`
-INSERT INTO tasks (id, remna_panel_id, description, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)`,
-		t.ID, t.RemnaPanelID, t.Description, string(t.Status),
+INSERT INTO tasks (id, remna_panel_id, title, description, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.RemnaPanelID, t.Title, t.Description, string(t.Status),
 		t.CreatedAt.Format(time.RFC3339Nano), t.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
@@ -138,6 +142,7 @@ func (s *Store) UpdateTask(id string, fields TaskUpdate) (*Task, error) {
 		return existing, err
 	}
 	status := string(existing.Status)
+	title := existing.Title
 	description := existing.Description
 	remnaPanelID := existing.RemnaPanelID
 	if fields.Status != nil {
@@ -145,6 +150,9 @@ func (s *Store) UpdateTask(id string, fields TaskUpdate) (*Task, error) {
 			return nil, fmt.Errorf("invalid task status %q", *fields.Status)
 		}
 		status = *fields.Status
+	}
+	if fields.Title != nil {
+		title = strings.TrimSpace(*fields.Title)
 	}
 	if fields.Description != nil {
 		description = *fields.Description
@@ -154,8 +162,8 @@ func (s *Store) UpdateTask(id string, fields TaskUpdate) (*Task, error) {
 	}
 	now := time.Now().UTC()
 	_, err = s.db.Exec(`
-UPDATE tasks SET remna_panel_id = ?, description = ?, status = ?, updated_at = ? WHERE id = ?`,
-		remnaPanelID, description, status, now.Format(time.RFC3339Nano), id)
+UPDATE tasks SET remna_panel_id = ?, title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?`,
+		remnaPanelID, title, description, status, now.Format(time.RFC3339Nano), id)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +314,7 @@ func scanTask(r rowScanner) (Task, error) {
 		t                        Task
 		status, created, updated string
 	)
-	if err := r.Scan(&t.ID, &t.RemnaPanelID, &t.RemnaPanelName, &t.Description, &status, &created, &updated); err != nil {
+	if err := r.Scan(&t.ID, &t.RemnaPanelID, &t.RemnaPanelName, &t.Title, &t.Description, &status, &created, &updated); err != nil {
 		return Task{}, err
 	}
 	t.Status = TaskStatus(status)

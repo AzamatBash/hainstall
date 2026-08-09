@@ -37,10 +37,11 @@ function fileToBase64(file: Blob): Promise<{ mime: string; dataBase64: string }>
   })
 }
 
-function previewText(description: string, max = 120): string {
-  const t = description.replace(/\s+/g, ' ').trim()
-  if (t.length <= max) return t
-  return t.slice(0, max - 1) + '…'
+function taskTitle(task: Task): string {
+  const t = (task.title || '').trim()
+  if (t) return t
+  const d = (task.description || '').replace(/\s+/g, ' ').trim()
+  return d || 'Без названия'
 }
 
 export default function TasksPage() {
@@ -229,7 +230,7 @@ export default function TasksPage() {
                       }
                     }}
                   >
-                    <p className="kanban-card-desc">{previewText(task.description)}</p>
+                    <p className="kanban-card-title">{taskTitle(task)}</p>
                     <div className="kanban-card-meta">
                       {task.remna_panel_name ? (
                         <span className="kanban-panel-badge">{task.remna_panel_name}</span>
@@ -298,6 +299,7 @@ function CreateTaskModal({
   onError: (msg: string) => void
 }) {
   const [panelId, setPanelId] = useState(panels[0]?.id || '')
+  const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [pending, setPending] = useState<PendingImage[]>([])
   const [busy, setBusy] = useState(false)
@@ -361,8 +363,8 @@ function CreateTaskModal({
       setLocalError('Выберите панель Remnawave')
       return
     }
-    if (!description.trim()) {
-      setLocalError('Введите описание')
+    if (!title.trim()) {
+      setLocalError('Введите название')
       return
     }
     setBusy(true)
@@ -372,6 +374,7 @@ function CreateTaskModal({
         method: 'POST',
         body: JSON.stringify({
           remna_panel_id: panelId.trim(),
+          title: title.trim(),
           description: description.trim(),
           status: 'todo',
         }),
@@ -437,14 +440,25 @@ function CreateTaskModal({
           </select>
         </div>
         <div className="field">
+          <label htmlFor="task-title">Название</label>
+          <input
+            id="task-title"
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Краткое название задачи"
+            required
+            autoFocus
+          />
+        </div>
+        <div className="field">
           <label htmlFor="task-desc">Описание</label>
           <textarea
             id="task-desc"
             rows={5}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Текст задачи… Можно вставить скриншот (Ctrl+V)"
-            required
+            placeholder="Подробности… Можно вставить скриншот (Ctrl+V)"
           />
         </div>
         {pending.length > 0 && (
@@ -502,6 +516,7 @@ function ViewTaskModal({
 }) {
   const [editing, setEditing] = useState(false)
   const [panelId, setPanelId] = useState('')
+  const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [images, setImages] = useState<Task['images']>([])
   const [pending, setPending] = useState<PendingImage[]>([])
@@ -515,6 +530,7 @@ function ViewTaskModal({
     if (!task) return
     setEditing(false)
     setPanelId(task.remna_panel_id || '')
+    setTitle(task.title || '')
     setDescription(task.description || '')
     setImages(task.images || [])
     setPending([])
@@ -598,20 +614,25 @@ function ViewTaskModal({
       setLocalError('Выберите панель Remnawave')
       return
     }
-    if (!description.trim()) {
-      setLocalError('Введите описание')
+    if (!title.trim()) {
+      setLocalError('Введите название')
       return
     }
     setBusy(true)
     setLocalError('')
     try {
-      const patched = await api<Task>(`/api/tasks/${encodeURIComponent(task.id)}`, {
+      const patchedRes = await api<{ task?: Task } | Task>(`/api/tasks/${encodeURIComponent(task.id)}`, {
         method: 'PATCH',
         body: JSON.stringify({
           remna_panel_id: panelId.trim(),
+          title: title.trim(),
           description: description.trim(),
         }),
       })
+      const patched =
+        patchedRes && typeof patchedRes === 'object' && 'task' in patchedRes && patchedRes.task
+          ? patchedRes.task
+          : (patchedRes as Task)
       let nextImages = [...(images || [])]
       for (const img of pending) {
         const imgRes = await api<{ id: string; mime: string; url: string }>(
@@ -679,14 +700,24 @@ function ViewTaskModal({
               </select>
             </div>
             <div className="field">
+              <label htmlFor="edit-task-title">Название</label>
+              <input
+                id="edit-task-title"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Краткое название"
+                required
+              />
+            </div>
+            <div className="field">
               <label htmlFor="edit-task-desc">Описание</label>
               <textarea
                 id="edit-task-desc"
                 rows={5}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Текст задачи… Ctrl+V — скриншот"
-                required
+                placeholder="Подробности… Ctrl+V — скриншот"
               />
             </div>
             {(images?.length || pending.length) > 0 && (
@@ -739,6 +770,7 @@ function ViewTaskModal({
                 onClick={() => {
                   setEditing(false)
                   setPanelId(task.remna_panel_id || '')
+                  setTitle(task.title || '')
                   setDescription(task.description || '')
                   setImages(task.images || [])
                   for (const img of pending) URL.revokeObjectURL(img.previewUrl)
@@ -755,13 +787,21 @@ function ViewTaskModal({
           </form>
         ) : (
           <>
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <h2 style={{ margin: 0 }}>Задача</h2>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <h2 className="task-view-title" style={{ margin: 0 }}>
+                {taskTitle(task)}
+              </h2>
               {task.remna_panel_name ? (
                 <span className="kanban-panel-badge">{task.remna_panel_name}</span>
               ) : null}
             </div>
-            <p className="task-view-desc">{task.description}</p>
+            {task.description?.trim() ? (
+              <p className="task-view-desc">{task.description}</p>
+            ) : (
+              <p className="muted" style={{ margin: 0 }}>
+                Без описания
+              </p>
+            )}
             {(images?.length ?? 0) > 0 && (
               <div className="task-images task-images-view">
                 {images!.map((img) => (

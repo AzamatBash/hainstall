@@ -158,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_traffic_samples_node_ts ON traffic_samples(node_i
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   remna_panel_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'todo',
   created_at TEXT NOT NULL,
@@ -222,6 +223,18 @@ CREATE INDEX IF NOT EXISTS idx_remna_node_online_ts ON remna_node_online_samples
 	if err := s.ensureColumn("remna_node_catalog", "role_cdn_back", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("tasks", "title", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Backfill empty titles from the first line of description (legacy tasks).
+	_, _ = s.db.Exec(`
+UPDATE tasks
+SET title = TRIM(CASE
+  WHEN INSTR(description, char(10)) > 0 THEN SUBSTR(description, 1, INSTR(description, char(10)) - 1)
+  ELSE description
+END)
+WHERE TRIM(COALESCE(title, '')) = '' AND TRIM(COALESCE(description, '')) != ''
+`)
 	// Existing DBs: remna_node_name → remna_address (no-op if already renamed / never existed).
 	_, _ = s.db.Exec(`ALTER TABLE backend_remna_links RENAME COLUMN remna_node_name TO remna_address`)
 	return nil
