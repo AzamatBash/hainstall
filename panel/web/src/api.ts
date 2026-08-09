@@ -239,7 +239,7 @@ export function formatBitrate(bytesPerSec?: number | null): string {
   return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
 }
 
-/** Compact HAP-style: 124.73 Mb/s */
+/** Compact HAP-style: 124.73Mb/s */
 export function formatBitrateShort(bytesPerSec?: number | null): string {
   if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—'
   const bits = bytesPerSec * 8
@@ -250,7 +250,7 @@ export function formatBitrateShort(bytesPerSec?: number | null): string {
     v /= 1000
     i++
   }
-  return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
+  return `${v.toFixed(i === 0 ? 0 : 2)}\u202F${units[i]}`
 }
 
 export function formatUptime(sec?: number | null): string {

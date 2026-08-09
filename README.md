@@ -58,14 +58,14 @@ All agent routes are under `/_hapctl/v1/...` with `Authorization: Bearer <token>
 
 | Image | Tags | Role |
 |-------|------|------|
-| `azamatbash/hapanel` | `0.1.0`, `latest` | Panel (UI + API). **Prod digest:** `sha256:64b9465df3ce3ee8afaa80469c0c56a759a61cb1fec58e3a31d81eb354f806a7` (см. `deploy/panel/PROD_IMAGE.txt`) |
+| `azamatbash/hapanel` | `0.1.0`, `latest` | Panel (UI + API). **Prod digest:** `sha256:eace4224b5739758b1b6facb9c2584ff2e9c29419033084c27e547ed1908c5a1` (см. `deploy/panel/PROD_IMAGE.txt`) |
 | `azamatbash/hanode` | `0.1.0`, `latest` | Node agent |
 | `haproxy:3.0-alpine` | official | HAProxy on nodes |
 
 Теги `0.1.0` и `latest` указывают на **один и тот же** образ, что крутится на проде (одни и те же layers). Ставить лучше по digest:
 
 ```bash
-docker pull azamatbash/hapanel@sha256:64b9465df3ce3ee8afaa80469c0c56a759a61cb1fec58e3a31d81eb354f806a7
+docker pull azamatbash/hapanel@sha256:eace4224b5739758b1b6facb9c2584ff2e9c29419033084c27e547ed1908c5a1
 ```
 
 В репозитории точные бинарник и UI с прода лежат в `deploy/panel/prod-frozen/` (сверка с живым контейнером).
