@@ -78,6 +78,26 @@ const SEGMENT_META: { key: string; label: string; color: string; hint: string }[
   },
 ]
 
+function StatsTitleHelp({ title, help }: { title: string; help: string }) {
+  return (
+    <h2 className="stats-section-title">
+      <span>{title}</span>
+      <span className="hint-wrap" tabIndex={0}>
+        <button
+          type="button"
+          className="icon-btn hint-btn stats-help-btn"
+          aria-label={`Подсказка: ${title}`}
+        >
+          ?
+        </button>
+        <span className="hint-pop stats-help-pop" role="tooltip">
+          {help}
+        </span>
+      </span>
+    </h2>
+  )
+}
+
 export default function StatsPage() {
   const [mode, setMode] = useState<Mode>('stats')
   const [panels, setPanels] = useState<RemnaPanel[]>([])
@@ -414,10 +434,16 @@ export default function StatsPage() {
 
         {mode === 'stats' ? (
           <>
-            <h2 style={{ marginTop: '0.75rem' }}>Онлайн пользователей</h2>
-            <p className="muted stats-lead" style={{ marginTop: 0 }}>
-              Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.
-            </p>
+            <StatsTitleHelp
+              title="Онлайн пользователей"
+              help={[
+                'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                active ? `Панель: ${active.name}.` : '',
+                onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            />
             {loading ? (
               <p className="muted">Загрузка…</p>
             ) : panels.length === 0 ? (
@@ -450,11 +476,7 @@ export default function StatsPage() {
                       <div className="stats-current-value mono">
                         {current != null ? current : onlineError ? '—' : '…'}
                       </div>
-                      <div className="stats-current-meta muted">
-                        <div>Онлайн пользователей · {active.name}</div>
-                        {onlineAt ? <div>Опрос: {formatAt(onlineAt)}</div> : null}
-                        {onlineError ? <div className="error">{onlineError}</div> : null}
-                      </div>
+                      {onlineError ? <div className="error">{onlineError}</div> : null}
                     </div>
 
                     <div className="row stats-presets" style={{ flexWrap: 'wrap', gap: '0.4rem' }}>
@@ -496,11 +518,16 @@ export default function StatsPage() {
                     </p>
 
                     <div className="stats-traffic-block">
-                      <h2 style={{ marginTop: '1.5rem', marginBottom: '0.35rem' }}>Общий трафик</h2>
-                      <p className="muted stats-lead" style={{ marginTop: 0 }}>
-                        Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут,
-                        история до 31 дня.
-                      </p>
+                      <StatsTitleHelp
+                        title="Общий трафик"
+                        help={[
+                          'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                          active ? `Панель: ${active.name}.` : '',
+                          trafficAt ? `Опрос: ${formatAt(trafficAt)}.` : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      />
 
                       <div className="stats-current">
                         <div className="stats-current-value mono">
@@ -517,13 +544,7 @@ export default function StatsPage() {
                               ? '—'
                               : '…'}
                         </div>
-                        <div className="stats-current-meta muted">
-                          <div>
-                            Отдача TX · Загрузка RX · {active.name}
-                          </div>
-                          {trafficAt ? <div>Опрос: {formatAt(trafficAt)}</div> : null}
-                          {trafficError ? <div className="error">{trafficError}</div> : null}
-                        </div>
+                        {trafficError ? <div className="error">{trafficError}</div> : null}
                       </div>
 
                       <div className="row stats-presets" style={{ flexWrap: 'wrap', gap: '0.4rem' }}>

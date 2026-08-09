@@ -250,7 +250,7 @@ export function formatBitrateShort(bytesPerSec?: number | null): string {
     v /= 1000
     i++
   }
-  return `${v.toFixed(i === 0 ? 0 : 2)}\u202F${units[i]}`
+  return `${v.toFixed(i === 0 ? 0 : 2)}${units[i]}`
 }
 
 export function formatUptime(sec?: number | null): string {
