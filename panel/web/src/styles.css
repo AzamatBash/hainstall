@@ -2530,6 +2530,16 @@ button.task-image-open {
   color: var(--accent);
 }
 
+.stats-current-value-traffic {
+  font-size: 2rem;
+}
+
+.stats-traffic-block {
+  margin-top: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+
 .stats-current-meta {
   font-size: 0.85rem;
   line-height: 1.4;

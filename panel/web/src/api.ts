@@ -53,6 +53,9 @@ export interface RemnaPanel {
   online?: number
   online_at?: string
   online_error?: string
+  traffic?: number
+  traffic_at?: string
+  traffic_error?: string
 }
 
 export interface AnalyticsNode {

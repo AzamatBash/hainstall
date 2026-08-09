@@ -617,19 +617,30 @@ func (s *Server) publicRemnaPanelWithOnline(p store.RemnaPanel) map[string]any {
 		m["online"] = sample.Online
 		m["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
 	}
+	if sample, err := s.store.LatestRemnaTrafficSample(p.ID); err == nil && sample != nil {
+		m["traffic"] = sample.Bytes
+		m["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+	}
 	if s.remnaStats != nil {
 		if last, ok := s.remnaStats.LastFor(p.ID); ok {
 			if last.Err != "" {
 				m["online_error"] = last.Err
+				m["traffic_error"] = last.Err
 				if !last.At.IsZero() && m["online_at"] == nil {
 					m["online_at"] = last.At.Format(time.RFC3339)
 				}
+				if !last.At.IsZero() && m["traffic_at"] == nil {
+					m["traffic_at"] = last.At.Format(time.RFC3339)
+				}
 			} else {
 				m["online"] = last.Online
+				m["traffic"] = last.Traffic
 				if !last.At.IsZero() {
 					m["online_at"] = last.At.Format(time.RFC3339)
+					m["traffic_at"] = last.At.Format(time.RFC3339)
 				}
 				delete(m, "online_error")
+				delete(m, "traffic_error")
 			}
 		}
 	}
@@ -710,6 +721,57 @@ func (s *Server) handleRemnaPanelOnline(w http.ResponseWriter, r *http.Request) 
 			out["current"] = sample.Online
 			if out["online_at"] == nil {
 				out["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRemnaPanelTraffic(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := s.store.GetRemnaPanel(id)
+	if err != nil {
+		s.logger.Error("get remna panel", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if p == nil {
+		writeErr(w, http.StatusNotFound, "remna-панель не найдена")
+		return
+	}
+	hours := remnaOnlineWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	points, err := s.store.ListRemnaTrafficSamples(id, since)
+	if err != nil {
+		s.logger.Error("list remna traffic", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := map[string]any{
+		"panel_id": id,
+		"hours":    hours,
+		"points":   points,
+	}
+	if s.remnaStats != nil {
+		if last, ok := s.remnaStats.LastFor(id); ok {
+			if last.Err != "" {
+				out["traffic_error"] = last.Err
+				if !last.At.IsZero() {
+					out["traffic_at"] = last.At.Format(time.RFC3339)
+				}
+			} else {
+				out["current"] = last.Traffic
+				if !last.At.IsZero() {
+					out["traffic_at"] = last.At.Format(time.RFC3339)
+				}
+			}
+		}
+	}
+	if _, has := out["current"]; !has {
+		if sample, err := s.store.LatestRemnaTrafficSample(id); err == nil && sample != nil {
+			out["current"] = sample.Bytes
+			if out["traffic_at"] == nil {
+				out["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
 			}
 		}
 	}

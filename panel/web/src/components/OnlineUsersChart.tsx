@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
+export type MetricPoint = { t: number; value: number }
+
+/** @deprecated Prefer MetricPoint; kept for online API mapping. */
 export type OnlinePoint = { t: number; online: number }
 
 type Props = {
-  points: OnlinePoint[]
+  points: MetricPoint[]
   hours: number
   onZoom?: (from: number, to: number) => void
   className?: string
+  valueLabel?: string
+  formatValue?: (n: number) => string
+  ariaLabel?: string
+  emptyHint?: string
+  tapHint?: string
 }
 
 type PointInfo = {
@@ -14,7 +22,8 @@ type PointInfo = {
   y: number
   date: string
   time: string
-  online: number
+  value: number
+  valueText: string
 }
 
 const TAP_SLOP = 14
@@ -34,7 +43,7 @@ function formatTick(ts: number, hours: number) {
   })
 }
 
-function formatHover(ts: number, online: number): Omit<PointInfo, 'x' | 'y'> {
+function formatHover(ts: number, value: number, formatValue: (n: number) => string): Omit<PointInfo, 'x' | 'y'> {
   const d = new Date(ts)
   const date = d.toLocaleDateString('ru-RU', {
     timeZone: 'Europe/Moscow',
@@ -48,20 +57,20 @@ function formatHover(ts: number, online: number): Omit<PointInfo, 'x' | 'y'> {
     minute: '2-digit',
     second: '2-digit',
   })
-  return { date, time: `${time} МСК`, online }
+  return { date, time: `${time} МСК`, value, valueText: formatValue(value) }
 }
 
-function downsample(points: OnlinePoint[], maxPoints: number): OnlinePoint[] {
+function downsample(points: MetricPoint[], maxPoints: number): MetricPoint[] {
   if (points.length <= maxPoints) return points
   const bucket = Math.ceil(points.length / maxPoints)
-  const out: OnlinePoint[] = []
+  const out: MetricPoint[] = []
   for (let i = 0; i < points.length; i += bucket) {
     const slice = points.slice(i, i + bucket)
     let min = slice[0]
     let max = slice[0]
     for (const p of slice) {
-      if (p.online < min.online) min = p
-      if (p.online > max.online) max = p
+      if (p.value < min.value) min = p
+      if (p.value > max.value) max = p
     }
     if (min.t <= max.t) {
       out.push(min)
@@ -74,22 +83,45 @@ function downsample(points: OnlinePoint[], maxPoints: number): OnlinePoint[] {
   return out
 }
 
-function Plaque({ info, className }: { info: PointInfo; className?: string }) {
+function Plaque({
+  info,
+  valueLabel,
+  className,
+}: {
+  info: PointInfo
+  valueLabel: string
+  className?: string
+}) {
   return (
     <div className={className} role="tooltip">
       <div className="online-chart-plaque-date">{info.date}</div>
       <div className="online-chart-plaque-time">{info.time}</div>
       <div className="online-chart-plaque-online">
-        Онлайн: <span className="mono">{info.online}</span>
+        {valueLabel}: <span className="mono">{info.valueText}</span>
       </div>
     </div>
   )
 }
 
-export default function OnlineUsersChart({ points, hours, onZoom, className }: Props) {
+function defaultFormat(n: number) {
+  if (!Number.isFinite(n)) return '—'
+  return String(Math.round(n))
+}
+
+export default function OnlineUsersChart({
+  points,
+  hours,
+  onZoom,
+  className,
+  valueLabel = 'Онлайн',
+  formatValue = defaultFormat,
+  ariaLabel = 'Онлайн пользователей',
+  emptyHint = 'Пока нет точек — подождите первый опрос (до 5 мин)',
+  tapHint = 'Нажмите на график, чтобы увидеть дату и значение',
+}: Props) {
   const width = 720
   const height = 260
-  const padL = 44
+  const padL = formatValue !== defaultFormat ? 58 : 44
   const padR = 12
   const padT = 18
   const padB = 30
@@ -122,15 +154,15 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
     const t0 = drawPoints[0].t
     const t1 = drawPoints[drawPoints.length - 1].t
     const span = Math.max(t1 - t0, 1)
-    const maxOnline = Math.max(1, ...drawPoints.map((p) => p.online))
-    const niceMax = Math.max(1, Math.ceil(maxOnline * 1.1))
+    const maxVal = Math.max(1, ...drawPoints.map((p) => p.value))
+    const niceMax = Math.max(1, maxVal * 1.1)
     const plotW = width - padL - padR
     const plotH = height - padT - padB
     const xAtFn = (t: number) => padL + ((t - t0) / span) * plotW
     const yAtFn = (v: number) => padT + plotH - (Math.min(v, niceMax) / niceMax) * plotH
     const tAtFn = (x: number) => t0 + ((x - padL) / plotW) * span
     const d = drawPoints
-      .map((p, i) => `${i === 0 ? 'M' : 'L'}${xAtFn(p.t).toFixed(1)},${yAtFn(p.online).toFixed(1)}`)
+      .map((p, i) => `${i === 0 ? 'M' : 'L'}${xAtFn(p.t).toFixed(1)},${yAtFn(p.value).toFixed(1)}`)
       .join(' ')
     const areaD = `${d} L${xAtFn(t1).toFixed(1)},${(padT + plotH).toFixed(1)} L${xAtFn(t0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`
     const labels: { x: number; label: string }[] = []
@@ -140,9 +172,9 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
       labels.push({ x: xAtFn(t), label: formatTick(t, hours) })
     }
     return { path: d, area: areaD, maxY: niceMax, xLabels: labels, xAt: xAtFn, yAt: yAtFn, tAt: tAtFn }
-  }, [drawPoints, hours])
+  }, [drawPoints, hours, padL])
 
-  function nearest(t: number): OnlinePoint | null {
+  function nearest(t: number): MetricPoint | null {
     if (!points.length) return null
     let best = points[0]
     let bestDist = Math.abs(points[0].t - t)
@@ -159,7 +191,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
   function infoAtX(svgX: number): PointInfo | null {
     const p = nearest(tAt(svgX))
     if (!p) return null
-    return { x: xAt(p.t), y: yAt(p.online), ...formatHover(p.t, p.online) }
+    return { x: xAt(p.t), y: yAt(p.value), ...formatHover(p.t, p.value, formatValue) }
   }
 
   function svgXFromEvent(e: ReactPointerEvent<SVGSVGElement>) {
@@ -179,7 +211,6 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
         return
       }
     }
-    // Desktop hover preview; touch waits for tap (pointerup).
     if (e.pointerType === 'mouse' && info) setActive(info)
   }
 
@@ -213,7 +244,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
     onZoom(from, to)
   }
 
-  const yTicks = [maxY, Math.round(maxY / 2), 0]
+  const yTicks = [maxY, maxY / 2, 0]
   const dragBand =
     dragRef.current?.moved && dragX != null
       ? {
@@ -235,11 +266,10 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
           role="img"
-          aria-label="Онлайн пользователей"
+          aria-label={ariaLabel}
           onPointerMove={onMove}
           onPointerLeave={(e) => {
             if (e.pointerType === 'mouse') {
-              // keep plaque until next hover elsewhere — clear only if not dragging
               if (!dragRef.current) setActive(null)
             }
             dragRef.current = null
@@ -252,13 +282,13 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
             setDragX(null)
           }}
         >
-          {yTicks.map((v) => {
+          {yTicks.map((v, i) => {
             const y = yAt(v)
             return (
-              <g key={`y-${v}`}>
+              <g key={`y-${i}-${v}`}>
                 <line x1={padL} x2={width - padR} y1={y} y2={y} className="traffic-grid" />
                 <text x={padL - 6} y={y + 3} textAnchor="end" className="traffic-axis">
-                  {v}
+                  {formatValue(v)}
                 </text>
               </g>
             )
@@ -276,7 +306,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
           {path ? <path d={path} className="online-chart-line" /> : null}
           {!points.length ? (
             <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
-              Пока нет точек — подождите первый опрос (до 5 мин)
+              {emptyHint}
             </text>
           ) : null}
           {active ? (
@@ -313,16 +343,16 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
             <div className="online-chart-plaque-date">{active.date}</div>
             <div className="online-chart-plaque-time">{active.time}</div>
             <div className="online-chart-plaque-online">
-              Онлайн: <span className="mono">{active.online}</span>
+              {valueLabel}: <span className="mono">{active.valueText}</span>
             </div>
           </div>
         ) : null}
       </div>
 
       {active ? (
-        <Plaque info={active} className="online-chart-plaque online-chart-plaque-dock" />
+        <Plaque info={active} valueLabel={valueLabel} className="online-chart-plaque online-chart-plaque-dock" />
       ) : (
-        <p className="online-chart-tap-hint muted">Нажмите на график, чтобы увидеть дату и онлайн</p>
+        <p className="online-chart-tap-hint muted">{tapHint}</p>
       )}
     </div>
   )

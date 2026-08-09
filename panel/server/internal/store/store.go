@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS remna_online_samples (
   PRIMARY KEY (panel_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_online_panel_ts ON remna_online_samples(panel_id, ts);
+CREATE TABLE IF NOT EXISTS remna_traffic_samples (
+  panel_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  bytes REAL NOT NULL,
+  PRIMARY KEY (panel_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_traffic_panel_ts ON remna_traffic_samples(panel_id, ts);
 CREATE TABLE IF NOT EXISTS remna_node_catalog (
   panel_id TEXT NOT NULL,
   remna_uuid TEXT NOT NULL,

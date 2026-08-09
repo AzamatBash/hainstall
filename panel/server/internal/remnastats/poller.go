@@ -19,9 +19,10 @@ const (
 
 // Last is the most recent poll result for a Remnawave panel.
 type Last struct {
-	Online int
-	At     time.Time
-	Err    string
+	Online  int
+	Traffic float64 // sum of trafficUsedBytes across nodes
+	At      time.Time
+	Err     string
 }
 
 // Poller periodically sums Remnawave usersOnline per panel into SQLite
@@ -168,11 +169,16 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 	}
 
 	online := SumUsersOnline(nodes)
+	traffic := SumTrafficUsedBytes(nodes)
 	if err := p.store.AppendRemnaOnlineSample(panel.ID, now, online); err != nil {
-		p.logger.Warn("remna stats append", "panel", panel.ID, "err", err)
+		p.logger.Warn("remna stats append online", "panel", panel.ID, "err", err)
 		return
 	}
-	p.setLast(panel.ID, Last{Online: online, At: now})
+	if err := p.store.AppendRemnaTrafficSample(panel.ID, now, traffic); err != nil {
+		p.logger.Warn("remna stats append traffic", "panel", panel.ID, "err", err)
+		return
+	}
+	p.setLast(panel.ID, Last{Online: online, Traffic: traffic, At: now})
 }
 
 // SumUsersOnline totals Remnawave usersOnline across nodes (nil counts as 0).
@@ -181,6 +187,20 @@ func SumUsersOnline(nodes []remna.Node) int {
 	for _, n := range nodes {
 		if n.UsersOnline != nil {
 			total += *n.UsersOnline
+		}
+	}
+	return total
+}
+
+// SumTrafficUsedBytes totals Remnawave trafficUsedBytes across nodes (nil counts as 0).
+func SumTrafficUsedBytes(nodes []remna.Node) float64 {
+	var total float64
+	for _, n := range nodes {
+		if n.TrafficUsedBytes != nil {
+			v := *n.TrafficUsedBytes
+			if v > 0 {
+				total += v
+			}
 		}
 	}
 	return total
