@@ -618,7 +618,8 @@ func (s *Server) publicRemnaPanelWithOnline(p store.RemnaPanel) map[string]any {
 		m["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
 	}
 	if sample, err := s.store.LatestRemnaTrafficSample(p.ID); err == nil && sample != nil {
-		m["traffic"] = sample.Bytes
+		m["down_bps"] = sample.DownBps
+		m["up_bps"] = sample.UpBps
 		m["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
 	}
 	if s.remnaStats != nil {
@@ -634,7 +635,8 @@ func (s *Server) publicRemnaPanelWithOnline(p store.RemnaPanel) map[string]any {
 				}
 			} else {
 				m["online"] = last.Online
-				m["traffic"] = last.Traffic
+				m["down_bps"] = last.DownBps
+				m["up_bps"] = last.UpBps
 				if !last.At.IsZero() {
 					m["online_at"] = last.At.Format(time.RFC3339)
 					m["traffic_at"] = last.At.Format(time.RFC3339)
@@ -760,16 +762,18 @@ func (s *Server) handleRemnaPanelTraffic(w http.ResponseWriter, r *http.Request)
 					out["traffic_at"] = last.At.Format(time.RFC3339)
 				}
 			} else {
-				out["current"] = last.Traffic
+				out["current_down_bps"] = last.DownBps
+				out["current_up_bps"] = last.UpBps
 				if !last.At.IsZero() {
 					out["traffic_at"] = last.At.Format(time.RFC3339)
 				}
 			}
 		}
 	}
-	if _, has := out["current"]; !has {
+	if _, has := out["current_down_bps"]; !has {
 		if sample, err := s.store.LatestRemnaTrafficSample(id); err == nil && sample != nil {
-			out["current"] = sample.Bytes
+			out["current_down_bps"] = sample.DownBps
+			out["current_up_bps"] = sample.UpBps
 			if out["traffic_at"] == nil {
 				out["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
 			}

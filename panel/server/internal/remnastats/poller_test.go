@@ -22,19 +22,24 @@ func TestSumUsersOnline(t *testing.T) {
 	}
 }
 
-func TestSumTrafficUsedBytes(t *testing.T) {
-	a, b, neg := 1_000_000.0, 2_500_000.0, -10.0
+func TestSumTrafficRates(t *testing.T) {
 	nodes := []remna.Node{
-		{TrafficUsedBytes: &a},
-		{TrafficUsedBytes: nil},
-		{TrafficUsedBytes: &b},
-		{TrafficUsedBytes: &neg},
+		{System: &remna.NodeSystem{Stats: remna.NodeSystemStats{
+			Interface: &remna.NetworkIface{RxBytesPerSec: 100, TxBytesPerSec: 400},
+		}}},
+		{System: &remna.NodeSystem{Stats: remna.NodeSystemStats{
+			Interface: &remna.NetworkIface{RxBytesPerSec: 50, TxBytesPerSec: 200},
+		}}},
+		{System: nil},
 		{},
 	}
-	if got := SumTrafficUsedBytes(nodes); got != 3_500_000 {
-		t.Fatalf("SumTrafficUsedBytes = %v, want 3500000", got)
+	down, up := SumTrafficRates(nodes)
+	// down=TX, up=RX
+	if down != 600 || up != 150 {
+		t.Fatalf("SumTrafficRates = %v/%v, want 600/150", down, up)
 	}
-	if got := SumTrafficUsedBytes(nil); got != 0 {
-		t.Fatalf("empty = %v, want 0", got)
+	down, up = SumTrafficRates(nil)
+	if down != 0 || up != 0 {
+		t.Fatalf("empty = %v/%v, want 0/0", down, up)
 	}
 }

@@ -136,7 +136,13 @@ export default function TrafficMirrorChart({ points, hours = 1, className }: Pro
   const midY = padT + innerH / 2
   const last = points.length ? points[points.length - 1] : null
   const windowLabel =
-    hours === 1 ? 'последний час · Mbit/s' : `последние ${hours} ч · Mbit/s`
+    hours <= 1
+      ? 'последний час · Mbit/s'
+      : hours < 48
+        ? `последние ${hours} ч · Mbit/s`
+        : hours <= 168
+          ? 'последние 7 дней · Mbit/s'
+          : 'последние 30 дней · Mbit/s'
 
   return (
     <div className={`traffic-chart${className ? ` ${className}` : ''}`}>

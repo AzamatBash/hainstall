@@ -53,7 +53,8 @@ export interface RemnaPanel {
   online?: number
   online_at?: string
   online_error?: string
-  traffic?: number
+  down_bps?: number
+  up_bps?: number
   traffic_at?: string
   traffic_error?: string
 }

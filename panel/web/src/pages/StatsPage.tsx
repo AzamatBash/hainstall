@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
-  formatBytes,
+  formatBitrateShort,
   type AnalyticsNode,
   type RemnaPanel,
   type WeekAnalytics,
@@ -11,12 +11,11 @@ import {
 import BrandNav from '../components/BrandNav'
 import OnlineUsersChart, { type MetricPoint, type OnlinePoint } from '../components/OnlineUsersChart'
 import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
+import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
 
 type HoursPreset = 1 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
 type AnalyticsTab = 'week' | 'nodes'
-
-type TrafficPoint = { t: number; bytes: number }
 
 const PRESETS: { hours: HoursPreset; label: string }[] = [
   { hours: 1, label: '1 час' },
@@ -90,10 +89,10 @@ export default function StatsPage() {
   const [onlineError, setOnlineError] = useState('')
   const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null)
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
-  const [trafficCurrent, setTrafficCurrent] = useState<number | null>(null)
+  const [trafficDown, setTrafficDown] = useState<number | null>(null)
+  const [trafficUp, setTrafficUp] = useState<number | null>(null)
   const [trafficAt, setTrafficAt] = useState('')
   const [trafficError, setTrafficError] = useState('')
-  const [trafficZoom, setTrafficZoom] = useState<{ from: number; to: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [chartLoading, setChartLoading] = useState(false)
   const [error, setError] = useState('')
@@ -132,7 +131,8 @@ export default function StatsPage() {
       setOnlineAt('')
       setOnlineError('')
       setTrafficPoints([])
-      setTrafficCurrent(null)
+      setTrafficDown(null)
+      setTrafficUp(null)
       setTrafficAt('')
       setTrafficError('')
       return
@@ -149,7 +149,8 @@ export default function StatsPage() {
         }>(`/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`),
         api<{
           points: TrafficPoint[]
-          current?: number
+          current_down_bps?: number
+          current_up_bps?: number
           traffic_at?: string
           traffic_error?: string
         }>(`/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`),
@@ -159,7 +160,8 @@ export default function StatsPage() {
       setOnlineAt(onlineRes.online_at || '')
       setOnlineError(onlineRes.online_error || '')
       setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
-      setTrafficCurrent(typeof trafficRes.current === 'number' ? trafficRes.current : null)
+      setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
+      setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
       setTrafficAt(trafficRes.traffic_at || '')
       setTrafficError(trafficRes.traffic_error || '')
       setPanels((list) =>
@@ -170,7 +172,14 @@ export default function StatsPage() {
                 online: typeof onlineRes.current === 'number' ? onlineRes.current : p.online,
                 online_at: onlineRes.online_at || p.online_at,
                 online_error: onlineRes.online_error || undefined,
-                traffic: typeof trafficRes.current === 'number' ? trafficRes.current : p.traffic,
+                down_bps:
+                  typeof trafficRes.current_down_bps === 'number'
+                    ? trafficRes.current_down_bps
+                    : p.down_bps,
+                up_bps:
+                  typeof trafficRes.current_up_bps === 'number'
+                    ? trafficRes.current_up_bps
+                    : p.up_bps,
                 traffic_at: trafficRes.traffic_at || p.traffic_at,
                 traffic_error: trafficRes.traffic_error || undefined,
               }
@@ -207,7 +216,6 @@ export default function StatsPage() {
 
   useEffect(() => {
     setZoom(null)
-    setTrafficZoom(null)
     if (mode === 'stats' && activeId) void loadOnline(activeId, hours)
   }, [mode, activeId, hours, loadOnline])
 
@@ -230,12 +238,13 @@ export default function StatsPage() {
     return src.map((p) => ({ t: p.t, value: p.online }))
   }, [points, zoom])
 
-  const displayTrafficPoints = useMemo((): MetricPoint[] => {
-    const src = !trafficZoom
-      ? trafficPoints
-      : trafficPoints.filter((p) => p.t >= trafficZoom.from && p.t <= trafficZoom.to)
-    return src.map((p) => ({ t: p.t, value: p.bytes }))
-  }, [trafficPoints, trafficZoom])
+  const displayTrafficPoints = useMemo((): TrafficPoint[] => {
+    return trafficPoints.map((p) => ({
+      t: p.t,
+      down_bps: Number(p.down_bps) || 0,
+      up_bps: Number(p.up_bps) || 0,
+    }))
+  }, [trafficPoints])
 
   const segmentSeries = useMemo(() => {
     const now = new Map<string, number>()
@@ -450,17 +459,30 @@ export default function StatsPage() {
                     <div className="stats-traffic-block">
                       <h2 style={{ marginTop: '1.5rem', marginBottom: '0.35rem' }}>Общий трафик</h2>
                       <p className="muted stats-lead" style={{ marginTop: 0 }}>
-                        Сумма trafficUsedBytes по нодам Remnawave. Тот же опрос раз в 5 минут, история
-                        до 31 дня.
+                        Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Тот же опрос раз в 5
+                        минут, история до 31 дня.
                       </p>
 
-                      <div className="stats-current">
-                        <div className="stats-current-value mono stats-current-value-traffic">
-                          {trafficCurrent != null
-                            ? formatBytes(trafficCurrent)
-                            : trafficError
-                              ? '—'
-                              : '…'}
+                      <div className="stats-current stats-current-rates">
+                        <div className="stats-rate">
+                          <div className="stats-rate-label muted">Отдача TX</div>
+                          <div className="stats-current-value mono stats-current-value-traffic">
+                            {trafficDown != null
+                              ? formatBitrateShort(trafficDown)
+                              : trafficError
+                                ? '—'
+                                : '…'}
+                          </div>
+                        </div>
+                        <div className="stats-rate">
+                          <div className="stats-rate-label muted">Загрузка RX</div>
+                          <div className="stats-current-value mono stats-current-value-traffic">
+                            {trafficUp != null
+                              ? formatBitrateShort(trafficUp)
+                              : trafficError
+                                ? '—'
+                                : '…'}
+                          </div>
                         </div>
                         <div className="stats-current-meta muted">
                           <div>Общий трафик · {active.name}</div>
@@ -480,33 +502,13 @@ export default function StatsPage() {
                             {p.label}
                           </button>
                         ))}
-                        {trafficZoom && (
-                          <button
-                            className="btn btn-sm btn-ghost"
-                            type="button"
-                            onClick={() => setTrafficZoom(null)}
-                          >
-                            Сбросить зум
-                          </button>
-                        )}
                       </div>
 
                       {chartLoading && trafficPoints.length === 0 ? (
                         <p className="muted">Загрузка графика…</p>
                       ) : (
-                        <OnlineUsersChart
-                          points={displayTrafficPoints}
-                          hours={hours}
-                          onZoom={(from, to) => setTrafficZoom({ from, to })}
-                          valueLabel="Трафик"
-                          formatValue={formatBytes}
-                          ariaLabel="Общий трафик"
-                          tapHint="Нажмите на график, чтобы увидеть дату и трафик"
-                        />
+                        <TrafficMirrorChart points={displayTrafficPoints} hours={hours} />
                       )}
-                      <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
-                        На телефоне: тап по графику. На ПК: наведение. Протяните пальцем/мышью — зум.
-                      </p>
                     </div>
                   </div>
                 )}

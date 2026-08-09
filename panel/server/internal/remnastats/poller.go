@@ -20,7 +20,8 @@ const (
 // Last is the most recent poll result for a Remnawave panel.
 type Last struct {
 	Online  int
-	Traffic float64 // sum of trafficUsedBytes across nodes
+	DownBps float64 // TX (отдача), TrafficMirrorChart convention
+	UpBps   float64 // RX (загрузка)
 	At      time.Time
 	Err     string
 }
@@ -169,16 +170,16 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 	}
 
 	online := SumUsersOnline(nodes)
-	traffic := SumTrafficUsedBytes(nodes)
+	downBps, upBps := SumTrafficRates(nodes)
 	if err := p.store.AppendRemnaOnlineSample(panel.ID, now, online); err != nil {
 		p.logger.Warn("remna stats append online", "panel", panel.ID, "err", err)
 		return
 	}
-	if err := p.store.AppendRemnaTrafficSample(panel.ID, now, traffic); err != nil {
+	if err := p.store.AppendRemnaTrafficSample(panel.ID, now, downBps, upBps); err != nil {
 		p.logger.Warn("remna stats append traffic", "panel", panel.ID, "err", err)
 		return
 	}
-	p.setLast(panel.ID, Last{Online: online, Traffic: traffic, At: now})
+	p.setLast(panel.ID, Last{Online: online, DownBps: downBps, UpBps: upBps, At: now})
 }
 
 // SumUsersOnline totals Remnawave usersOnline across nodes (nil counts as 0).
@@ -192,16 +193,21 @@ func SumUsersOnline(nodes []remna.Node) int {
 	return total
 }
 
-// SumTrafficUsedBytes totals Remnawave trafficUsedBytes across nodes (nil counts as 0).
-func SumTrafficUsedBytes(nodes []remna.Node) float64 {
-	var total float64
-	for _, n := range nodes {
-		if n.TrafficUsedBytes != nil {
-			v := *n.TrafficUsedBytes
-			if v > 0 {
-				total += v
-			}
+// SumTrafficRates totals host NIC speeds across nodes.
+// Returns chart convention: downBps = TX (отдача), upBps = RX (загрузка).
+func SumTrafficRates(nodes []remna.Node) (downBps, upBps float64) {
+	for i := range nodes {
+		n := &nodes[i]
+		if n.System == nil || n.System.Stats.Interface == nil {
+			continue
+		}
+		iface := n.System.Stats.Interface
+		if iface.TxBytesPerSec > 0 {
+			downBps += iface.TxBytesPerSec
+		}
+		if iface.RxBytesPerSec > 0 {
+			upBps += iface.RxBytesPerSec
 		}
 	}
-	return total
+	return downBps, upBps
 }

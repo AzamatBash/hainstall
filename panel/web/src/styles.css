@@ -2531,7 +2531,17 @@ button.task-image-open {
 }
 
 .stats-current-value-traffic {
-  font-size: 2rem;
+  font-size: 1.75rem;
+}
+
+.stats-current-rates {
+  align-items: flex-end;
+  gap: 1.25rem;
+}
+
+.stats-rate-label {
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
 }
 
 .stats-traffic-block {

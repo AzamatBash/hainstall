@@ -183,7 +183,8 @@ CREATE INDEX IF NOT EXISTS idx_remna_online_panel_ts ON remna_online_samples(pan
 CREATE TABLE IF NOT EXISTS remna_traffic_samples (
   panel_id TEXT NOT NULL,
   ts INTEGER NOT NULL,
-  bytes REAL NOT NULL,
+  down_bps REAL NOT NULL,
+  up_bps REAL NOT NULL,
   PRIMARY KEY (panel_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_traffic_panel_ts ON remna_traffic_samples(panel_id, ts);
@@ -233,6 +234,9 @@ CREATE INDEX IF NOT EXISTS idx_remna_node_online_ts ON remna_node_online_samples
 	if err := s.ensureColumn("tasks", "title", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.migrateRemnaTrafficSamplesToRates(); err != nil {
+		return err
+	}
 	// Backfill empty titles from the first line of description (legacy tasks).
 	_, _ = s.db.Exec(`
 UPDATE tasks
@@ -245,6 +249,51 @@ WHERE TRIM(COALESCE(title, '')) = '' AND TRIM(COALESCE(description, '')) != ''
 	// Existing DBs: remna_node_name → remna_address (no-op if already renamed / never existed).
 	_, _ = s.db.Exec(`ALTER TABLE backend_remna_links RENAME COLUMN remna_node_name TO remna_address`)
 	return nil
+}
+
+// migrateRemnaTrafficSamplesToRates replaces the old cumulative-bytes table with RX/TX rates.
+func (s *Store) migrateRemnaTrafficSamplesToRates() error {
+	rows, err := s.db.Query(`PRAGMA table_info(remna_traffic_samples)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasBytes, hasDown := false, false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		switch name {
+		case "bytes":
+			hasBytes = true
+		case "down_bps":
+			hasDown = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasBytes || hasDown {
+		return nil
+	}
+	if _, err := s.db.Exec(`DROP TABLE IF EXISTS remna_traffic_samples`); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+CREATE TABLE remna_traffic_samples (
+  panel_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  down_bps REAL NOT NULL,
+  up_bps REAL NOT NULL,
+  PRIMARY KEY (panel_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_traffic_panel_ts ON remna_traffic_samples(panel_id, ts);
+`)
+	return err
 }
 
 func (s *Store) ensureColumn(table, column, decl string) error {
