@@ -135,7 +135,7 @@ export default function StatsPage() {
 
       <section className="panel stats-panel">
         <h2 style={{ marginTop: 0 }}>Онлайн пользователей</h2>
-        <p className="muted" style={{ marginTop: 0 }}>
+        <p className="muted stats-lead" style={{ marginTop: 0 }}>
           Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.
         </p>
         {error && <p className="error">{error}</p>}
@@ -205,9 +205,8 @@ export default function StatsPage() {
                     onZoom={(from, to) => setZoom({ from, to })}
                   />
                 )}
-                <p className="muted" style={{ margin: 0, fontSize: '0.8rem' }}>
-                  Наведите на график — плашка с датой, временем (МСК) и онлайном. Зажмите и
-                  протяните — зум по участку.
+                <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
+                  На телефоне: тап по графику. На ПК: наведение. Протяните пальцем/мышью — зум.
                 </p>
               </div>
             )}

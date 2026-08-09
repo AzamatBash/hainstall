@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 export type OnlinePoint = { t: number; online: number }
 
@@ -9,13 +9,15 @@ type Props = {
   className?: string
 }
 
-type HoverInfo = {
+type PointInfo = {
   x: number
   y: number
   date: string
   time: string
   online: number
 }
+
+const TAP_SLOP = 14
 
 function formatTick(ts: number, hours: number) {
   const d = new Date(ts)
@@ -32,7 +34,7 @@ function formatTick(ts: number, hours: number) {
   })
 }
 
-function formatHover(ts: number, online: number): Omit<HoverInfo, 'x' | 'y'> {
+function formatHover(ts: number, online: number): Omit<PointInfo, 'x' | 'y'> {
   const d = new Date(ts)
   const date = d.toLocaleDateString('ru-RU', {
     timeZone: 'Europe/Moscow',
@@ -49,7 +51,6 @@ function formatHover(ts: number, online: number): Omit<HoverInfo, 'x' | 'y'> {
   return { date, time: `${time} МСК`, online }
 }
 
-/** Downsample for draw while keeping peaks (min/max per bucket). */
 function downsample(points: OnlinePoint[], maxPoints: number): OnlinePoint[] {
   if (points.length <= maxPoints) return points
   const bucket = Math.ceil(points.length / maxPoints)
@@ -73,18 +74,39 @@ function downsample(points: OnlinePoint[], maxPoints: number): OnlinePoint[] {
   return out
 }
 
+function Plaque({ info, className }: { info: PointInfo; className?: string }) {
+  return (
+    <div className={className} role="tooltip">
+      <div className="online-chart-plaque-date">{info.date}</div>
+      <div className="online-chart-plaque-time">{info.time}</div>
+      <div className="online-chart-plaque-online">
+        Онлайн: <span className="mono">{info.online}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function OnlineUsersChart({ points, hours, onZoom, className }: Props) {
   const width = 720
-  const height = 240
-  const padL = 48
-  const padR = 14
-  const padT = 16
-  const padB = 28
-  const [hover, setHover] = useState<HoverInfo | null>(null)
-  const dragRef = useRef<{ startX: number; startT: number } | null>(null)
+  const height = 260
+  const padL = 44
+  const padR = 12
+  const padT = 18
+  const padB = 30
+  const [active, setActive] = useState<PointInfo | null>(null)
+  const dragRef = useRef<{
+    startX: number
+    startT: number
+    pointerId: number
+    moved: boolean
+  } | null>(null)
   const [dragX, setDragX] = useState<number | null>(null)
 
   const drawPoints = useMemo(() => downsample(points, hours >= 168 ? 800 : 1200), [points, hours])
+
+  useEffect(() => {
+    setActive(null)
+  }, [points, hours])
 
   const { path, area, maxY, xLabels, xAt, yAt, tAt } = useMemo(() => {
     const empty = {
@@ -112,7 +134,7 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
       .join(' ')
     const areaD = `${d} L${xAtFn(t1).toFixed(1)},${(padT + plotH).toFixed(1)} L${xAtFn(t0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`
     const labels: { x: number; label: string }[] = []
-    const n = hours <= 1 ? 4 : hours <= 24 ? 6 : 7
+    const n = hours <= 1 ? 3 : hours <= 24 ? 4 : 5
     for (let i = 0; i < n; i++) {
       const t = t0 + (span * i) / Math.max(n - 1, 1)
       labels.push({ x: xAtFn(t), label: formatTick(t, hours) })
@@ -134,28 +156,42 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
     return best
   }
 
-  function onMove(e: ReactPointerEvent<SVGSVGElement>) {
+  function infoAtX(svgX: number): PointInfo | null {
+    const p = nearest(tAt(svgX))
+    if (!p) return null
+    return { x: xAt(p.t), y: yAt(p.online), ...formatHover(p.t, p.online) }
+  }
+
+  function svgXFromEvent(e: ReactPointerEvent<SVGSVGElement>) {
     const rect = e.currentTarget.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * width
-    const t = tAt(x)
-    const p = nearest(t)
-    if (!p) {
-      setHover(null)
-      return
+    return ((e.clientX - rect.left) / rect.width) * width
+  }
+
+  function onMove(e: ReactPointerEvent<SVGSVGElement>) {
+    const x = svgXFromEvent(e)
+    const info = infoAtX(x)
+    if (dragRef.current && dragRef.current.pointerId === e.pointerId) {
+      if (Math.abs(x - dragRef.current.startX) > TAP_SLOP) {
+        dragRef.current.moved = true
+      }
+      if (dragRef.current.moved) {
+        setDragX(x)
+        return
+      }
     }
-    setHover({
-      x: xAt(p.t),
-      y: yAt(p.online),
-      ...formatHover(p.t, p.online),
-    })
-    if (dragRef.current) setDragX(x)
+    // Desktop hover preview; touch waits for tap (pointerup).
+    if (e.pointerType === 'mouse' && info) setActive(info)
   }
 
   function onDown(e: ReactPointerEvent<SVGSVGElement>) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * width
-    dragRef.current = { startX: x, startT: tAt(x) }
-    setDragX(x)
+    const x = svgXFromEvent(e)
+    dragRef.current = {
+      startX: x,
+      startT: tAt(x),
+      pointerId: e.pointerId,
+      moved: false,
+    }
+    setDragX(null)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
@@ -163,28 +199,31 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
     const drag = dragRef.current
     dragRef.current = null
     setDragX(null)
-    if (!drag || !onZoom) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * width
-    const t1 = drag.startT
-    const t2 = tAt(x)
-    const from = Math.min(t1, t2)
-    const to = Math.max(t1, t2)
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const x = svgXFromEvent(e)
+    if (!drag.moved) {
+      const info = infoAtX(x)
+      if (info) setActive(info)
+      return
+    }
+    if (!onZoom) return
+    const from = Math.min(drag.startT, tAt(x))
+    const to = Math.max(drag.startT, tAt(x))
     if (to - from < 60_000) return
     onZoom(from, to)
   }
 
   const yTicks = [maxY, Math.round(maxY / 2), 0]
   const dragBand =
-    dragRef.current && dragX != null
+    dragRef.current?.moved && dragX != null
       ? {
           x: Math.min(dragRef.current.startX, dragX),
           w: Math.abs(dragX - dragRef.current.startX),
         }
       : null
 
-  const tipLeftPct = hover ? (hover.x / width) * 100 : 0
-  const tipTopPct = hover ? (hover.y / height) * 100 : 0
+  const tipLeftPct = active ? (active.x / width) * 100 : 0
+  const tipTopPct = active ? (active.y / height) * 100 : 0
   const tipFlipX = tipLeftPct > 62
   const tipFlipY = tipTopPct < 28
 
@@ -194,17 +233,24 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
         <svg
           className="online-chart-svg"
           viewBox={`0 0 ${width} ${height}`}
-          preserveAspectRatio="none"
+          preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Онлайн пользователей"
           onPointerMove={onMove}
-          onPointerLeave={() => {
-            setHover(null)
+          onPointerLeave={(e) => {
+            if (e.pointerType === 'mouse') {
+              // keep plaque until next hover elsewhere — clear only if not dragging
+              if (!dragRef.current) setActive(null)
+            }
             dragRef.current = null
             setDragX(null)
           }}
           onPointerDown={onDown}
           onPointerUp={onUp}
+          onPointerCancel={() => {
+            dragRef.current = null
+            setDragX(null)
+          }}
         >
           {yTicks.map((v) => {
             const y = yAt(v)
@@ -233,16 +279,16 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
               Пока нет точек — подождите первый опрос (до 5 мин)
             </text>
           ) : null}
-          {hover ? (
+          {active ? (
             <>
               <line
-                x1={hover.x}
-                x2={hover.x}
+                x1={active.x}
+                x2={active.x}
                 y1={padT}
                 y2={height - padB}
                 className="online-chart-cross"
               />
-              <circle cx={hover.x} cy={hover.y} r={4} className="online-chart-dot" />
+              <circle cx={active.x} cy={active.y} r={4.5} className="online-chart-dot" />
             </>
           ) : null}
           {xLabels.map((l) => (
@@ -258,20 +304,26 @@ export default function OnlineUsersChart({ points, hours, onZoom, className }: P
           ))}
         </svg>
 
-        {hover && !dragRef.current ? (
+        {active && !dragRef.current?.moved ? (
           <div
-            className={`online-chart-plaque${tipFlipX ? ' flip-x' : ''}${tipFlipY ? ' flip-y' : ''}`}
+            className={`online-chart-plaque online-chart-plaque-float${tipFlipX ? ' flip-x' : ''}${tipFlipY ? ' flip-y' : ''}`}
             style={{ left: `${tipLeftPct}%`, top: `${tipTopPct}%` }}
             role="tooltip"
           >
-            <div className="online-chart-plaque-date">{hover.date}</div>
-            <div className="online-chart-plaque-time">{hover.time}</div>
+            <div className="online-chart-plaque-date">{active.date}</div>
+            <div className="online-chart-plaque-time">{active.time}</div>
             <div className="online-chart-plaque-online">
-              Онлайн: <span className="mono">{hover.online}</span>
+              Онлайн: <span className="mono">{active.online}</span>
             </div>
           </div>
         ) : null}
       </div>
+
+      {active ? (
+        <Plaque info={active} className="online-chart-plaque online-chart-plaque-dock" />
+      ) : (
+        <p className="online-chart-tap-hint muted">Нажмите на график, чтобы увидеть дату и онлайн</p>
+      )}
     </div>
   )
 }
