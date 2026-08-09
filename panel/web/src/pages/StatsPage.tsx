@@ -204,7 +204,7 @@ export default function StatsPage() {
       const isVless = proto === 'vless_reality' || proto === 'vless'
       const isHy2 = proto === 'hysteria2' || proto === 'hysteria' || proto === 'hy2'
       const online = Number(n.users_online) || 0
-      if (isVless && n.role_hp_front) now.set('vless_reality_hp_front', (now.get('vless_reality_hp_front') || 0) + online)
+      if (isVless && n.role_hp_back) now.set('vless_reality_hp_front', (now.get('vless_reality_hp_front') || 0) + online)
       else if (isVless) now.set('vless_reality', (now.get('vless_reality') || 0) + online)
       if (isHy2) now.set('hysteria2', (now.get('hysteria2') || 0) + online)
       if (n.role_cdn_back) now.set('cdn', (now.get('cdn') || 0) + online)
@@ -438,7 +438,7 @@ export default function StatsPage() {
                 <div>
                   <h3 style={{ margin: '0 0 0.4rem' }}>Сегменты (сейчас / последний час)</h3>
                   <p className="muted" style={{ marginTop: 0, fontSize: '0.8rem' }}>
-                    VLESS Reality · Hysteria · VLESS Reality + HP front · CDN. Отметьте HP front / CDN back у нод.
+                    VLESS Reality · Hysteria · VLESS Reality + HP front (протокол VLESS + роль HP back, не в простом VLESS) · CDN.
                   </p>
                   <div className="table-wrap">
                     <table className="table">

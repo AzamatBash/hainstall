@@ -315,12 +315,14 @@ type WeekAnalytics struct {
 }
 
 // analyticsSegments returns QoS buckets for a node (may be multiple).
+// VLESS Reality + HP front = protocol VLESS Reality AND role HP back
+// (Remna exit behind HAProxy front); those nodes are excluded from plain VLESS Reality.
 func analyticsSegments(n RemnaNodeCatalog) []string {
 	proto := strings.ToLower(strings.TrimSpace(n.Protocol))
 	isVless := proto == "vless_reality" || proto == "vless"
 	isHy2 := proto == "hysteria2" || proto == "hysteria" || proto == "hy2"
 	out := make([]string, 0, 3)
-	if isVless && n.RoleHPFront {
+	if isVless && n.RoleHPBack {
 		out = append(out, "vless_reality_hp_front")
 	} else if isVless {
 		out = append(out, "vless_reality")
