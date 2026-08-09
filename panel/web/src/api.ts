@@ -55,6 +55,54 @@ export interface RemnaPanel {
   online_error?: string
 }
 
+export interface AnalyticsNode {
+  panel_id: string
+  panel_name?: string
+  remna_uuid: string
+  name: string
+  address: string
+  config_profile_uuid?: string
+  inbound_tags?: string
+  protocol_derived: string
+  protocol_override: string
+  protocol: string
+  role_rn_front: boolean
+  role_rn_back: boolean
+  role_hp_back: boolean
+  enabled_in_analytics: boolean
+  notes?: string
+  users_online: number
+  node_ok: boolean
+  last_seen_at?: number
+  updated_at?: number
+}
+
+export interface AnalyticsBucket {
+  t: number
+  key: string
+  label?: string
+  online: number
+}
+
+export interface AnalyticsNodeRank {
+  panel_id: string
+  panel_name: string
+  remna_uuid: string
+  name: string
+  protocol: string
+  online: number
+}
+
+export interface WeekAnalytics {
+  range_hours: number
+  bucket_ms: number
+  by_protocol: AnalyticsBucket[]
+  by_role: AnalyticsBucket[]
+  top_nodes: AnalyticsNodeRank[]
+  top3_share_pct: number
+  total_online_now: number
+}
+
 export type TaskStatus = 'todo' | 'doing' | 'done'
 
 export interface TaskImage {

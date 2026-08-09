@@ -2317,6 +2317,18 @@ button.task-image-open {
   background: var(--danger);
 }
 
+.analytics-nodes-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.analytics-nodes-table {
+  min-width: 920px;
+  font-size: 0.85rem;
+}
+.analytics-nodes-table select {
+  max-width: 8.5rem;
+}
+
 .stats-panel-tabs .stats-tab-online {
   margin-left: 0.4rem;
   font-size: 0.78rem;

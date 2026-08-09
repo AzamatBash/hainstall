@@ -37,6 +37,11 @@ type Node struct {
 	TrafficLimitBytes *float64    `json:"trafficLimitBytes"`
 	XrayUptime        json.Number `json:"xrayUptime"`
 	System            *NodeSystem `json:"system"`
+
+	// Config profile / inbound attachment (field names vary by Remnawave version).
+	ConfigProfile            *NodeConfigProfile `json:"configProfile"`
+	ActiveConfigProfileUUID  string             `json:"activeConfigProfileUuid"`
+	ConfigProfileInbounds    []string           `json:"configProfileInbounds"`
 }
 
 // NodeSystem is live host metrics embedded in newer Remnawave node payloads.

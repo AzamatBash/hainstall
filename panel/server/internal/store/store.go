@@ -179,6 +179,37 @@ CREATE TABLE IF NOT EXISTS remna_online_samples (
   PRIMARY KEY (panel_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_online_panel_ts ON remna_online_samples(panel_id, ts);
+CREATE TABLE IF NOT EXISTS remna_node_catalog (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  config_profile_uuid TEXT NOT NULL DEFAULT '',
+  inbound_uuids_json TEXT NOT NULL DEFAULT '[]',
+  inbound_tags TEXT NOT NULL DEFAULT '',
+  protocol_derived TEXT NOT NULL DEFAULT 'unknown',
+  protocol_override TEXT NOT NULL DEFAULT '',
+  role_rn_front INTEGER NOT NULL DEFAULT 0,
+  role_rn_back INTEGER NOT NULL DEFAULT 0,
+  role_hp_back INTEGER NOT NULL DEFAULT 0,
+  enabled_in_analytics INTEGER NOT NULL DEFAULT 1,
+  notes TEXT NOT NULL DEFAULT '',
+  users_online INTEGER NOT NULL DEFAULT 0,
+  node_ok INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (panel_id, remna_uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_node_catalog_panel ON remna_node_catalog(panel_id);
+CREATE TABLE IF NOT EXISTS remna_node_online_samples (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  node_ok INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (panel_id, remna_uuid, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_node_online_ts ON remna_node_online_samples(ts);
 `)
 	if err != nil {
 		return err

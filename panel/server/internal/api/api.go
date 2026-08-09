@@ -140,6 +140,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/remna-panels/{id}", s.requireAuth(s.handleDeleteRemnaPanel))
 	s.mux.HandleFunc("GET /api/remna-panels/{id}/online", s.requireAuth(s.handleRemnaPanelOnline))
 
+	s.mux.HandleFunc("GET /api/analytics/nodes", s.requireAuth(s.handleAnalyticsNodes))
+	s.mux.HandleFunc("PATCH /api/analytics/nodes/{panelId}/{uuid}", s.requireAuth(s.handleAnalyticsNodePatch))
+	s.mux.HandleFunc("POST /api/analytics/nodes/sync", s.requireAuth(s.handleAnalyticsNodesSync))
+	s.mux.HandleFunc("GET /api/analytics/week", s.requireAuth(s.handleAnalyticsWeek))
+
 	s.mux.HandleFunc("GET /api/providers", s.requireAuth(s.handleListProviders))
 	s.mux.HandleFunc("POST /api/providers", s.requireAuth(s.handleCreateProvider))
 	s.mux.HandleFunc("PUT /api/providers/{id}", s.requireAuth(s.handleUpdateProvider))

@@ -3,6 +3,7 @@ package remnastats
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 
 const (
 	defaultInterval = 5 * time.Minute
-	perPanelTimeout = 12 * time.Second
+	perPanelTimeout = 20 * time.Second
 )
 
 // Last is the most recent poll result for a Remnawave panel.
@@ -23,7 +24,8 @@ type Last struct {
 	Err    string
 }
 
-// Poller periodically sums Remnawave usersOnline per panel into SQLite.
+// Poller periodically sums Remnawave usersOnline per panel into SQLite
+// and syncs per-node catalog + samples for analytics.
 type Poller struct {
 	store      *store.Store
 	remna      *remna.Client
@@ -62,6 +64,11 @@ func (p *Poller) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// SyncNow runs one poll cycle (all panels). Used by analytics sync API.
+func (p *Poller) SyncNow(ctx context.Context) {
+	p.runOnce(ctx)
 }
 
 // LastFor returns the last in-memory poll for a panel.
@@ -117,6 +124,47 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 		p.setLast(panel.ID, Last{At: now, Err: err.Error()})
 		p.logger.Warn("remna stats list nodes", "panel", panel.ID, "name", panel.Name, "err", err)
 		return
+	}
+
+	inboundByUUID := map[string]remna.Inbound{}
+	inbounds, err := p.remna.ListAllInbounds(ctx, full.BaseURL, string(plain))
+	if err != nil {
+		// Non-fatal: keep catalog sync with unknown protocol.
+		p.logger.Warn("remna stats list inbounds", "panel", panel.ID, "err", err)
+	} else {
+		inboundByUUID = remna.InboundByUUID(inbounds)
+	}
+
+	for _, n := range nodes {
+		uuid := strings.TrimSpace(n.UUID)
+		if uuid == "" {
+			continue
+		}
+		online := 0
+		if n.UsersOnline != nil {
+			online = *n.UsersOnline
+		}
+		nodeOK := (n.IsConnected || n.IsNodeOnline) && !n.IsDisabled
+		inboundUUIDs := n.ActiveInboundUUIDs()
+		proto, tags := remna.DeriveProtocolFromInbounds(inboundUUIDs, inboundByUUID)
+		if err := p.store.UpsertRemnaNodeCatalogSync(store.RemnaNodeSyncInput{
+			PanelID:           panel.ID,
+			RemnaUUID:         uuid,
+			Name:              n.Name,
+			Address:           n.Address,
+			ConfigProfileUUID: n.ConfigProfileUUID(),
+			InboundUUIDs:      inboundUUIDs,
+			InboundTags:       tags,
+			ProtocolDerived:   proto,
+			UsersOnline:       online,
+			NodeOK:            nodeOK,
+			At:                now,
+		}); err != nil {
+			p.logger.Warn("remna node catalog upsert", "panel", panel.ID, "node", uuid, "err", err)
+		}
+		if err := p.store.AppendRemnaNodeOnlineSample(panel.ID, uuid, now, online, nodeOK); err != nil {
+			p.logger.Warn("remna node sample append", "panel", panel.ID, "node", uuid, "err", err)
+		}
 	}
 
 	online := SumUsersOnline(nodes)
