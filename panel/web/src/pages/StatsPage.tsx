@@ -600,15 +600,15 @@ export default function StatsPage() {
                 {statsScope === 'nodes' && !selectedNode ? (
                   <div className="stack stats-body stats-nodes-list-wrap">
                     <div className="row stats-nodes-toolbar" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <input
-                        className="input"
-                        type="search"
-                        placeholder="Поиск: имя, адрес, панель…"
-                        value={nodeQuery}
-                        onChange={(e) => setNodeQuery(e.target.value)}
-                        aria-label="Поиск нод"
-                        style={{ flex: '1 1 14rem', minWidth: '10rem' }}
-                      />
+                      <label className="nodes-search stats-nodes-search" title="Поиск по имени, адресу или панели">
+                        <input
+                          type="search"
+                          placeholder="Поиск: имя, адрес, панель…"
+                          value={nodeQuery}
+                          onChange={(e) => setNodeQuery(e.target.value)}
+                          aria-label="Поиск нод"
+                        />
+                      </label>
                       <span className="muted" style={{ alignSelf: 'center', fontSize: '0.85rem' }}>
                         {filteredStatsNodes.length}
                         {filteredStatsNodes.length !== statsNodes.length

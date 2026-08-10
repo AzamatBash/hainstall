@@ -2601,6 +2601,13 @@ button.task-image-open {
   margin-top: 0.35rem;
 }
 
+.stats-nodes-toolbar .stats-nodes-search {
+  margin: 0;
+  max-width: none;
+  flex: 1 1 14rem;
+  min-width: 10rem;
+}
+
 .stats-nodes-list {
   display: flex;
   flex-direction: column;
