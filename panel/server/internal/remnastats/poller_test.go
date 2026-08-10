@@ -43,3 +43,17 @@ func TestSumTrafficRates(t *testing.T) {
 		t.Fatalf("empty = %v/%v, want 0/0", down, up)
 	}
 }
+
+func TestNodeTrafficRates(t *testing.T) {
+	n := remna.Node{System: &remna.NodeSystem{Stats: remna.NodeSystemStats{
+		Interface: &remna.NetworkIface{RxBytesPerSec: 12, TxBytesPerSec: 34},
+	}}}
+	down, up := NodeTrafficRates(&n)
+	if down != 34 || up != 12 {
+		t.Fatalf("NodeTrafficRates = %v/%v, want 34/12", down, up)
+	}
+	down, up = NodeTrafficRates(nil)
+	if down != 0 || up != 0 {
+		t.Fatalf("nil = %v/%v, want 0/0", down, up)
+	}
+}

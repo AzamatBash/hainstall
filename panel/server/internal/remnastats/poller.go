@@ -167,6 +167,10 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 		if err := p.store.AppendRemnaNodeOnlineSample(panel.ID, uuid, now, online, nodeOK); err != nil {
 			p.logger.Warn("remna node sample append", "panel", panel.ID, "node", uuid, "err", err)
 		}
+		nodeDown, nodeUp := NodeTrafficRates(&n)
+		if err := p.store.AppendRemnaNodeTrafficSample(panel.ID, uuid, now, nodeDown, nodeUp); err != nil {
+			p.logger.Warn("remna node traffic append", "panel", panel.ID, "node", uuid, "err", err)
+		}
 	}
 
 	online := SumUsersOnline(nodes)
@@ -197,17 +201,25 @@ func SumUsersOnline(nodes []remna.Node) int {
 // Returns chart convention: downBps = TX (отдача), upBps = RX (загрузка).
 func SumTrafficRates(nodes []remna.Node) (downBps, upBps float64) {
 	for i := range nodes {
-		n := &nodes[i]
-		if n.System == nil || n.System.Stats.Interface == nil {
-			continue
-		}
-		iface := n.System.Stats.Interface
-		if iface.TxBytesPerSec > 0 {
-			downBps += iface.TxBytesPerSec
-		}
-		if iface.RxBytesPerSec > 0 {
-			upBps += iface.RxBytesPerSec
-		}
+		d, u := NodeTrafficRates(&nodes[i])
+		downBps += d
+		upBps += u
+	}
+	return downBps, upBps
+}
+
+// NodeTrafficRates returns chart convention rates for one node:
+// downBps = TX (отдача), upBps = RX (загрузка).
+func NodeTrafficRates(n *remna.Node) (downBps, upBps float64) {
+	if n == nil || n.System == nil || n.System.Stats.Interface == nil {
+		return 0, 0
+	}
+	iface := n.System.Stats.Interface
+	if iface.TxBytesPerSec > 0 {
+		downBps = iface.TxBytesPerSec
+	}
+	if iface.RxBytesPerSec > 0 {
+		upBps = iface.RxBytesPerSec
 	}
 	return downBps, upBps
 }

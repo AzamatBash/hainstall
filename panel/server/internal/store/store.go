@@ -221,6 +221,15 @@ CREATE TABLE IF NOT EXISTS remna_node_online_samples (
   PRIMARY KEY (panel_id, remna_uuid, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_node_online_ts ON remna_node_online_samples(ts);
+CREATE TABLE IF NOT EXISTS remna_node_traffic_samples (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  down_bps REAL NOT NULL,
+  up_bps REAL NOT NULL,
+  PRIMARY KEY (panel_id, remna_uuid, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_remna_node_traffic_ts ON remna_node_traffic_samples(ts);
 `)
 	if err != nil {
 		return err

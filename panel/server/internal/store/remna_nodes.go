@@ -136,6 +136,44 @@ WHERE panel_id = ? AND remna_uuid = ? AND ts < ?`, panelID, remnaUUID, cutoff); 
 	return tx.Commit()
 }
 
+// ListRemnaNodeOnlineSamples returns online history for one node since the given time.
+func (s *Store) ListRemnaNodeOnlineSamples(panelID, remnaUUID string, since time.Time) ([]RemnaOnlineSample, error) {
+	cutoff := since.UTC().UnixMilli()
+	rows, err := s.db.Query(`
+SELECT ts, online FROM remna_node_online_samples
+WHERE panel_id = ? AND remna_uuid = ? AND ts >= ?
+ORDER BY ts ASC`, panelID, remnaUUID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RemnaOnlineSample, 0, 128)
+	for rows.Next() {
+		var p RemnaOnlineSample
+		if err := rows.Scan(&p.TS, &p.Online); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// LatestRemnaNodeOnlineSample returns the newest online sample for a node, if any.
+func (s *Store) LatestRemnaNodeOnlineSample(panelID, remnaUUID string) (*RemnaOnlineSample, error) {
+	row := s.db.QueryRow(`
+SELECT ts, online FROM remna_node_online_samples
+WHERE panel_id = ? AND remna_uuid = ?
+ORDER BY ts DESC LIMIT 1`, panelID, remnaUUID)
+	var p RemnaOnlineSample
+	if err := row.Scan(&p.TS, &p.Online); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
 // RemnaNodePatch is a partial update for analytics attributes.
 type RemnaNodePatch struct {
 	ProtocolOverride   *string

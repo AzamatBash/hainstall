@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
+  formatBitrateShort,
   type AnalyticsNode,
   type RemnaPanel,
   type WeekAnalytics,
@@ -15,6 +16,26 @@ import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirr
 type HoursPreset = 1 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
 type AnalyticsTab = 'week' | 'nodes'
+type StatsScope = 'panel' | 'nodes'
+
+type StatsNode = {
+  panel_id: string
+  panel_name?: string
+  remna_uuid: string
+  name: string
+  address: string
+  protocol?: string
+  users_online: number
+  node_ok: boolean
+  down_bps?: number
+  up_bps?: number
+  traffic_at?: string
+  last_seen_at?: number
+}
+
+function nodeKey(n: { panel_id: string; remna_uuid: string }) {
+  return `${n.panel_id}:${n.remna_uuid}`
+}
 
 const PRESETS: { hours: HoursPreset; label: string }[] = [
   { hours: 1, label: '1 час' },
@@ -99,8 +120,12 @@ function StatsTitleHelp({ title, help }: { title: string; help: string }) {
 
 export default function StatsPage() {
   const [mode, setMode] = useState<Mode>('stats')
+  const [statsScope, setStatsScope] = useState<StatsScope>('panel')
   const [panels, setPanels] = useState<RemnaPanel[]>([])
   const [activeId, setActiveId] = useState('')
+  const [statsNodes, setStatsNodes] = useState<StatsNode[]>([])
+  const [selectedNodeKey, setSelectedNodeKey] = useState('')
+  const [nodeQuery, setNodeQuery] = useState('')
   const [onlineHours, setOnlineHours] = useState<HoursPreset>(24)
   const [trafficHours, setTrafficHours] = useState<HoursPreset>(24)
   const [points, setPoints] = useState<OnlinePoint[]>([])
@@ -128,6 +153,10 @@ export default function StatsPage() {
 
   const activeRef = useRef(activeId)
   activeRef.current = activeId
+  const statsScopeRef = useRef(statsScope)
+  statsScopeRef.current = statsScope
+  const selectedNodeKeyRef = useRef(selectedNodeKey)
+  selectedNodeKeyRef.current = selectedNodeKey
   const onlineHoursRef = useRef(onlineHours)
   onlineHoursRef.current = onlineHours
   const trafficHoursRef = useRef(trafficHours)
@@ -150,93 +179,123 @@ export default function StatsPage() {
     }
   }, [])
 
-  const loadOnlineSeries = useCallback(async (panelId: string, windowHours: number) => {
-    if (!panelId) {
-      setPoints([])
-      setCurrent(null)
-      setOnlineAt('')
-      setOnlineError('')
-      return
-    }
-    setOnlineLoading(true)
-    setError('')
-    try {
-      const onlineRes = await api<{
-        points: OnlinePoint[]
-        current?: number
-        online_at?: string
-        online_error?: string
-      }>(`/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`)
-      setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
-      setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
-      setOnlineAt(onlineRes.online_at || '')
-      setOnlineError(onlineRes.online_error || '')
-      setPanels((list) =>
-        list.map((p) =>
-          p.id === panelId
-            ? {
-                ...p,
-                online: typeof onlineRes.current === 'number' ? onlineRes.current : p.online,
-                online_at: onlineRes.online_at || p.online_at,
-                online_error: onlineRes.online_error || undefined,
-              }
-            : p,
-        ),
-      )
-    } catch (err) {
-      setError(err instanceof Error ? err.message : translateError(String(err)))
-    } finally {
-      setOnlineLoading(false)
-    }
-  }, [])
+  const loadOnlineSeries = useCallback(
+    async (panelId: string, windowHours: number, remnaUUID?: string) => {
+      if (!panelId || (remnaUUID !== undefined && !remnaUUID)) {
+        setPoints([])
+        setCurrent(null)
+        setOnlineAt('')
+        setOnlineError('')
+        return
+      }
+      setOnlineLoading(true)
+      setError('')
+      try {
+        const path = remnaUUID
+          ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/online?hours=${windowHours}`
+          : `/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`
+        const onlineRes = await api<{
+          points: OnlinePoint[]
+          current?: number
+          online_at?: string
+          online_error?: string
+        }>(path)
+        setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
+        setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
+        setOnlineAt(onlineRes.online_at || '')
+        setOnlineError(onlineRes.online_error || '')
+        if (!remnaUUID) {
+          setPanels((list) =>
+            list.map((p) =>
+              p.id === panelId
+                ? {
+                    ...p,
+                    online: typeof onlineRes.current === 'number' ? onlineRes.current : p.online,
+                    online_at: onlineRes.online_at || p.online_at,
+                    online_error: onlineRes.online_error || undefined,
+                  }
+                : p,
+            ),
+          )
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : translateError(String(err)))
+      } finally {
+        setOnlineLoading(false)
+      }
+    },
+    [],
+  )
 
-  const loadTrafficSeries = useCallback(async (panelId: string, windowHours: number) => {
-    if (!panelId) {
-      setTrafficPoints([])
-      setTrafficDown(null)
-      setTrafficUp(null)
-      setTrafficAt('')
-      setTrafficError('')
-      return
-    }
-    setTrafficLoading(true)
-    setError('')
+  const loadTrafficSeries = useCallback(
+    async (panelId: string, windowHours: number, remnaUUID?: string) => {
+      if (!panelId || (remnaUUID !== undefined && !remnaUUID)) {
+        setTrafficPoints([])
+        setTrafficDown(null)
+        setTrafficUp(null)
+        setTrafficAt('')
+        setTrafficError('')
+        return
+      }
+      setTrafficLoading(true)
+      setError('')
+      try {
+        const path = remnaUUID
+          ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/traffic?hours=${windowHours}`
+          : `/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`
+        const trafficRes = await api<{
+          points: TrafficPoint[]
+          current_down_bps?: number
+          current_up_bps?: number
+          traffic_at?: string
+          traffic_error?: string
+        }>(path)
+        setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
+        setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
+        setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
+        setTrafficAt(trafficRes.traffic_at || '')
+        setTrafficError(trafficRes.traffic_error || '')
+        if (!remnaUUID) {
+          setPanels((list) =>
+            list.map((p) =>
+              p.id === panelId
+                ? {
+                    ...p,
+                    down_bps:
+                      typeof trafficRes.current_down_bps === 'number'
+                        ? trafficRes.current_down_bps
+                        : p.down_bps,
+                    up_bps:
+                      typeof trafficRes.current_up_bps === 'number'
+                        ? trafficRes.current_up_bps
+                        : p.up_bps,
+                    traffic_at: trafficRes.traffic_at || p.traffic_at,
+                    traffic_error: trafficRes.traffic_error || undefined,
+                  }
+                : p,
+            ),
+          )
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : translateError(String(err)))
+      } finally {
+        setTrafficLoading(false)
+      }
+    },
+    [],
+  )
+
+  const loadStatsNodes = useCallback(async () => {
     try {
-      const trafficRes = await api<{
-        points: TrafficPoint[]
-        current_down_bps?: number
-        current_up_bps?: number
-        traffic_at?: string
-        traffic_error?: string
-      }>(`/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`)
-      setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
-      setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
-      setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
-      setTrafficAt(trafficRes.traffic_at || '')
-      setTrafficError(trafficRes.traffic_error || '')
-      setPanels((list) =>
-        list.map((p) =>
-          p.id === panelId
-            ? {
-                ...p,
-                down_bps:
-                  typeof trafficRes.current_down_bps === 'number'
-                    ? trafficRes.current_down_bps
-                    : p.down_bps,
-                up_bps:
-                  typeof trafficRes.current_up_bps === 'number'
-                    ? trafficRes.current_up_bps
-                    : p.up_bps,
-                traffic_at: trafficRes.traffic_at || p.traffic_at,
-                traffic_error: trafficRes.traffic_error || undefined,
-              }
-            : p,
-        ),
-      )
+      const res = await api<{ nodes: StatsNode[]; count?: number }>('/api/stats/nodes')
+      const list = Array.isArray(res.nodes) ? res.nodes : []
+      setStatsNodes(list)
+      setSelectedNodeKey((cur) => {
+        if (!cur) return cur
+        return list.some((n) => nodeKey(n) === cur) ? cur : ''
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : translateError(String(err)))
-    } finally {
-      setTrafficLoading(false)
     }
   }, [])
 
@@ -259,17 +318,38 @@ export default function StatsPage() {
 
   useEffect(() => {
     void loadPanels()
-  }, [loadPanels])
+    void loadStatsNodes()
+  }, [loadPanels, loadStatsNodes])
 
   useEffect(() => {
     setZoom(null)
-    if (mode === 'stats' && activeId) void loadOnlineSeries(activeId, onlineHours)
-  }, [mode, activeId, onlineHours, loadOnlineSeries])
+    if (mode !== 'stats') return
+    if (statsScope === 'panel' && activeId) {
+      void loadOnlineSeries(activeId, onlineHours)
+      return
+    }
+    if (statsScope === 'nodes' && selectedNodeKey) {
+      const sep = selectedNodeKey.indexOf(':')
+      const panelId = sep >= 0 ? selectedNodeKey.slice(0, sep) : ''
+      const remnaUUID = sep >= 0 ? selectedNodeKey.slice(sep + 1) : ''
+      if (panelId && remnaUUID) void loadOnlineSeries(panelId, onlineHours, remnaUUID)
+    }
+  }, [mode, statsScope, activeId, selectedNodeKey, onlineHours, loadOnlineSeries])
 
   useEffect(() => {
     setTrafficZoom(null)
-    if (mode === 'stats' && activeId) void loadTrafficSeries(activeId, trafficHours)
-  }, [mode, activeId, trafficHours, loadTrafficSeries])
+    if (mode !== 'stats') return
+    if (statsScope === 'panel' && activeId) {
+      void loadTrafficSeries(activeId, trafficHours)
+      return
+    }
+    if (statsScope === 'nodes' && selectedNodeKey) {
+      const sep = selectedNodeKey.indexOf(':')
+      const panelId = sep >= 0 ? selectedNodeKey.slice(0, sep) : ''
+      const remnaUUID = sep >= 0 ? selectedNodeKey.slice(sep + 1) : ''
+      if (panelId && remnaUUID) void loadTrafficSeries(panelId, trafficHours, remnaUUID)
+    }
+  }, [mode, statsScope, activeId, selectedNodeKey, trafficHours, loadTrafficSeries])
 
   useEffect(() => {
     if (mode === 'analytics') void loadAnalytics()
@@ -278,16 +358,47 @@ export default function StatsPage() {
   useEffect(() => {
     const id = window.setInterval(() => {
       void loadPanels()
-      if (mode === 'stats' && activeRef.current) {
-        void loadOnlineSeries(activeRef.current, onlineHoursRef.current)
-        void loadTrafficSeries(activeRef.current, trafficHoursRef.current)
+      void loadStatsNodes()
+      if (mode === 'stats') {
+        if (statsScopeRef.current === 'panel' && activeRef.current) {
+          void loadOnlineSeries(activeRef.current, onlineHoursRef.current)
+          void loadTrafficSeries(activeRef.current, trafficHoursRef.current)
+        } else if (statsScopeRef.current === 'nodes' && selectedNodeKeyRef.current) {
+          const key = selectedNodeKeyRef.current
+          const sep = key.indexOf(':')
+          const panelId = sep >= 0 ? key.slice(0, sep) : ''
+          const remnaUUID = sep >= 0 ? key.slice(sep + 1) : ''
+          if (panelId && remnaUUID) {
+            void loadOnlineSeries(panelId, onlineHoursRef.current, remnaUUID)
+            void loadTrafficSeries(panelId, trafficHoursRef.current, remnaUUID)
+          }
+        }
       }
       if (mode === 'analytics') void loadAnalytics()
     }, 60_000)
     return () => window.clearInterval(id)
-  }, [mode, loadPanels, loadOnlineSeries, loadTrafficSeries, loadAnalytics])
+  }, [mode, loadPanels, loadStatsNodes, loadOnlineSeries, loadTrafficSeries, loadAnalytics])
 
   const active = panels.find((p) => p.id === activeId) || null
+  const selectedNode = statsNodes.find((n) => nodeKey(n) === selectedNodeKey) || null
+  const filteredStatsNodes = useMemo(() => {
+    const q = nodeQuery.trim().toLowerCase()
+    if (!q) return statsNodes
+    return statsNodes.filter((n) => {
+      const hay = `${n.name} ${n.address} ${n.panel_name || ''} ${n.protocol || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [statsNodes, nodeQuery])
+  const chartSubject =
+    statsScope === 'nodes' && selectedNode
+      ? `Нода: ${selectedNode.name}${selectedNode.panel_name ? ` · ${selectedNode.panel_name}` : ''}.`
+      : active
+        ? `Панель: ${active.name}.`
+        : ''
+  const showCharts =
+    mode === 'stats' &&
+    ((statsScope === 'panel' && !!active) || (statsScope === 'nodes' && !!selectedNode))
+
   const displayPoints = useMemo((): MetricPoint[] => {
     const src = !zoom ? points : points.filter((p) => p.t >= zoom.from && p.t <= zoom.to)
     return src.map((p) => ({ t: p.t, value: p.online }))
@@ -402,8 +513,10 @@ export default function StatsPage() {
             className="btn btn-sm"
             type="button"
             onClick={() => {
-              if (mode === 'stats') void loadPanels()
-              else void loadAnalytics()
+              if (mode === 'stats') {
+                void loadPanels()
+                void loadStatsNodes()
+              } else void loadAnalytics()
             }}
           >
             Обновить
@@ -454,8 +567,12 @@ export default function StatsPage() {
                       <button
                         key={p.id}
                         type="button"
-                        className={`stats-panel-chip${activeId === p.id ? ' active' : ''}`}
-                        onClick={() => setActiveId(p.id)}
+                        className={`stats-panel-chip${statsScope === 'panel' && activeId === p.id ? ' active' : ''}`}
+                        onClick={() => {
+                          setStatsScope('panel')
+                          setSelectedNodeKey('')
+                          setActiveId(p.id)
+                        }}
                         title={p.base_url}
                       >
                         <span className="stats-panel-chip-name">{p.name}</span>
@@ -464,16 +581,111 @@ export default function StatsPage() {
                         ) : null}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      className={`stats-panel-chip${statsScope === 'nodes' ? ' active' : ''}`}
+                      onClick={() => {
+                        setStatsScope('nodes')
+                        setSelectedNodeKey('')
+                        void loadStatsNodes()
+                      }}
+                      title="Статистика по нодам"
+                    >
+                      <span className="stats-panel-chip-name">Ноды</span>
+                      <span className="stats-panel-chip-online mono">{statsNodes.length}</span>
+                    </button>
                   </div>
                 </div>
 
-                {active && (
+                {statsScope === 'nodes' && !selectedNode ? (
+                  <div className="stack stats-body stats-nodes-list-wrap">
+                    <div className="row stats-nodes-toolbar" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <input
+                        className="input"
+                        type="search"
+                        placeholder="Поиск: имя, адрес, панель…"
+                        value={nodeQuery}
+                        onChange={(e) => setNodeQuery(e.target.value)}
+                        aria-label="Поиск нод"
+                        style={{ flex: '1 1 14rem', minWidth: '10rem' }}
+                      />
+                      <span className="muted" style={{ alignSelf: 'center', fontSize: '0.85rem' }}>
+                        {filteredStatsNodes.length}
+                        {filteredStatsNodes.length !== statsNodes.length
+                          ? ` из ${statsNodes.length}`
+                          : ''}
+                      </span>
+                    </div>
+                    {statsNodes.length === 0 ? (
+                      <p className="muted">
+                        Каталог нод пуст — дождитесь опроса Remnawave (раз в 5 минут) или
+                        синхронизируйте во вкладке «Аналитика → Ноды».
+                      </p>
+                    ) : filteredStatsNodes.length === 0 ? (
+                      <p className="muted">Ничего не найдено.</p>
+                    ) : (
+                      <div className="stats-nodes-list" role="list">
+                        {filteredStatsNodes.map((n) => (
+                          <button
+                            key={nodeKey(n)}
+                            type="button"
+                            className="stats-node-row"
+                            role="listitem"
+                            onClick={() => setSelectedNodeKey(nodeKey(n))}
+                          >
+                            <span
+                              className={`analytics-status-dot${n.node_ok ? ' ok' : ' bad'}`}
+                              title={n.node_ok ? 'online' : 'offline'}
+                              aria-hidden
+                            />
+                            <span className="stats-node-main">
+                              <span className="stats-node-title">{n.name}</span>
+                              <span className="muted mono stats-node-meta">
+                                {n.panel_name || '—'}
+                                {n.address ? ` · ${n.address}` : ''}
+                              </span>
+                            </span>
+                            <span className="stats-node-metrics mono">
+                              <span title="Онлайн">{n.users_online}</span>
+                              <span className="muted" title="TX / RX">
+                                {formatBitrateShort(n.down_bps)} / {formatBitrateShort(n.up_bps)}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {showCharts && (
                   <div className="stack stats-body">
+                    {statsScope === 'nodes' && selectedNode ? (
+                      <div className="row stats-node-detail-bar" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setSelectedNodeKey('')}
+                        >
+                          ← К списку нод
+                        </button>
+                        <div className="stats-node-detail-title">
+                          <strong>{selectedNode.name}</strong>
+                          <span className="muted mono" style={{ marginLeft: '0.5rem', fontSize: '0.85rem' }}>
+                            {selectedNode.panel_name || ''}
+                            {selectedNode.address ? ` · ${selectedNode.address}` : ''}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+
                     <StatsTitleHelp
                       title="Онлайн пользователей"
                       help={[
-                        'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
-                        active ? `Панель: ${active.name}.` : '',
+                        statsScope === 'nodes'
+                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней.'
+                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                        chartSubject,
                         onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
                       ]
                         .filter(Boolean)
@@ -524,10 +736,12 @@ export default function StatsPage() {
 
                     <div className="stats-traffic-block">
                       <StatsTitleHelp
-                        title="Общий трафик"
+                        title={statsScope === 'nodes' ? 'Трафик ноды' : 'Общий трафик'}
                         help={[
-                          'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
-                          active ? `Панель: ${active.name}.` : '',
+                          statsScope === 'nodes'
+                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней.'
+                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                          chartSubject,
                           trafficAt ? `Опрос: ${formatAt(trafficAt)}.` : '',
                         ]
                           .filter(Boolean)

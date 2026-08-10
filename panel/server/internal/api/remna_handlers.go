@@ -782,6 +782,116 @@ func (s *Server) handleRemnaPanelTraffic(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleStatsNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.store.ListRemnaNodeCatalog()
+	if err != nil {
+		s.logger.Error("list stats nodes", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	traffic, err := s.store.MapLatestRemnaNodeTraffic()
+	if err != nil {
+		s.logger.Error("map node traffic", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		m := map[string]any{
+			"panel_id":     n.PanelID,
+			"panel_name":   n.PanelName,
+			"remna_uuid":   n.RemnaUUID,
+			"name":         n.Name,
+			"address":      n.Address,
+			"protocol":     n.Protocol,
+			"users_online": n.UsersOnline,
+			"node_ok":      n.NodeOK,
+			"last_seen_at": n.LastSeenAt,
+		}
+		if sample, ok := traffic[n.PanelID+"\x00"+n.RemnaUUID]; ok {
+			m["down_bps"] = sample.DownBps
+			m["up_bps"] = sample.UpBps
+			m["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"nodes": out, "count": len(out)})
+}
+
+func (s *Server) handleRemnaNodeOnline(w http.ResponseWriter, r *http.Request) {
+	panelID := r.PathValue("id")
+	uuid := r.PathValue("uuid")
+	node, err := s.store.GetRemnaNodeCatalog(panelID, uuid)
+	if err != nil {
+		s.logger.Error("get remna node", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if node == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+	hours := remnaOnlineWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	points, err := s.store.ListRemnaNodeOnlineSamples(panelID, uuid, since)
+	if err != nil {
+		s.logger.Error("list remna node online", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := map[string]any{
+		"panel_id":   panelID,
+		"remna_uuid": uuid,
+		"name":       node.Name,
+		"hours":      hours,
+		"points":     points,
+		"current":    node.UsersOnline,
+	}
+	if sample, err := s.store.LatestRemnaNodeOnlineSample(panelID, uuid); err == nil && sample != nil {
+		out["current"] = sample.Online
+		out["online_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+	} else if node.LastSeenAt > 0 {
+		out["online_at"] = time.UnixMilli(node.LastSeenAt).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRemnaNodeTraffic(w http.ResponseWriter, r *http.Request) {
+	panelID := r.PathValue("id")
+	uuid := r.PathValue("uuid")
+	node, err := s.store.GetRemnaNodeCatalog(panelID, uuid)
+	if err != nil {
+		s.logger.Error("get remna node", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if node == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+	hours := remnaOnlineWindowHours(r)
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	points, err := s.store.ListRemnaNodeTrafficSamples(panelID, uuid, since)
+	if err != nil {
+		s.logger.Error("list remna node traffic", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	out := map[string]any{
+		"panel_id":   panelID,
+		"remna_uuid": uuid,
+		"name":       node.Name,
+		"hours":      hours,
+		"points":     points,
+	}
+	if sample, err := s.store.LatestRemnaNodeTrafficSample(panelID, uuid); err == nil && sample != nil {
+		out["current_down_bps"] = sample.DownBps
+		out["current_up_bps"] = sample.UpBps
+		out["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func publicRemnaLink(l store.BackendRemnaLink) map[string]any {
 	return map[string]any{
 		"node_id":        l.NodeID,

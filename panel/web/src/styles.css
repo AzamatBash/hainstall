@@ -2597,6 +2597,75 @@ button.task-image-open {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
+.stats-nodes-list-wrap {
+  margin-top: 0.35rem;
+}
+
+.stats-nodes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: min(70vh, 42rem);
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.stats-node-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 70%, var(--bg-elev));
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.stats-node-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+
+.stats-node-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.stats-node-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-node-meta {
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-node-metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+}
+
+.stats-node-detail-bar {
+  align-items: center;
+  margin-bottom: 0.15rem;
+}
+
 .stats-section-title {
   display: inline-flex;
   align-items: center;
