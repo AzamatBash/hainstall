@@ -4,11 +4,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/azabash/hapanel/agent/internal/store"
 )
+
+// haproxyNameRe matches characters that are unsafe in HAProxy server/backend names.
+// Spaces and most punctuation break `server NAME addr:port` parsing.
+var haproxyNameRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// SanitizeName turns a free-form label into a HAProxy-safe identifier.
+// Empty input becomes "srv".
+func SanitizeName(name string) string {
+	name = strings.TrimSpace(name)
+	name = haproxyNameRe.ReplaceAllString(name, "_")
+	name = strings.Trim(name, "._-")
+	for strings.Contains(name, "__") {
+		name = strings.ReplaceAll(name, "__", "_")
+	}
+	if name == "" {
+		return "srv"
+	}
+	return name
+}
 
 // ConfigWriter regenerates HAProxy include snippets from persisted servers.
 // Each file is a full top-level `backend` section — HAProxy only allows
@@ -95,7 +115,7 @@ func renderBackendSection(backend string, servers []store.Server) string {
 			weight = 100
 		}
 		fmt.Fprintf(&b, "    server %s %s:%d weight %d\n",
-			s.Name, s.Address, s.Port, weight)
+			SanitizeName(s.Name), s.Address, s.Port, weight)
 	}
 	return b.String()
 }

@@ -184,7 +184,8 @@ volumes:
 # Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
     maxconn 50000
-    nbthread 4
+    nbthread 2
+    hard-stop-after 5m
     stats socket ipv4@0.0.0.0:9999 level admin
     stats timeout 30s
     master-worker
@@ -192,6 +193,7 @@ global
 defaults
     mode    tcp
     no log
+    option  splice-auto
     timeout connect 5s
     timeout client  30m
     timeout server  30m

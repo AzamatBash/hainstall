@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
@@ -14,12 +17,36 @@ import (
 // never bind-mount a single host file (Docker creates a directory if missing).
 const BaseConfigFile = "00-hapanel-base.cfg"
 
-// BaseConfigBody is the canonical HAProxy frontends for client traffic.
-const BaseConfigBody = `# Managed by hapanel agent — do not edit by hand
+// nbthreadCount returns HAProxy worker threads: HAPROXY_NBTHREAD env, else
+// host/container CPU count (capped). Oversized nbthread on tiny VPS wastes CPU.
+func nbthreadCount() int {
+	if v := strings.TrimSpace(os.Getenv("HAPROXY_NBTHREAD")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n > 0 {
+			if n > 64 {
+				return 64
+			}
+			return n
+		}
+	}
+	n := runtime.NumCPU()
+	if n < 1 {
+		return 1
+	}
+	if n > 64 {
+		return 64
+	}
+	return n
+}
+
+// BaseConfigBody returns the canonical HAProxy frontends for client traffic.
+func BaseConfigBody() string {
+	return fmt.Sprintf(`# Managed by hapanel agent — do not edit by hand
 # Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
     maxconn 50000
-    nbthread 4
+    nbthread %d
+    hard-stop-after 5m
     stats socket ipv4@0.0.0.0:9999 level admin
     stats timeout 30s
     master-worker
@@ -27,6 +54,7 @@ global
 defaults
     mode    tcp
     no log
+    option  splice-auto
     timeout connect 5s
     timeout client  30m
     timeout server  30m
@@ -51,7 +79,8 @@ frontend https_front
 backend acme
     mode http
     server local 127.0.0.1:8080
-`
+`, nbthreadCount())
+}
 
 // EnsureBaseConfig writes frontends into backends.d and reloads HAProxy when needed.
 func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client) (changed bool, err error) {
@@ -62,11 +91,12 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 		return false, err
 	}
 	path := filepath.Join(backendsDir, BaseConfigFile)
+	body := BaseConfigBody()
 	prev, _ := os.ReadFile(path)
-	if string(prev) == BaseConfigBody {
+	if string(prev) == body {
 		return false, nil
 	}
-	if err := atomicWrite(path, BaseConfigBody); err != nil {
+	if err := atomicWrite(path, body); err != nil {
 		return false, err
 	}
 	if docker == nil {

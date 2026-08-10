@@ -216,6 +216,9 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 	if req.Weight <= 0 {
 		req.Weight = 100
 	}
+	// HAProxy rejects spaces/punctuation in server names (`server DE Selectel OUT …`
+	// is parsed as unknown keyword OUT and the backend ends up with zero servers).
+	req.Name = haproxy.SanitizeName(req.Name)
 
 	srv := store.Server{
 		Backend: req.Backend,
@@ -262,11 +265,12 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 	backend := chi.URLParam(r, "backend")
-	name := chi.URLParam(r, "name")
-	if backend == "" || name == "" {
+	rawName := chi.URLParam(r, "name")
+	if backend == "" || rawName == "" {
 		writeErr(w, http.StatusBadRequest, "backend and name are required")
 		return
 	}
+	name := haproxy.SanitizeName(rawName)
 
 	removed, err := d.Store.Delete(backend, name)
 	if err != nil {
