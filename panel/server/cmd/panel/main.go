@@ -44,6 +44,15 @@ func main() {
 	}
 	defer st.Close()
 
+	if os.Getenv("PANEL_OLCRTC_SEED") == "1" {
+		// Seed is a no-op: use POST /api/olcrtc/nodes/deploy-local instead.
+		if _, err := st.SeedOlcrtcDemo(); err != nil {
+			logger.Error("olcrtc demo seed", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("olcrtc seed skipped — use deploy-local")
+	}
+
 	cookiePath := "/"
 	if cfg.BasePath != "" {
 		cookiePath = cfg.BasePath
@@ -57,14 +66,15 @@ func main() {
 	remnaStats := remnastats.New(st, secretsKey, logger)
 
 	apiSrv := api.New(st, au, ag, logger, api.Options{
-		SecretsKey:  secretsKey,
-		GeminiKey:   cfg.GeminiAPIKey,
-		GroqKey:     cfg.GroqAPIKey,
-		LLMProvider: cfg.LLMProvider,
-		PanelIP:     cfg.PanelIP,
-		LLMProxy:    cfg.LLMHTTPProxy,
-		ImagesDir:   imagesDir,
-		RemnaStats:  remnaStats,
+		SecretsKey:         secretsKey,
+		GeminiKey:          cfg.GeminiAPIKey,
+		GroqKey:            cfg.GroqAPIKey,
+		LLMProvider:        cfg.LLMProvider,
+		PanelIP:            cfg.PanelIP,
+		LLMProxy:           cfg.LLMHTTPProxy,
+		ImagesDir:          imagesDir,
+		RemnaStats:         remnaStats,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
 	})
 
 	mux := http.NewServeMux()

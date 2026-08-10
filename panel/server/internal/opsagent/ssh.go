@@ -79,7 +79,7 @@ func (c *SSHClient) Run(cmd string, timeout time.Duration) (string, error) {
 	}
 }
 
-// WriteFile writes content to a remote path via base64 (safe for binary/text).
+// WriteFile writes content to a remote path via base64 (safe for small text).
 func (c *SSHClient) WriteFile(path string, content []byte) error {
 	dir := path
 	if i := strings.LastIndex(path, "/"); i >= 0 {
@@ -89,6 +89,49 @@ func (c *SSHClient) WriteFile(path string, content []byte) error {
 	cmd := fmt.Sprintf(`mkdir -p %q && echo %s | base64 -d > %q && chmod 644 %q`, dir, shellQuote(b64), path, path)
 	_, err := c.Run(cmd, 2*time.Minute)
 	return err
+}
+
+// Upload streams content to a remote path (for binaries). Sets mode 0755.
+func (c *SSHClient) Upload(path string, content []byte) error {
+	dir := path
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		dir = path[:i]
+	}
+	session, err := c.client.NewSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	session.Stdout = &buf
+	session.Stderr = &buf
+
+	cmd := fmt.Sprintf(`mkdir -p %q && cat > %q && chmod 755 %q`, dir, path, path)
+	done := make(chan error, 1)
+	go func() { done <- session.Run(cmd) }()
+
+	if _, err := stdin.Write(content); err != nil {
+		_ = stdin.Close()
+		<-done
+		return fmt.Errorf("upload write: %w", err)
+	}
+	_ = stdin.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("%w\n%s", err, truncate(buf.String(), 2000))
+		}
+		return nil
+	case <-time.After(10 * time.Minute):
+		_ = session.Signal(ssh.SIGKILL)
+		return fmt.Errorf("upload timeout")
+	}
 }
 
 func shellQuote(s string) string {

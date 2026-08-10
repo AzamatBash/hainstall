@@ -7,6 +7,7 @@ import NodesPage from './pages/NodesPage'
 import NodeDetailPage from './pages/NodeDetailPage'
 import TasksPage from './pages/TasksPage'
 import StatsPage from './pages/StatsPage'
+import OlcrtcPage from './pages/OlcrtcPage'
 
 function Authed({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
@@ -81,6 +82,15 @@ export default function App() {
           </Authed>
         }
       />
+      <Route
+        path="/olcnode"
+        element={
+          <Authed>
+            <OlcrtcPage />
+          </Authed>
+        }
+      />
+      <Route path="/olcrtc" element={<Navigate to="/olcnode" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

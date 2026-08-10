@@ -13,6 +13,7 @@ import (
 
 	"github.com/azabash/hapanel/panel/internal/agent"
 	"github.com/azabash/hapanel/panel/internal/auth"
+	"github.com/azabash/hapanel/panel/internal/olcnode"
 	"github.com/azabash/hapanel/panel/internal/opsagent"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/remna"
@@ -21,20 +22,23 @@ import (
 )
 
 type Options struct {
-	SecretsKey  string
-	GeminiKey   string
-	GroqKey     string
-	LLMProvider string
-	PanelIP     string
-	LLMProxy    string
-	ImagesDir   string
-	RemnaStats  *remnastats.Poller
+	SecretsKey         string
+	GeminiKey          string
+	GroqKey            string
+	LLMProvider        string
+	PanelIP            string
+	LLMProxy           string
+	ImagesDir          string
+	RemnaStats         *remnastats.Poller
+	InsecureSkipVerify bool
+	OlcrtcAgent        *olcnode.Client
 }
 
 type Server struct {
 	store      *store.Store
 	auth       *auth.Service
 	agent      *agent.Client
+	olcrtc     *olcnode.Client
 	remna      *remna.Client
 	ops        *opsagent.Runner
 	remnaStats *remnastats.Poller
@@ -66,10 +70,15 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 			logger.Info("llm http client via proxy configured")
 		}
 	}
+	olc := opt.OlcrtcAgent
+	if olc == nil {
+		olc = olcnode.New(opt.InsecureSkipVerify)
+	}
 	s := &Server{
 		store:                st,
 		auth:                 au,
 		agent:                ag,
+		olcrtc:               olc,
 		remna:                remna.New(),
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		remnaStats:           opt.RemnaStats,
@@ -168,6 +177,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/tasks/{id}/images", s.requireAuth(s.handleUploadTaskImage))
 	s.mux.HandleFunc("GET /api/tasks/{id}/images/{imageId}", s.requireAuth(s.handleGetTaskImage))
 	s.mux.HandleFunc("DELETE /api/tasks/{id}/images/{imageId}", s.requireAuth(s.handleDeleteTaskImage))
+
+	s.mux.HandleFunc("GET /api/olcrtc/nodes", s.requireAuth(s.handleListOlcrtcNodes))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes", s.requireAuth(s.handleCreateOlcrtcNode))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes/deploy-local", s.requireAuth(s.handleDeployOlcrtcLocal))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes/deploy", s.requireAuth(s.handleDeployOlcrtcSSH))
+	s.mux.HandleFunc("GET /api/olcrtc/deploy-jobs/{id}", s.requireAuth(s.handleOlcrtcDeployJob))
+	s.mux.HandleFunc("GET /api/olcrtc/nodes/{id}", s.requireAuth(s.handleGetOlcrtcNode))
+	s.mux.HandleFunc("PUT /api/olcrtc/nodes/{id}", s.requireAuth(s.handleUpdateOlcrtcNode))
+	s.mux.HandleFunc("DELETE /api/olcrtc/nodes/{id}", s.requireAuth(s.handleDeleteOlcrtcNode))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes/{id}/restart", s.requireAuth(s.handleOlcrtcNodeRestart))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes/{id}/refresh-status", s.requireAuth(s.handleOlcrtcNodeRefreshStatus))
+	s.mux.HandleFunc("GET /api/olcrtc/nodes/{id}/instances", s.requireAuth(s.handleListOlcrtcNodeInstances))
+	s.mux.HandleFunc("POST /api/olcrtc/nodes/{id}/instances", s.requireAuth(s.handleCreateOlcrtcInstance))
+	s.mux.HandleFunc("PUT /api/olcrtc/instances/{id}", s.requireAuth(s.handleUpdateOlcrtcInstance))
+	s.mux.HandleFunc("DELETE /api/olcrtc/instances/{id}", s.requireAuth(s.handleDeleteOlcrtcInstance))
+	s.mux.HandleFunc("POST /api/olcrtc/instances/{id}/restart", s.requireAuth(s.handleRestartOlcrtcInstance))
+	s.mux.HandleFunc("GET /api/olcrtc/instances/{id}/uri", s.requireAuth(s.handleOlcrtcInstanceURI))
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {

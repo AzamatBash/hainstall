@@ -68,6 +68,10 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign_keys: %w", err)
+	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
@@ -230,6 +234,54 @@ CREATE TABLE IF NOT EXISTS remna_node_traffic_samples (
   PRIMARY KEY (panel_id, remna_uuid, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_node_traffic_ts ON remna_node_traffic_samples(ts);
+CREATE TABLE IF NOT EXISTS olcrtc_nodes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  agent_url TEXT NOT NULL DEFAULT '',
+  host TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  provider_id TEXT NOT NULL DEFAULT '',
+  provider_account_id TEXT NOT NULL DEFAULT '',
+  token TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'unknown',
+  last_error TEXT NOT NULL DEFAULT '',
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS olcrtc_instances (
+  id TEXT PRIMARY KEY,
+  node_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  transport TEXT NOT NULL,
+  room_id TEXT NOT NULL,
+  key_hex TEXT NOT NULL,
+  comment TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY(node_id) REFERENCES olcrtc_nodes(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_olcrtc_instances_node ON olcrtc_instances(node_id);
+CREATE TABLE IF NOT EXISTS olcrtc_subs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  refresh TEXT NOT NULL DEFAULT '10m',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS olcrtc_sub_members (
+  sub_id TEXT NOT NULL,
+  instance_id TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  node_comment TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (sub_id, instance_id),
+  FOREIGN KEY(sub_id) REFERENCES olcrtc_subs(id) ON DELETE CASCADE,
+  FOREIGN KEY(instance_id) REFERENCES olcrtc_instances(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_olcrtc_sub_members_sub ON olcrtc_sub_members(sub_id);
 `)
 	if err != nil {
 		return err
@@ -241,6 +293,18 @@ CREATE INDEX IF NOT EXISTS idx_remna_node_traffic_ts ON remna_node_traffic_sampl
 		return err
 	}
 	if err := s.ensureColumn("tasks", "title", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("olcrtc_nodes", "token", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("olcrtc_nodes", "country", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("olcrtc_nodes", "provider_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("olcrtc_nodes", "provider_account_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if err := s.migrateRemnaTrafficSamplesToRates(); err != nil {

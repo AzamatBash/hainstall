@@ -270,11 +270,52 @@ export function statusLabel(status?: string | null): string {
       return 'Онлайн'
     case 'offline':
       return 'Офлайн'
+    case 'degraded':
+      return 'Деградация'
     case 'unknown':
       return 'Не подключена'
     default:
       return status ? String(status) : 'Неизвестно'
   }
+}
+
+export type OlcrtcProvider = 'jitsi' | 'telemost' | 'wbstream'
+export type OlcrtcTransport = 'datachannel' | 'vp8channel' | 'seichannel' | 'videochannel'
+
+export interface OlcrtcNode {
+  id: string
+  name: string
+  agent_url: string
+  host: string
+  country?: string
+  provider_id?: string
+  provider_name?: string
+  provider_favicon?: string
+  provider_login_url?: string
+  provider_account_id?: string
+  provider_account_login?: string
+  token?: string
+  has_token?: boolean
+  status: string
+  last_error?: string
+  last_seen_at: string | number
+  created_at: string | number
+  updated_at: string | number
+}
+
+export interface OlcrtcInstance {
+  id: string
+  node_id: string
+  name: string
+  provider: string
+  transport: string
+  room_id: string
+  key_hex?: string
+  comment?: string
+  enabled: boolean
+  status?: string
+  created_at: string | number
+  updated_at: string | number
 }
 
 export function formatLastSeen(iso?: string | null): string {
@@ -309,6 +350,9 @@ export function translateError(msg: string): string {
   if (ERROR_MAP[msg]) return ERROR_MAP[msg]
   if (msg.startsWith('agent unreachable:')) {
     return 'Агент недоступен: ' + msg.slice('agent unreachable:'.length).trim()
+  }
+  if (msg === '404 page not found' || msg.includes('404 page not found')) {
+    return 'olcnode API не найден — выберите ноду olcnode или нажмите «Развернуть olcnode»'
   }
   if (msg.startsWith('unexpected status ')) {
     return 'Неожиданный ответ агента: ' + msg.slice('unexpected status '.length)

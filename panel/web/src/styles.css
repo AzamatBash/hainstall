@@ -847,6 +847,25 @@ a.brand.brand-stats {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent);
 }
 
+.badge.degraded {
+  color: #ffedd5;
+  background: color-mix(in srgb, #f97316 18%, var(--bg-soft));
+  border-color: color-mix(in srgb, #f97316 45%, var(--border));
+}
+
+.badge.degraded::before {
+  background: #f97316;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #f97316 30%, transparent);
+}
+
+a.brand.brand-olcnode {
+  /* "olc" + accent "node" — separate from hanode */
+}
+
+.table-clickable tbody tr.row-selected td {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .status-cell {
   display: flex;
   flex-direction: column;
@@ -2869,4 +2888,85 @@ button.task-image-open {
 .online-chart-plaque-online .mono {
   color: var(--accent);
   font-weight: 600;
+}
+
+.heading-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.help-tip {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.help-tip-btn {
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, var(--border));
+  background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.help-tip-btn:hover,
+.help-tip.open .help-tip-btn,
+.help-tip-btn:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  outline: none;
+}
+
+.help-tip-plaque {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  transform: translateX(-50%);
+  z-index: 50;
+  min-width: 12rem;
+  max-width: 18rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated, var(--bg-soft));
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 28%, transparent);
+  white-space: normal;
+  pointer-events: none;
+}
+
+.help-tip-plaque::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border);
+}
+
+.olc-node-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.olc-node-title {
+  margin: 0;
 }

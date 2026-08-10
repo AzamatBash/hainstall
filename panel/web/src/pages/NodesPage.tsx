@@ -1136,7 +1136,9 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
     <section className="panel agent-panel">
       <h2 style={{ marginTop: 0 }}>Агент развёртывания</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        Сначала playbook сам ставит hanode по SSH. Если шаг падает — подключается Gemini/Groq.
+        Сначала playbook сам ставит <span className="mono">hanode</span> (HAProxy-агент) по SSH.
+        Это не <span className="mono">olcnode</span> — olcRTC живёт в разделе olcnode.
+        Если шаг падает — подключается Gemini/Groq.
       </p>
       {error && <p className="error">{error}</p>}
 
