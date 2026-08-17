@@ -49,11 +49,22 @@ ON CONFLICT(node_id, hour_ts) DO UPDATE SET
 
 // ListTrafficHourlySamples returns hour buckets for a node since the given time.
 func (s *Store) ListTrafficHourlySamples(nodeID string, since time.Time) ([]TrafficHourlySample, error) {
-	cutoff := since.UTC().Truncate(time.Hour).UnixMilli()
-	rows, err := s.db.Query(`
-SELECT hour_ts, rx_bytes, tx_bytes FROM traffic_hourly
-WHERE node_id = ? AND hour_ts >= ?
-ORDER BY hour_ts ASC`, nodeID, cutoff)
+	return s.ListTrafficHourlyRange(nodeID, since, time.Time{})
+}
+
+// ListTrafficHourlyRange returns hour buckets in [from, to] (UTC, inclusive).
+// A zero `to` means no upper bound.
+func (s *Store) ListTrafficHourlyRange(nodeID string, from, to time.Time) ([]TrafficHourlySample, error) {
+	fromTS := from.UTC().Truncate(time.Hour).UnixMilli()
+	q := `SELECT hour_ts, rx_bytes, tx_bytes FROM traffic_hourly
+WHERE node_id = ? AND hour_ts >= ?`
+	args := []any{nodeID, fromTS}
+	if !to.IsZero() {
+		q += ` AND hour_ts <= ?`
+		args = append(args, to.UTC().UnixMilli())
+	}
+	q += ` ORDER BY hour_ts ASC`
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -1101,6 +1101,65 @@ select {
   height: 200px;
 }
 
+.traffic-usage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+
+.traffic-usage-filters input[type='date'] {
+  color-scheme: dark;
+}
+
+.traffic-usage-presets {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.traffic-usage-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.traffic-usage-total {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.traffic-usage-total strong {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.traffic-usage-total.tx strong {
+  color: var(--accent);
+}
+
+.traffic-usage-total.rx strong {
+  color: var(--ok);
+}
+
+.traffic-usage-bar.tx {
+  fill: var(--accent);
+}
+
+.traffic-usage-bar.rx {
+  fill: var(--ok);
+}
+
+.traffic-usage-tip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+
 .traffic-grid {
   stroke: color-mix(in srgb, var(--border) 70%, transparent);
   stroke-width: 1;

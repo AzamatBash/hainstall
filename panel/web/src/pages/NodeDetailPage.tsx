@@ -24,23 +24,31 @@ import { countryLabel } from '../countries'
 import { putNodeCache } from '../nodeCache'
 import SparklineChart, { ChartPoint } from '../components/SparklineChart'
 import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
+import TrafficUsageChart, { type UsagePoint } from '../components/TrafficUsageChart'
 import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
-const TRAFFIC_HOURS_LIVE = [1, 2, 3, 6, 12, 24] as const
-const TRAFFIC_HOURS_LOG = [1, 6, 24, 168, 720, 2160] as const
-/** Max samples kept live in the browser for the longest 5s window (24h @ 5s). */
+const TRAFFIC_HOURS_OPTIONS = [1, 2, 3, 6, 12, 24] as const
 const TRAFFIC_HISTORY_MAX = (24 * 60 * 60) / 5
+const MSK = 'Europe/Moscow'
 
-function trafficHoursLabel(h: number): string {
-  if (h < 24) return `${h} ч`
-  if (h === 24) return '1 день'
-  if (h % 24 === 0) {
-    const d = h / 24
-    return `${d} д`
+function ymdMsk(d = new Date()): string {
+  return d.toLocaleDateString('en-CA', { timeZone: MSK })
+}
+
+function shiftYmd(ymd: string, days: number): string {
+  const ms = Date.parse(`${ymd}T12:00:00+03:00`) + days * 86_400_000
+  return new Date(ms).toLocaleDateString('en-CA', { timeZone: MSK })
+}
+
+function mskRangeMs(fromYmd: string, toYmd: string): { from: number; to: number } {
+  const a = fromYmd <= toYmd ? fromYmd : toYmd
+  const b = fromYmd <= toYmd ? toYmd : fromYmd
+  return {
+    from: Date.parse(`${a}T00:00:00+03:00`),
+    to: Date.parse(`${b}T23:59:59.999+03:00`),
   }
-  return `${h} ч`
 }
 
 function pushPoint(prev: ChartPoint[], v: number, max = HISTORY_MAX): ChartPoint[] {
@@ -223,8 +231,12 @@ export default function NodeDetailPage() {
   const [downHist, setDownHist] = useState<ChartPoint[]>([])
   const [upHist, setUpHist] = useState<ChartPoint[]>([])
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
-  const [trafficHours, setTrafficHours] = useState(1)
-  const [trafficTotals, setTrafficTotals] = useState<{ rx: number; tx: number } | null>(null)
+  const [trafficHours, setTrafficHours] = useState<(typeof TRAFFIC_HOURS_OPTIONS)[number]>(1)
+  const [usageFrom, setUsageFrom] = useState(() => shiftYmd(ymdMsk(), -6))
+  const [usageTo, setUsageTo] = useState(() => ymdMsk())
+  const [usagePoints, setUsagePoints] = useState<UsagePoint[]>([])
+  const [usageTotals, setUsageTotals] = useState({ rx: 0, tx: 0 })
+  const [usageLoading, setUsageLoading] = useState(false)
   const [downBps, setDownBps] = useState<number | null>(null)
   const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
@@ -351,7 +363,6 @@ export default function NodeDetailPage() {
         setUpHist((h) => pushPoint(h, inn))
         setDownHist((h) => pushPoint(h, out))
         setTrafficPoints((prev) => {
-          if (trafficHours > 24) return prev
           const next = [...prev, { t: now, down_bps: out, up_bps: inn }]
           const cutoff = now - trafficHours * 60 * 60 * 1000
           return next.filter((p) => p.t >= cutoff).slice(-TRAFFIC_HISTORY_MAX)
@@ -439,7 +450,8 @@ export default function NodeDetailPage() {
       setTrafficPoints([])
       setDownBps(null)
       setUpBps(null)
-      setTrafficTotals(null)
+      setUsagePoints([])
+      setUsageTotals({ rx: 0, tx: 0 })
       trafficRef.current = null
       setSystem(null)
     }
@@ -450,23 +462,12 @@ export default function NodeDetailPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const q =
-          trafficHours > 24
-            ? `/api/nodes/${id}/traffic?hours=${trafficHours}&granularity=hour`
-            : `/api/nodes/${id}/traffic?hours=${trafficHours}`
-        const res = await api<{
-          points: TrafficPoint[]
-          total_rx_bytes?: number
-          total_tx_bytes?: number
-        }>(q)
+        const res = await api<{ points: TrafficPoint[] }>(
+          `/api/nodes/${id}/traffic?hours=${trafficHours}`,
+        )
         if (cancelled) return
         const pts = Array.isArray(res.points) ? res.points : []
         setTrafficPoints(pts)
-        if (typeof res.total_rx_bytes === 'number' && typeof res.total_tx_bytes === 'number') {
-          setTrafficTotals({ rx: res.total_rx_bytes, tx: res.total_tx_bytes })
-        } else {
-          setTrafficTotals(null)
-        }
         if (!pts.length) return
         // Sparklines stay compact: last hour of the fetched window.
         const sparkCut = Date.now() - 60 * 60 * 1000
@@ -485,6 +486,47 @@ export default function NodeDetailPage() {
       cancelled = true
     }
   }, [id, trafficHours])
+
+  useEffect(() => {
+    if (!id || !node?.traffic_log) {
+      setUsagePoints([])
+      setUsageTotals({ rx: 0, tx: 0 })
+      return
+    }
+    let cancelled = false
+    const { from, to } = mskRangeMs(usageFrom, usageTo)
+    setUsageLoading(true)
+    ;(async () => {
+      try {
+        const res = await api<{
+          points?: Array<{ t: number; rx_bytes?: number; tx_bytes?: number }>
+          total_rx_bytes?: number
+          total_tx_bytes?: number
+        }>(`/api/nodes/${id}/traffic?granularity=hour&from=${from}&to=${to}`)
+        if (cancelled) return
+        const pts = (Array.isArray(res.points) ? res.points : []).map((p) => ({
+          t: p.t,
+          rx_bytes: Number(p.rx_bytes) || 0,
+          tx_bytes: Number(p.tx_bytes) || 0,
+        }))
+        setUsagePoints(pts)
+        setUsageTotals({
+          rx: Number(res.total_rx_bytes) || 0,
+          tx: Number(res.total_tx_bytes) || 0,
+        })
+      } catch {
+        if (!cancelled) {
+          setUsagePoints([])
+          setUsageTotals({ rx: 0, tx: 0 })
+        }
+      } finally {
+        if (!cancelled) setUsageLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [id, node?.traffic_log, usageFrom, usageTo])
 
   useEffect(() => {
     void load()
@@ -573,7 +615,8 @@ export default function NodeDetailPage() {
 
   const title = useMemo(() => node?.name ?? 'Нода', [node])
   const st = node?.status || 'unknown'
-  const trafficHourOptions = node?.traffic_log ? TRAFFIC_HOURS_LOG : TRAFFIC_HOURS_LIVE
+  const usageMin = shiftYmd(ymdMsk(), -89)
+  const usageMax = ymdMsk()
 
   async function toggleTrafficLog() {
     if (!id || !node) return
@@ -586,7 +629,6 @@ export default function NodeDetailPage() {
         body: JSON.stringify({ traffic_log: next }),
       })
       setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
-      if (!next && trafficHours > 24) setTrafficHours(24)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось переключить подсчёт трафика')
     }
@@ -1545,32 +1587,23 @@ export default function NodeDetailPage() {
                 id="traffic-hours"
                 className="traffic-hours-select"
                 value={trafficHours}
-                onChange={(e) => setTrafficHours(Number(e.target.value))}
+                onChange={(e) =>
+                  setTrafficHours(
+                    Number(e.target.value) as (typeof TRAFFIC_HOURS_OPTIONS)[number],
+                  )
+                }
               >
-                {trafficHourOptions.map((h) => (
+                {TRAFFIC_HOURS_OPTIONS.map((h) => (
                   <option key={h} value={h}>
-                    {h === 1 ? '1 час' : trafficHoursLabel(h)}
+                    {h === 1 ? '1 час' : `${h} ч`}
                   </option>
                 ))}
               </select>
             </div>
           </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            {trafficHours > 24
-              ? 'Часовые суммы RX/TX на интерфейсе ноды (архив до 90 дней).'
-              : 'Скорость TX/RX на интерфейсе ноды. История 5 сек накапливается на панели сутки.'}
-            {!node?.traffic_log
-              ? ' Часовой архив выключен — включите в «Действия».'
-              : ''}
+            Скорость TX/RX на интерфейсе ноды. История накапливается на панели сутки.
           </p>
-          {trafficTotals && trafficHours > 24 ? (
-            <p className="node-traffic-totals" style={{ margin: '0 0 0.75rem', fontSize: '0.9rem' }}>
-              За период:{' '}
-              <span className="node-live-net down">↓ {formatBytes(trafficTotals.tx)}</span>
-              {'  '}
-              <span className="node-live-net up">↑ {formatBytes(trafficTotals.rx)}</span>
-            </p>
-          ) : null}
           {st === 'online' || trafficPoints.length > 0 ? (
             <TrafficMirrorChart points={trafficPoints} hours={trafficHours} />
           ) : (
@@ -1579,6 +1612,76 @@ export default function NodeDetailPage() {
             </p>
           )}
         </section>
+
+        {node?.traffic_log ? (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Учёт трафика</h2>
+              <div className="panel-head-aside traffic-usage-filters">
+                <label className="traffic-hours-label muted" htmlFor="usage-from">
+                  С
+                </label>
+                <input
+                  id="usage-from"
+                  type="date"
+                  className="traffic-hours-select"
+                  min={usageMin}
+                  max={usageMax}
+                  value={usageFrom}
+                  onChange={(e) => setUsageFrom(e.target.value || usageMin)}
+                />
+                <label className="traffic-hours-label muted" htmlFor="usage-to">
+                  По
+                </label>
+                <input
+                  id="usage-to"
+                  type="date"
+                  className="traffic-hours-select"
+                  min={usageMin}
+                  max={usageMax}
+                  value={usageTo}
+                  onChange={(e) => setUsageTo(e.target.value || usageMax)}
+                />
+                <div className="traffic-usage-presets">
+                  {(
+                    [
+                      [7, '7 д'],
+                      [30, '30 д'],
+                      [90, '90 д'],
+                    ] as const
+                  ).map(([days, label]) => (
+                    <button
+                      key={days}
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        setUsageFrom(shiftYmd(ymdMsk(), -(days - 1)))
+                        setUsageTo(ymdMsk())
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+              Сумма входящего и исходящего на NIC ноды за выбранные даты (архив до 90
+              дней, с момента включения подсчёта).
+            </p>
+            {usageLoading && usagePoints.length === 0 ? (
+              <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+                Загрузка…
+              </p>
+            ) : (
+              <TrafficUsageChart
+                points={usagePoints}
+                totalRx={usageTotals.rx}
+                totalTx={usageTotals.tx}
+              />
+            )}
+          </section>
+        ) : null}
       </div>
 
       {showAddBackend && (

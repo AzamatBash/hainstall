@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,7 +51,16 @@ func (s *Server) handleNodeTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if hourly {
-		samples, err := s.store.ListTrafficHourlySamples(id, since)
+		from, to, ok := trafficRange(r)
+		if !ok {
+			hours := trafficWindowHours(r, trafficHourlyMaxHours)
+			from = time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+			to = time.Time{}
+		}
+		if !from.IsZero() && !to.IsZero() && to.Sub(from) > time.Duration(trafficHourlyMaxHours)*time.Hour {
+			from = to.Add(-time.Duration(trafficHourlyMaxHours) * time.Hour)
+		}
+		samples, err := s.store.ListTrafficHourlyRange(id, from, to)
 		if err != nil {
 			s.logger.Error("list hourly traffic", "err", err)
 			writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -69,9 +79,15 @@ func (s *Server) handleNodeTraffic(w http.ResponseWriter, r *http.Request) {
 				"tx_bytes": p.TxBytes,
 			})
 		}
+		hours := int(time.Since(from).Hours() + 0.5)
+		if hours < 1 {
+			hours = 1
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"node_id":        id,
 			"hours":          hours,
+			"from":           from.UTC().UnixMilli(),
+			"to":             toOrNow(to).UnixMilli(),
 			"window":         strconv.Itoa(hours) + "h",
 			"granularity":    "hour",
 			"traffic_log":    n.TrafficLog,
@@ -112,4 +128,47 @@ func (s *Server) handleAllTraffic(w http.ResponseWriter, r *http.Request) {
 		"window": strconv.Itoa(hours) + "h",
 		"nodes":  byNode,
 	})
+}
+
+func trafficRange(r *http.Request) (from, to time.Time, ok bool) {
+	fromRaw := strings.TrimSpace(r.URL.Query().Get("from"))
+	toRaw := strings.TrimSpace(r.URL.Query().Get("to"))
+	if fromRaw == "" && toRaw == "" {
+		return time.Time{}, time.Time{}, false
+	}
+	from = parseTrafficTime(fromRaw)
+	to = parseTrafficTime(toRaw)
+	if from.IsZero() && to.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	if from.IsZero() {
+		from = to.Add(-24 * time.Hour)
+	}
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	if to.Before(from) {
+		from, to = to, from
+	}
+	return from, to, true
+}
+
+func parseTrafficTime(raw string) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 1_000_000_000_000 {
+		return time.UnixMilli(ms).UTC()
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+func toOrNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t.UTC()
 }

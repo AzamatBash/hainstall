@@ -57,6 +57,18 @@ func TestTrafficHourlyOptIn(t *testing.T) {
 		t.Fatalf("ts=%d want %d", list[0].TS, wantTS)
 	}
 
+	later := hour.Add(3 * time.Hour)
+	if err := st.AddTrafficHourlyDelta(n.ID, later, 10, 20); err != nil {
+		t.Fatal(err)
+	}
+	ranged, err := st.ListTrafficHourlyRange(n.ID, hour.Truncate(time.Hour), hour.Truncate(time.Hour).Add(time.Hour-time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranged) != 1 || ranged[0].RxBytes != 150 {
+		t.Fatalf("range %+v", ranged)
+	}
+
 	ok, err := st.DeleteNode(n.ID)
 	if err != nil || !ok {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
