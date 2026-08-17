@@ -493,6 +493,20 @@ export default function NodesPage() {
     }
   }
 
+  async function toggleTrafficLog(n: Node) {
+    setMenuOpenId(null)
+    setError('')
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${n.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ traffic_log: !n.traffic_log }),
+      })
+      setNodes((list) => list.map((x) => (x.id === n.id ? { ...x, ...res.node } : x)))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось переключить подсчёт трафика')
+    }
+  }
+
   async function setCountry(id: string, country: string) {
     setError('')
     try {
@@ -983,6 +997,15 @@ export default function NodesPage() {
                                     onClick={() => startRename(n)}
                                   >
                                     Переименовать
+                                  </button>
+                                  <button
+                                    className="kebab-item"
+                                    type="button"
+                                    onClick={() => void toggleTrafficLog(n)}
+                                  >
+                                    {n.traffic_log
+                                      ? 'Выключить подсчёт трафика'
+                                      : 'Включить подсчёт трафика'}
                                   </button>
                                   <button
                                     className="kebab-item danger"

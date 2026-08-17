@@ -31,6 +31,7 @@ export interface Node {
   created_at: string
   last_seen?: string
   status: NodeStatus
+  traffic_log?: boolean
   live?: NodeLive
 }
 

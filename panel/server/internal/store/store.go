@@ -31,6 +31,7 @@ type Node struct {
 	CreatedAt         time.Time     `json:"created_at"`
 	LastSeen          *time.Time    `json:"last_seen,omitempty"`
 	Status            NodeStatus    `json:"status"`
+	TrafficLog        bool          `json:"traffic_log"`
 	Snapshot          *NodeSnapshot `json:"live,omitempty"`
 }
 
@@ -119,6 +120,9 @@ CREATE TABLE IF NOT EXISTS nodes (
 	if err := s.ensureColumn("nodes", "provider_account_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("nodes", "traffic_log", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := s.backfillSortOrder(); err != nil {
 		return err
 	}
@@ -159,6 +163,13 @@ CREATE TABLE IF NOT EXISTS traffic_samples (
   PRIMARY KEY (node_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_samples_node_ts ON traffic_samples(node_id, ts);
+CREATE TABLE IF NOT EXISTS traffic_hourly (
+  node_id TEXT NOT NULL,
+  hour_ts INTEGER NOT NULL,
+  rx_bytes INTEGER NOT NULL DEFAULT 0,
+  tx_bytes INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (node_id, hour_ts)
+);
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   remna_panel_id TEXT NOT NULL DEFAULT '',
@@ -429,9 +440,11 @@ func (s *Store) backfillSortOrder() error {
 	return nil
 }
 
+const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log`
+
 func (s *Store) ListNodes() ([]Node, error) {
 	rows, err := s.db.Query(`
-SELECT id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot
+SELECT ` + nodeSelectCols + `
 FROM nodes ORDER BY sort_order ASC, created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -454,7 +467,7 @@ FROM nodes ORDER BY sort_order ASC, created_at DESC`)
 
 func (s *Store) GetNode(id string) (*Node, error) {
 	row := s.db.QueryRow(`
-SELECT id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot
+SELECT `+nodeSelectCols+`
 FROM nodes WHERE id = ?`, id)
 	n, err := scanNode(row)
 	if err == sql.ErrNoRows {
@@ -499,12 +512,34 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 }
 
 func (s *Store) DeleteNode(id string) (bool, error) {
+	_, _ = s.db.Exec(`DELETE FROM traffic_hourly WHERE node_id = ?`, id)
+	_, _ = s.db.Exec(`DELETE FROM traffic_samples WHERE node_id = ?`, id)
 	res, err := s.db.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// SetNodeTrafficLog enables or disables hourly traffic accounting for a node.
+func (s *Store) SetNodeTrafficLog(id string, enabled bool) (*Node, error) {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE nodes SET traffic_log = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	return s.GetNode(id)
 }
 
 // UpdateNodeURL changes the management URL (and optionally name) for a node.
@@ -718,15 +753,17 @@ type rowScanner interface {
 
 func scanNode(r rowScanner) (Node, error) {
 	var (
-		n         Node
-		createdAt string
-		lastSeen  sql.NullString
-		status    string
-		snapshot  sql.NullString
+		n          Node
+		createdAt  string
+		lastSeen   sql.NullString
+		status     string
+		snapshot   sql.NullString
+		trafficLog int
 	)
-	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot); err != nil {
+	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog); err != nil {
 		return Node{}, err
 	}
+	n.TrafficLog = trafficLog != 0
 	t, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		t, err = time.Parse(time.RFC3339, createdAt)

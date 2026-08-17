@@ -597,6 +597,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		Host              string          `json:"host"`
 		Port              int             `json:"port"`
 		URL               string          `json:"url"`
+		TrafficLog        *bool           `json:"traffic_log"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON")
@@ -609,6 +610,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	hasURLChange := newURL != "" || host != "" || body.Port != 0
 	hasName := name != ""
 	hasCountry := body.Country != nil
+	hasTrafficLog := body.TrafficLog != nil
 	remnaPanelPtr, hasRemnaPanel, remnaOK := parseOptionalRemnaPanelID(body.RemnaPanelID)
 	if !remnaOK {
 		writeErr(w, http.StatusBadRequest, "некорректный remna_panel_id")
@@ -677,8 +679,22 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 
 	// Meta-only update: name and/or country and/or remna panel / provider / account, keep URL and status.
 	if !hasURLChange {
-		if !hasName && !hasCountry && !hasRemnaPanel && !hasProvider && !hasAccount {
-			writeErr(w, http.StatusBadRequest, "укажите name, country, remna_panel_id, provider_id, provider_account_id, host или url")
+		if !hasName && !hasCountry && !hasRemnaPanel && !hasProvider && !hasAccount && !hasTrafficLog {
+			writeErr(w, http.StatusBadRequest, "укажите name, country, remna_panel_id, provider_id, provider_account_id, traffic_log, host или url")
+			return
+		}
+		if hasTrafficLog && !hasName && !hasCountry && !hasRemnaPanel && !hasProvider && !hasAccount {
+			updated, err := s.store.SetNodeTrafficLog(id, *body.TrafficLog)
+			if err != nil {
+				s.logger.Error("update node traffic_log", "err", err)
+				writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+				return
+			}
+			if updated == nil {
+				writeErr(w, http.StatusNotFound, "нода не найдена")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": s.publicNode(*updated)})
 			return
 		}
 		var namePtr *string
@@ -929,6 +945,7 @@ func (s *Server) publicNode(n store.Node) map[string]any {
 		"provider_login_url":     "",
 		"provider_account_id":    n.ProviderAccountID,
 		"provider_account_login": "",
+		"traffic_log":            n.TrafficLog,
 		"created_at":             n.CreatedAt.Format(time.RFC3339),
 		"status":                 n.Status,
 	}

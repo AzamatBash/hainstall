@@ -28,9 +28,20 @@ import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
-const TRAFFIC_HOURS_OPTIONS = [1, 2, 3, 6, 12, 24] as const
-/** Max samples kept live in the browser for the longest window (24h @ 5s). */
+const TRAFFIC_HOURS_LIVE = [1, 2, 3, 6, 12, 24] as const
+const TRAFFIC_HOURS_LOG = [1, 6, 24, 168, 720, 2160] as const
+/** Max samples kept live in the browser for the longest 5s window (24h @ 5s). */
 const TRAFFIC_HISTORY_MAX = (24 * 60 * 60) / 5
+
+function trafficHoursLabel(h: number): string {
+  if (h < 24) return `${h} ч`
+  if (h === 24) return '1 день'
+  if (h % 24 === 0) {
+    const d = h / 24
+    return `${d} д`
+  }
+  return `${h} ч`
+}
 
 function pushPoint(prev: ChartPoint[], v: number, max = HISTORY_MAX): ChartPoint[] {
   const next = [...prev, { t: Date.now(), v }]
@@ -91,6 +102,25 @@ function TrashIcon() {
         strokeWidth="1.75"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function TrafficLogIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 19V5M4 19h16"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8 15v-3M12 15V9M16 15v-6"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
       />
     </svg>
   )
@@ -193,7 +223,8 @@ export default function NodeDetailPage() {
   const [downHist, setDownHist] = useState<ChartPoint[]>([])
   const [upHist, setUpHist] = useState<ChartPoint[]>([])
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
-  const [trafficHours, setTrafficHours] = useState<(typeof TRAFFIC_HOURS_OPTIONS)[number]>(1)
+  const [trafficHours, setTrafficHours] = useState(1)
+  const [trafficTotals, setTrafficTotals] = useState<{ rx: number; tx: number } | null>(null)
   const [downBps, setDownBps] = useState<number | null>(null)
   const [upBps, setUpBps] = useState<number | null>(null)
   const [backends, setBackends] = useState<BackendServer[]>([])
@@ -320,6 +351,7 @@ export default function NodeDetailPage() {
         setUpHist((h) => pushPoint(h, inn))
         setDownHist((h) => pushPoint(h, out))
         setTrafficPoints((prev) => {
+          if (trafficHours > 24) return prev
           const next = [...prev, { t: now, down_bps: out, up_bps: inn }]
           const cutoff = now - trafficHours * 60 * 60 * 1000
           return next.filter((p) => p.t >= cutoff).slice(-TRAFFIC_HISTORY_MAX)
@@ -407,6 +439,7 @@ export default function NodeDetailPage() {
       setTrafficPoints([])
       setDownBps(null)
       setUpBps(null)
+      setTrafficTotals(null)
       trafficRef.current = null
       setSystem(null)
     }
@@ -417,12 +450,23 @@ export default function NodeDetailPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await api<{ points: TrafficPoint[] }>(
-          `/api/nodes/${id}/traffic?hours=${trafficHours}`,
-        )
+        const q =
+          trafficHours > 24
+            ? `/api/nodes/${id}/traffic?hours=${trafficHours}&granularity=hour`
+            : `/api/nodes/${id}/traffic?hours=${trafficHours}`
+        const res = await api<{
+          points: TrafficPoint[]
+          total_rx_bytes?: number
+          total_tx_bytes?: number
+        }>(q)
         if (cancelled) return
         const pts = Array.isArray(res.points) ? res.points : []
         setTrafficPoints(pts)
+        if (typeof res.total_rx_bytes === 'number' && typeof res.total_tx_bytes === 'number') {
+          setTrafficTotals({ rx: res.total_rx_bytes, tx: res.total_tx_bytes })
+        } else {
+          setTrafficTotals(null)
+        }
         if (!pts.length) return
         // Sparklines stay compact: last hour of the fetched window.
         const sparkCut = Date.now() - 60 * 60 * 1000
@@ -529,6 +573,24 @@ export default function NodeDetailPage() {
 
   const title = useMemo(() => node?.name ?? 'Нода', [node])
   const st = node?.status || 'unknown'
+  const trafficHourOptions = node?.traffic_log ? TRAFFIC_HOURS_LOG : TRAFFIC_HOURS_LIVE
+
+  async function toggleTrafficLog() {
+    if (!id || !node) return
+    const next = !node.traffic_log
+    setError('')
+    setActionsOpen(false)
+    try {
+      const res = await api<{ node: Node }>(`/api/nodes/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ traffic_log: next }),
+      })
+      setNode((cur) => (cur ? { ...cur, ...res.node } : res.node))
+      if (!next && trafficHours > 24) setTrafficHours(24)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось переключить подсчёт трафика')
+    }
+  }
 
   async function setCountry(country: string) {
     if (!id) return
@@ -1039,6 +1101,15 @@ export default function NodeDetailPage() {
                   <RestartIcon />
                   Рестарт
                 </button>
+                <button
+                  className="actions-menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void toggleTrafficLog()}
+                >
+                  <TrafficLogIcon />
+                  {node?.traffic_log ? 'Выключить подсчёт трафика' : 'Включить подсчёт трафика'}
+                </button>
                 <div className="actions-menu-sep" />
                 <button
                   className="actions-menu-item danger"
@@ -1474,23 +1545,32 @@ export default function NodeDetailPage() {
                 id="traffic-hours"
                 className="traffic-hours-select"
                 value={trafficHours}
-                onChange={(e) =>
-                  setTrafficHours(
-                    Number(e.target.value) as (typeof TRAFFIC_HOURS_OPTIONS)[number],
-                  )
-                }
+                onChange={(e) => setTrafficHours(Number(e.target.value))}
               >
-                {TRAFFIC_HOURS_OPTIONS.map((h) => (
+                {trafficHourOptions.map((h) => (
                   <option key={h} value={h}>
-                    {h === 1 ? '1 час' : `${h} ч`}
+                    {h === 1 ? '1 час' : trafficHoursLabel(h)}
                   </option>
                 ))}
               </select>
             </div>
           </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Скорость TX/RX на интерфейсе ноды. История накапливается на панели.
+            {trafficHours > 24
+              ? 'Часовые суммы RX/TX на интерфейсе ноды (архив до 90 дней).'
+              : 'Скорость TX/RX на интерфейсе ноды. История 5 сек накапливается на панели сутки.'}
+            {!node?.traffic_log
+              ? ' Часовой архив выключен — включите в «Действия».'
+              : ''}
           </p>
+          {trafficTotals && trafficHours > 24 ? (
+            <p className="node-traffic-totals" style={{ margin: '0 0 0.75rem', fontSize: '0.9rem' }}>
+              За период:{' '}
+              <span className="node-live-net down">↓ {formatBytes(trafficTotals.tx)}</span>
+              {'  '}
+              <span className="node-live-net up">↑ {formatBytes(trafficTotals.rx)}</span>
+            </p>
+          ) : null}
           {st === 'online' || trafficPoints.length > 0 ? (
             <TrafficMirrorChart points={trafficPoints} hours={trafficHours} />
           ) : (

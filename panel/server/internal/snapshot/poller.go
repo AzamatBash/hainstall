@@ -75,10 +75,10 @@ func pollNode(ctx context.Context, st *store.Store, ag *agent.Client, n store.No
 	}
 
 	var sys struct {
-		CPUPercent  float64   `json:"cpu_percent"`
-		LoadAvg     []float64 `json:"load_avg"`
-		NetRxBytes  int64     `json:"net_rx_bytes"`
-		NetTxBytes  int64     `json:"net_tx_bytes"`
+		CPUPercent float64   `json:"cpu_percent"`
+		LoadAvg    []float64 `json:"load_avg"`
+		NetRxBytes int64     `json:"net_rx_bytes"`
+		NetTxBytes int64     `json:"net_tx_bytes"`
 	}
 	_ = json.Unmarshal(sysBody, &sys)
 
@@ -123,6 +123,14 @@ func pollNode(ctx context.Context, st *store.Store, ag *agent.Client, n store.No
 		snap.Backends = flattenBackends(beBody)
 	} else if prev != nil {
 		snap.Backends = prev.Backends
+	}
+
+	if n.TrafficLog && prev != nil && (prev.NetRx > 0 || prev.NetTx > 0) {
+		rxDelta := sys.NetRxBytes - prev.NetRx
+		txDelta := sys.NetTxBytes - prev.NetTx
+		if rxDelta >= 0 && txDelta >= 0 && (rxDelta > 0 || txDelta > 0) {
+			_ = st.AddTrafficHourlyDelta(n.ID, time.Now().UTC(), rxDelta, txDelta)
+		}
 	}
 
 	return st.SaveSnapshot(n.ID, store.StatusOnline, snap)
