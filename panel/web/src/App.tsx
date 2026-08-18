@@ -1,5 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
-import { useEffect, useState, type ReactNode } from 'react'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { api, setToken } from './api'
 import BrandNav from './components/BrandNav'
 import LoginPage from './pages/LoginPage'
@@ -9,7 +9,19 @@ import TasksPage from './pages/TasksPage'
 import StatsPage from './pages/StatsPage'
 import OlcrtcPage from './pages/OlcrtcPage'
 
-function Authed({ children }: { children: ReactNode }) {
+function PageFade() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [pathname])
+  return (
+    <div className="page-fade" key={pathname}>
+      <Outlet />
+    </div>
+  )
+}
+
+function AuthedLayout() {
   const [ready, setReady] = useState(false)
   const [ok, setOk] = useState(false)
 
@@ -34,7 +46,7 @@ function Authed({ children }: { children: ReactNode }) {
 
   if (!ready) {
     return (
-      <div className="shell">
+      <div className="shell page-fade">
         <header className="topbar">
           <BrandNav active="panel" />
         </header>
@@ -43,53 +55,20 @@ function Authed({ children }: { children: ReactNode }) {
     )
   }
   if (!ok) return <Navigate to="/login" replace />
-  return <>{children}</>
+  return <PageFade />
 }
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route
-        path="/"
-        element={
-          <Authed>
-            <NodesPage />
-          </Authed>
-        }
-      />
-      <Route
-        path="/nodes/:id"
-        element={
-          <Authed>
-            <NodeDetailPage />
-          </Authed>
-        }
-      />
-      <Route
-        path="/tasks"
-        element={
-          <Authed>
-            <TasksPage />
-          </Authed>
-        }
-      />
-      <Route
-        path="/stats"
-        element={
-          <Authed>
-            <StatsPage />
-          </Authed>
-        }
-      />
-      <Route
-        path="/olcnode"
-        element={
-          <Authed>
-            <OlcrtcPage />
-          </Authed>
-        }
-      />
+      <Route element={<AuthedLayout />}>
+        <Route path="/" element={<NodesPage />} />
+        <Route path="/nodes/:id" element={<NodeDetailPage />} />
+        <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/stats" element={<StatsPage />} />
+        <Route path="/olcnode" element={<OlcrtcPage />} />
+      </Route>
       <Route path="/olcrtc" element={<Navigate to="/olcnode" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
