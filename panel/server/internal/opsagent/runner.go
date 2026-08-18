@@ -402,7 +402,6 @@ apt-get install -y ufw fail2ban
 
 echo "=== UFW ==="
 ufw allow OpenSSH || ufw allow 22/tcp || true
-ufw allow 80/tcp || true
 ufw allow 8443/tcp || true
 %s
 # Non-interactive enable

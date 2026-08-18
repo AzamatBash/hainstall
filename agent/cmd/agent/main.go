@@ -57,7 +57,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Self-heal: write client frontends (:80/:8443) into backends.d (never rely
+	// Self-heal: write client frontends (:8443) into backends.d (never rely
 	// on a host bind-mounted haproxy.cfg — Docker turns a missing file into a dir).
 	// Then ensure TCP runtime API for the panel.
 	go func() {

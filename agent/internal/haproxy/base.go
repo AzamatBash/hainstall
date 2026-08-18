@@ -63,22 +63,11 @@ defaults
     timeout server-fin 30s
     retries 2
 
-frontend http_plain
-    mode http
-    bind *:80
-    acl is_acme path_beg /.well-known/acme-challenge/
-    http-request redirect scheme https code 301 unless is_acme
-    use_backend acme if is_acme
-
 frontend https_front
     mode tcp
     bind *:8443
     maxconn 40000
     default_backend app
-
-backend acme
-    mode http
-    server local 127.0.0.1:8080
 `, nbthreadCount())
 }
 

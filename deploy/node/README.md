@@ -4,7 +4,7 @@
 
 | Port | Role |
 |------|------|
-| **80 / 443** | Клиенты (HAProxy → app). Без `/_hapctl`. |
+| **8443** | Клиенты (HAProxy TCP → app). Без `/_hapctl`. |
 | **47893** | Панель ↔ агент напрямую (`47893:9100`, HTTP `/_hapctl`) |
 
 ## Quick start
@@ -36,7 +36,7 @@ curl -H "Authorization: Bearer $HAPANEL_TOKEN" \
 
 | Service | Role |
 |---------|------|
-| `haproxy` | TLS :443 clients, HTTP :80 |
+| `haproxy` | TCP :8443 clients |
 | `agent` | Management API published as host **:47893** → container `:9100` |
 
 ## Volumes

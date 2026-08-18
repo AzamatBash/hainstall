@@ -4,7 +4,6 @@ services:
     image: haproxy:3.0-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
       - "8443:8443"
     volumes:
       - ./haproxy/backends.d:/etc/haproxy/backends.d

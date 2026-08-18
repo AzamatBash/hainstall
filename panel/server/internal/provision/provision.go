@@ -91,7 +91,7 @@ func normalizeHost(host string) string {
 
 // Generate creates install files for a node.
 // port is the host management port published on the agent (panel → agent HTTP).
-// HAProxy only serves clients on 80/8443 — no /_hapctl routing.
+// HAProxy only serves clients on 8443 — no /_hapctl routing.
 func Generate(name, host string, port int, token string) (Bundle, error) {
 	host = normalizeHost(host)
 	if host == "" {
@@ -114,7 +114,7 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 	mgmtMap := fmt.Sprintf("%d:9100", port)
 
 	compose := fmt.Sprintf(`# hapanel node — generated for %q
-# 80/8443 = клиенты (HAProxy) | %d = панель → агент напрямую (HTTP)
+# 8443 = клиенты (HAProxy TCP) | %d = панель → агент напрямую (HTTP)
 # Конфиг фронтендов пишет агент в backends.d (без bind-mount файла haproxy.cfg).
 services:
   haproxy:
@@ -122,7 +122,6 @@ services:
     container_name: haproxy
     restart: unless-stopped
     ports:
-      - "80:80"
       - "8443:8443"
     volumes:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
@@ -202,22 +201,11 @@ defaults
     timeout server-fin 30s
     retries 2
 
-frontend http_plain
-    mode http
-    bind *:80
-    acl is_acme path_beg /.well-known/acme-challenge/
-    http-request redirect scheme https code 301 unless is_acme
-    use_backend acme if is_acme
-
 frontend https_front
     mode tcp
     bind *:8443
     maxconn 40000
     default_backend app
-
-backend acme
-    mode http
-    server local 127.0.0.1:8080
 `
 
 	appCfg := `# Managed by hapanel agent — do not edit by hand
@@ -234,7 +222,7 @@ DOCKER_GID=0
 	readme := fmt.Sprintf(`# hapanel node: %s
 
 Порты:
-- **8443 / 80** — клиентский трафик (HAProxy TCP passthrough → app)
+- **8443** — клиентский трафик (HAProxy TCP passthrough → app)
 - **%d** — панель ↔ агент напрямую (HTTP /_hapctl)
 
 Важно: ограничьте доступ к порту %d (firewall: только IP панели).
@@ -246,14 +234,14 @@ DOCKER_GID=0
 5. DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
 6. В панели → «Проверить связь».
 
-Агент сам пишет фронтенды :80/:8443 в backends.d при старте.
+Агент сам пишет фронтенды :8443 в backends.d при старте.
 `, name, port, port, AgentImage)
 
 	nodeURL := BuildURL(host, port)
 	commands := fmt.Sprintf(`mkdir -p /opt/hapanel-node/haproxy/backends.d /opt/hapanel-node/certs
 cd /opt/hapanel-node
 # запишите docker-compose.yml и файлы backends.d из бандла панели
-# 8443 = клиенты TCP, %d = панель→агент (HTTP)
+# 8443 = клиенты TCP, %d = панель→агент (HTTP); порт 80 не публикуем
 export DOCKER_GID=$(getent group docker | cut -d: -f3)
 docker compose up -d
 # затем «Проверить связь» в панели → %s
