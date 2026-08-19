@@ -261,14 +261,10 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
 		return
 	}
-	remnaAddrs := map[string][]string{}
+	linksByNode := map[string][]store.BackendRemnaLink{}
 	if links, err := s.store.ListAllBackendRemnaLinks(); err == nil {
 		for _, l := range links {
-			addr := strings.TrimSpace(l.RemnaAddress)
-			if addr == "" {
-				continue
-			}
-			remnaAddrs[l.NodeID] = append(remnaAddrs[l.NodeID], addr)
+			linksByNode[l.NodeID] = append(linksByNode[l.NodeID], l)
 		}
 	}
 	// Never wait on Remnawave for the list: serve cached Online and warm in background.
@@ -276,9 +272,11 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
 		m := s.publicNode(n)
-		addrs := remnaAddrs[n.ID]
-		if addrs == nil {
-			addrs = []string{}
+		addrs := []string{}
+		for _, l := range activeRemnaLinks(linksByNode[n.ID], n.Snapshot) {
+			if addr := strings.TrimSpace(l.RemnaAddress); addr != "" {
+				addrs = append(addrs, addr)
+			}
 		}
 		m["remna_addresses"] = addrs
 		m["remna_online"] = s.nodeRemnaOnlineCached(n.ID)
@@ -863,8 +861,15 @@ func (s *Server) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 	backend := r.PathValue("backend")
 	name := r.PathValue("name")
+	nodeID := r.PathValue("id")
 	s.proxyNode(w, r, func(ctx context.Context, n *store.Node) (int, []byte, error) {
-		return s.agent.DeleteBackend(ctx, n.URL, n.Token, backend, name)
+		status, body, err := s.agent.DeleteBackend(ctx, n.URL, n.Token, backend, name)
+		if err == nil && status >= 200 && status < 300 {
+			if ok, delErr := s.store.DeleteBackendRemnaLink(nodeID, backend, name); delErr == nil && ok {
+				s.invalidateRemnaStatsCache(nodeID)
+			}
+		}
+		return status, body, err
 	})
 }
 

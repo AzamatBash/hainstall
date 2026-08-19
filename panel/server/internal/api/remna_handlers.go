@@ -439,10 +439,40 @@ func (s *Server) scheduleRemnaOnlineRefresh(nodes []store.Node) {
 	}()
 }
 
+// activeRemnaLinks keeps Remnawave links that match backends currently on the node.
+// Stale links (left after a backend swap) are dropped so online is not duplicated.
+func activeRemnaLinks(links []store.BackendRemnaLink, snap *store.NodeSnapshot) []store.BackendRemnaLink {
+	if snap == nil || len(snap.Backends) == 0 {
+		return links
+	}
+	type linkKey struct {
+		backend string
+		name    string
+	}
+	active := make(map[linkKey]struct{}, len(snap.Backends))
+	for _, b := range snap.Backends {
+		active[linkKey{backend: b.Backend, name: b.Name}] = struct{}{}
+	}
+	out := make([]store.BackendRemnaLink, 0, len(links))
+	for _, l := range links {
+		if _, ok := active[linkKey{backend: l.Backend, name: l.ServerName}]; ok {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // nodeRemnaOnline sums Remnawave users_online across backend links for a hapanel node.
 func (s *Server) nodeRemnaOnline(ctx context.Context, nodeID string) int {
 	links, err := s.store.GetBackendRemnaLinks(nodeID)
 	if err != nil || len(links) == 0 {
+		s.putRemnaOnlineCache(nodeID, 0)
+		return 0
+	}
+	if node, err := s.store.GetNode(nodeID); err == nil && node != nil {
+		links = activeRemnaLinks(links, node.Snapshot)
+	}
+	if len(links) == 0 {
 		s.putRemnaOnlineCache(nodeID, 0)
 		return 0
 	}
