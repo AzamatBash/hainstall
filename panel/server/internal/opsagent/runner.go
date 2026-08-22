@@ -60,13 +60,14 @@ func (j *Job) add(role, step, text string) {
 }
 
 type DeployRequest struct {
-	Name        string
-	Host        string
-	SSHUser     string
-	SSHPassword string
-	SSHPort     int
-	MgmtPort    int
-	PanelIP     string
+	Name          string
+	Host          string
+	SSHUser       string
+	SSHPassword   string
+	SSHPort       int
+	MgmtPort      int
+	PanelIP       string
+	KeepRemnanode bool
 }
 
 type Runner struct {
@@ -190,8 +191,32 @@ func (r *Runner) runDeploy(job *Job, req DeployRequest) {
 		return
 	}
 
-	// 3b) Free ports: stop remnanode / nginx if present
-	if !runStep("conflicts", "Останавливаю remnanode/nginx если мешают портам 80/8443…", clearConflictsScript(), 5*time.Minute) {
+	// 3b) Optional remnanode detect + wire HAProxy backend via docker network
+	if req.KeepRemnanode {
+		job.add("agent", "remnanode", "Режим «оставить remnanode» — ищу контейнер…")
+		out, err := sshClient.Run(detectRemnanodeScript(), 2*time.Minute)
+		if err != nil {
+			job.add("agent", "remnanode", "detect: "+truncate(err.Error(), 500))
+		} else if strings.TrimSpace(out) != "" {
+			job.add("agent", "remnanode", truncate(out, 800))
+		}
+		det := parseRemnanodeDetect(out)
+		if det.Found {
+			patchBundleForRemnanode(&bundle, det.Container, det.Network)
+			job.add("success", "remnanode", fmt.Sprintf("Бэкенд app → %s:8443 (сеть %s)", det.Container, det.Network))
+			if det.Host8443 && det.Warn != "" {
+				job.add("agent", "remnanode", "⚠ "+det.Warn)
+			}
+		} else {
+			job.add("agent", "remnanode", "Контейнер remnanode не найден — HAProxy без бэкенда, добавьте серверы в панели")
+		}
+	}
+
+	conflictsDesc := "Останавливаю remnanode/nginx если мешают портам 80/8443…"
+	if req.KeepRemnanode {
+		conflictsDesc = "Останавливаю nginx (remnanode не трогаю)…"
+	}
+	if !runStep("conflicts", conflictsDesc, clearConflictsScript(req.KeepRemnanode), 5*time.Minute) {
 		job.add("agent", "conflicts", "Конфликты не сняты полностью — пробую дальше")
 	}
 
@@ -348,44 +373,6 @@ else
 fi
 docker --version
 docker compose version
-`
-}
-
-func clearConflictsScript() string {
-	return `set +e
-echo "=== stop nginx ==="
-systemctl stop nginx 2>/dev/null
-systemctl disable nginx 2>/dev/null
-service nginx stop 2>/dev/null
-if command -v nginx >/dev/null 2>&1; then
-  nginx -s stop 2>/dev/null
-fi
-
-echo "=== stop remnanode compose dirs ==="
-for d in /opt/remnanode /root/remnanode /opt/remnawave /opt/remnawave/node; do
-  if [ -f "$d/docker-compose.yml" ] || [ -f "$d/compose.yml" ] || [ -f "$d/docker-compose.yaml" ]; then
-    echo "down $d"
-    (cd "$d" && docker compose down --remove-orphans) 2>/dev/null
-    (cd "$d" && docker-compose down --remove-orphans) 2>/dev/null
-  fi
-done
-
-echo "=== stop remnanode/remnawave containers ==="
-docker ps -aq --filter name=remnanode 2>/dev/null | xargs -r docker stop
-docker ps -aq --filter name=remnanode 2>/dev/null | xargs -r docker rm
-docker ps -aq --filter ancestor=remnawave/node 2>/dev/null | xargs -r docker stop
-docker ps -aq --filter ancestor=remnawave/node 2>/dev/null | xargs -r docker rm
-# name patterns often used on nodes
-docker ps --format '{{.ID}} {{.Names}} {{.Image}}' 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /remna|rw-core|xray/ {print $1}' | xargs -r docker stop
-
-echo "=== free 80/8443 if still busy ==="
-if command -v fuser >/dev/null 2>&1; then
-  fuser -k 80/tcp 2>/dev/null
-  fuser -k 8443/tcp 2>/dev/null
-fi
-ss -lptn 'sport = :80 or sport = :8443' 2>/dev/null || netstat -lptn 2>/dev/null | grep -E ':80|:8443' || true
-echo "conflicts cleanup done"
-exit 0
 `
 }
 

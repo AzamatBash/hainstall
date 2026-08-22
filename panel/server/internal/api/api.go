@@ -818,6 +818,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "нода не найдена")
 		return
 	}
+	s.invalidateRemnaStatsCache(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

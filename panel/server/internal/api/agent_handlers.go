@@ -15,26 +15,28 @@ func (s *Server) handleAgentDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name        string `json:"name"`
-		Host        string `json:"host"`
-		SSHUser     string `json:"ssh_user"`
-		SSHPassword string `json:"ssh_password"`
-		SSHPort     int    `json:"ssh_port"`
-		MgmtPort    int    `json:"mgmt_port"`
-		PanelIP     string `json:"panel_ip"`
+		Name          string `json:"name"`
+		Host          string `json:"host"`
+		SSHUser       string `json:"ssh_user"`
+		SSHPassword   string `json:"ssh_password"`
+		SSHPort       int    `json:"ssh_port"`
+		MgmtPort      int    `json:"mgmt_port"`
+		PanelIP       string `json:"panel_ip"`
+		KeepRemnanode bool   `json:"keep_remnanode"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
 	job, err := s.ops.StartDeploy(opsagent.DeployRequest{
-		Name:        body.Name,
-		Host:        body.Host,
-		SSHUser:     body.SSHUser,
-		SSHPassword: body.SSHPassword,
-		SSHPort:     body.SSHPort,
-		MgmtPort:    body.MgmtPort,
-		PanelIP:     strings.TrimSpace(body.PanelIP),
+		Name:          body.Name,
+		Host:          body.Host,
+		SSHUser:       body.SSHUser,
+		SSHPassword:   body.SSHPassword,
+		SSHPort:       body.SSHPort,
+		MgmtPort:      body.MgmtPort,
+		PanelIP:       strings.TrimSpace(body.PanelIP),
+		KeepRemnanode: body.KeepRemnanode,
 	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())

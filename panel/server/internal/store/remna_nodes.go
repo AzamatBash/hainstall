@@ -309,6 +309,67 @@ func (s *Store) ListRemnaNodeCatalog() ([]RemnaNodeCatalog, error) {
 	return out, rows.Err()
 }
 
+// PruneRemnaNodeCatalog removes catalog rows (and their samples) for panelID
+// whose remna_uuid is not in keepUUIDs. Call after a successful Remnawave sync
+// so deleted Remna nodes disappear from /stats and analytics.
+func (s *Store) PruneRemnaNodeCatalog(panelID string, keepUUIDs []string) (int64, error) {
+	if panelID == "" {
+		return 0, nil
+	}
+	keep := make(map[string]struct{}, len(keepUUIDs))
+	for _, u := range keepUUIDs {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			keep[u] = struct{}{}
+		}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`SELECT remna_uuid FROM remna_node_catalog WHERE panel_id = ?`, panelID)
+	if err != nil {
+		return 0, err
+	}
+	var orphans []string
+	for rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if _, ok := keep[uuid]; !ok {
+			orphans = append(orphans, uuid)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(orphans) == 0 {
+		return 0, nil
+	}
+
+	for _, uuid := range orphans {
+		if _, err := tx.Exec(`DELETE FROM remna_node_online_samples WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM remna_node_traffic_samples WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM remna_node_catalog WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(orphans)), nil
+}
+
 // GetRemnaNodeCatalog returns one catalog row.
 func (s *Store) GetRemnaNodeCatalog(panelID, remnaUUID string) (*RemnaNodeCatalog, error) {
 	row := s.db.QueryRow(remnaNodeSelect+` WHERE c.panel_id = ? AND c.remna_uuid = ?`, panelID, remnaUUID)

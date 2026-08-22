@@ -137,11 +137,13 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 		inboundByUUID = remna.InboundByUUID(inbounds)
 	}
 
+	keepUUIDs := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		uuid := strings.TrimSpace(n.UUID)
 		if uuid == "" {
 			continue
 		}
+		keepUUIDs = append(keepUUIDs, uuid)
 		online := 0
 		if n.UsersOnline != nil {
 			online = *n.UsersOnline
@@ -171,6 +173,12 @@ func (p *Poller) pollPanel(parent context.Context, panel store.RemnaPanel) {
 		if err := p.store.AppendRemnaNodeTrafficSample(panel.ID, uuid, now, nodeDown, nodeUp); err != nil {
 			p.logger.Warn("remna node traffic append", "panel", panel.ID, "node", uuid, "err", err)
 		}
+	}
+	// Drop catalog/stats for Remna nodes that no longer exist on the panel.
+	if pruned, err := p.store.PruneRemnaNodeCatalog(panel.ID, keepUUIDs); err != nil {
+		p.logger.Warn("remna node catalog prune", "panel", panel.ID, "err", err)
+	} else if pruned > 0 {
+		p.logger.Info("remna node catalog pruned", "panel", panel.ID, "removed", pruned)
 	}
 
 	online := SumUsersOnline(nodes)

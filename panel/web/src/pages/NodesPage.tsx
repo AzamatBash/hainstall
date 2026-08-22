@@ -1055,6 +1055,7 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
   const [sshPassword, setSshPassword] = useState('')
   const [sshPort, setSshPort] = useState('22')
   const [mgmtPort, setMgmtPort] = useState('47893')
+  const [keepRemnanode, setKeepRemnanode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
@@ -1145,6 +1146,7 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
           ssh_password: sshPassword,
           ssh_port: Number(sshPort) || 22,
           mgmt_port: Number(mgmtPort) || 47893,
+          keep_remnanode: keepRemnanode,
         }),
       })
       setJobId(res.job.id)
@@ -1235,6 +1237,19 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
             {busy ? 'Работаю…' : 'Развернуть'}
           </button>
         </div>
+        <label className="row" style={{ alignItems: 'center', gap: 8, cursor: busy ? 'default' : 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={keepRemnanode}
+            onChange={(e) => setKeepRemnanode(e.target.checked)}
+            disabled={busy}
+          />
+          <span>
+            Оставить remnanode — HAProxy на <span className="mono">:8443</span> проксирует в контейнер
+            remnanode (nginx останавливается, remnanode не трогаем). У remnanode не должно быть{' '}
+            <span className="mono">ports: 8443</span> на хосте — только внутри Docker-сети.
+          </span>
+        </label>
       </form>
 
       {(status || messages.length > 0) && (

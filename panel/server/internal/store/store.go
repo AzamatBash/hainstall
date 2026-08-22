@@ -512,14 +512,32 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 }
 
 func (s *Store) DeleteNode(id string) (bool, error) {
-	_, _ = s.db.Exec(`DELETE FROM traffic_hourly WHERE node_id = ?`, id)
-	_, _ = s.db.Exec(`DELETE FROM traffic_samples WHERE node_id = ?`, id)
-	res, err := s.db.Exec(`DELETE FROM nodes WHERE id = ?`, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM traffic_hourly WHERE node_id = ?`, id); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM traffic_samples WHERE node_id = ?`, id); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM backend_remna_links WHERE node_id = ?`, id); err != nil {
+		return false, err
+	}
+	res, err := tx.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // SetNodeTrafficLog enables or disables hourly traffic accounting for a node.
@@ -896,7 +914,7 @@ UPDATE remna_panels SET name = ?, base_url = ?, api_key_enc = ? WHERE id = ?`,
 	return s.GetRemnaPanel(id)
 }
 
-// DeleteRemnaPanel removes the panel and any backend_remna_links that reference it.
+// DeleteRemnaPanel removes the panel, its stats/catalog, and backend_remna_links.
 func (s *Store) DeleteRemnaPanel(id string) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -908,6 +926,17 @@ func (s *Store) DeleteRemnaPanel(id string) (bool, error) {
 	}
 	if _, err := tx.Exec(`DELETE FROM backend_remna_links WHERE remna_panel_id = ?`, id); err != nil {
 		return false, err
+	}
+	for _, q := range []string{
+		`DELETE FROM remna_node_online_samples WHERE panel_id = ?`,
+		`DELETE FROM remna_node_traffic_samples WHERE panel_id = ?`,
+		`DELETE FROM remna_node_catalog WHERE panel_id = ?`,
+		`DELETE FROM remna_online_samples WHERE panel_id = ?`,
+		`DELETE FROM remna_traffic_samples WHERE panel_id = ?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			return false, err
+		}
 	}
 	res, err := tx.Exec(`DELETE FROM remna_panels WHERE id = ?`, id)
 	if err != nil {
