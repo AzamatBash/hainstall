@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/azabash/hapanel/agent/internal/auth"
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
 	"github.com/azabash/hapanel/agent/internal/haproxy"
+	"github.com/azabash/hapanel/agent/internal/listenports"
+	"github.com/azabash/hapanel/agent/internal/protect"
 	"github.com/azabash/hapanel/agent/internal/store"
 	"github.com/azabash/hapanel/agent/internal/sysinfo"
 )
@@ -59,6 +62,10 @@ func NewRouter(d Deps) http.Handler {
 			r.Delete("/backends/{backend}/{name}", d.handleDeleteBackend)
 			r.Post("/haproxy/reload", d.handleReload)
 			r.Post("/haproxy/restart", d.handleRestart)
+			r.Get("/listen-ports", d.handleGetListenPorts)
+			r.Put("/listen-ports", d.handlePutListenPorts)
+			r.Get("/protect", d.handleGetProtect)
+			r.Put("/protect", d.handlePutProtect)
 		})
 	})
 
@@ -135,11 +142,17 @@ type backendsResponse struct {
 
 type backendGroup struct {
 	Name    string               `json:"name"`
+	Balance string               `json:"balance"`
 	Servers []haproxy.ServerInfo `json:"servers"`
 }
 
 func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 	stored, err := d.Store.List()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	balances, err := d.Store.Balances()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -184,8 +197,15 @@ func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 
 	out := backendsResponse{Backends: make([]backendGroup, 0, len(order))}
 	for _, name := range order {
+		bal := balances[name]
+		if n, nerr := haproxy.NormalizeBalance(bal); nerr == nil {
+			bal = n
+		} else {
+			bal = haproxy.DefaultBalance
+		}
 		out.Backends = append(out.Backends, backendGroup{
 			Name:    name,
+			Balance: bal,
 			Servers: byBackend[name],
 		})
 	}
@@ -198,6 +218,7 @@ type addBackendRequest struct {
 	Address string `json:"address"`
 	Port    int    `json:"port"`
 	Weight  int    `json:"weight"`
+	Balance string `json:"balance"`
 }
 
 func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +237,11 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 	if req.Weight <= 0 {
 		req.Weight = 100
 	}
+	balance, err := haproxy.NormalizeBalance(req.Balance)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// HAProxy rejects spaces/punctuation in server names (`server DE Selectel OUT …`
 	// is parsed as unknown keyword OUT and the backend ends up with zero servers).
 	req.Name = haproxy.SanitizeName(req.Name)
@@ -227,18 +253,13 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 		Port:    req.Port,
 		Weight:  req.Weight,
 	}
-	if err := d.Store.Upsert(srv); err != nil {
+	if err := d.Store.UpsertWithBalance(srv, balance); err != nil {
 		writeErr(w, http.StatusInternalServerError, "persist: "+err.Error())
 		return
 	}
 
-	all, err := d.Store.List()
-	if err != nil {
+	if err := d.writeHAProxyConfig(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := d.Cfg.Write(all); err != nil {
-		writeErr(w, http.StatusInternalServerError, "write config: "+err.Error())
 		return
 	}
 
@@ -258,8 +279,9 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"ok":     true,
-		"server": srv,
+		"ok":      true,
+		"server":  srv,
+		"balance": balance,
 	})
 }
 
@@ -282,13 +304,8 @@ func (d Deps) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	all, err := d.Store.List()
-	if err != nil {
+	if err := d.writeHAProxyConfig(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := d.Cfg.Write(all); err != nil {
-		writeErr(w, http.StatusInternalServerError, "write config: "+err.Error())
 		return
 	}
 
@@ -311,13 +328,8 @@ func (d Deps) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleReload(w http.ResponseWriter, r *http.Request) {
 	// Ensure config is synced from store before reload.
-	all, err := d.Store.List()
-	if err != nil {
+	if err := d.writeHAProxyConfig(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := d.Cfg.Write(all); err != nil {
-		writeErr(w, http.StatusInternalServerError, "write config: "+err.Error())
 		return
 	}
 	if err := d.Docker.Reload(r.Context()); err != nil {
@@ -343,10 +355,80 @@ func (d Deps) handleRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "action": "restart"})
 }
 
+func (d Deps) handleGetListenPorts(w http.ResponseWriter, r *http.Request) {
+	ports, err := listenports.Current(d.Store)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ports": ports})
+}
+
+func (d Deps) handlePutListenPorts(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Ports []int `json:"ports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	newPorts, opened, closed, err := listenports.Apply(r.Context(), d.Store, d.BackendsDir, d.Docker, d.HA, body.Ports)
+	if err != nil {
+		d.Log.Error("listen ports", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"ports":  newPorts,
+		"opened": opened,
+		"closed": closed,
+	})
+}
+
+func (d Deps) handleGetProtect(w http.ResponseWriter, r *http.Request) {
+	p, err := protect.Current(d.Store)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protect": p})
+}
+
+func (d Deps) handlePutProtect(w http.ResponseWriter, r *http.Request) {
+	var body protect.Profile
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	p, err := protect.Apply(r.Context(), d.Store, d.BackendsDir, d.Docker, d.HA, body)
+	if err != nil {
+		d.Log.Error("protect", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protect": p})
+}
+
 // waitHAReady blocks until the admin socket answers after restart/reload.
 func (d Deps) waitHAReady(ctx context.Context) error {
 	if d.HA == nil {
 		return nil
 	}
 	return d.HA.WaitReady(ctx)
+}
+
+func (d Deps) writeHAProxyConfig() error {
+	all, err := d.Store.List()
+	if err != nil {
+		return err
+	}
+	balances, err := d.Store.Balances()
+	if err != nil {
+		return err
+	}
+	if err := d.Cfg.Write(all, balances); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }

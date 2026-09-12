@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/auth"
 	"github.com/azabash/hapanel/panel/internal/olcnode"
 	"github.com/azabash/hapanel/panel/internal/opsagent"
+	"github.com/azabash/hapanel/panel/internal/protect"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/remna"
 	"github.com/azabash/hapanel/panel/internal/remnastats"
@@ -141,6 +143,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/nodes/{id}/backends/remna-links", s.requireAuth(s.handleNodeRemnaLinks))
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/reload", s.requireAuth(s.handleReload))
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/restart", s.requireAuth(s.handleRestart))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/listen-ports", s.requireAuth(s.handleNodeListenPorts))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/protect", s.requireAuth(s.handleNodeProtect))
 	s.mux.HandleFunc("GET /api/nodes/{id}/health", s.requireAuth(s.handleHealth))
 
 	s.mux.HandleFunc("GET /api/remna-panels", s.requireAuth(s.handleListRemnaPanels))
@@ -317,9 +321,10 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProvisionNode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
-		Host string `json:"host"`
-		Port int    `json:"port"`
+		Name        string `json:"name"`
+		Host        string `json:"host"`
+		Port        int    `json:"port"`
+		ListenPorts []int  `json:"listen_ports"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON")
@@ -335,7 +340,7 @@ func (s *Server) handleProvisionNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bundle, err := provision.Generate(body.Name, body.Host, body.Port, "")
+	bundle, err := provision.Generate(body.Name, body.Host, body.Port, "", body.ListenPorts)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -346,6 +351,12 @@ func (s *Server) handleProvisionNode(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("provision node", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
 		return
+	}
+	if updated, err := s.store.SetNodeListenPorts(n.ID, bundle.ListenPorts); err == nil && updated != nil {
+		n = updated
+	}
+	if updated, err := s.store.SetNodeProtect(n.ID, protect.Default()); err == nil && updated != nil {
+		n = updated
 	}
 	_ = s.store.UpdateNodeStatus(n.ID, store.StatusUnknown, nil)
 
@@ -366,7 +377,7 @@ func (s *Server) handleNodeInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "нода не найдена")
 		return
 	}
-	bundle, err := provision.GenerateFromURL(n.Name, n.URL, n.Token)
+	bundle, err := provision.GenerateFromURL(n.Name, n.URL, n.Token, n.ListenPorts)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -888,6 +899,162 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleNodeListenPorts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	var body struct {
+		Ports []int `json:"ports"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	ports, err := provision.NormalizeListenPorts(body.Ports)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updated, err := s.store.SetNodeListenPorts(id, ports)
+	if err != nil {
+		s.logger.Error("save listen ports", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if updated == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]any{"ports": ports})
+	status, respBody, agentErr := s.agent.SetListenPorts(r.Context(), updated.URL, updated.Token, bytes.NewReader(payload))
+	now := time.Now().UTC()
+	if agentErr != nil {
+		s.logger.Warn("agent listen-ports failed", "node", id, "err", agentErr)
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"saved":  true,
+			"node":   s.publicNode(*updated),
+			"error":  "порты сохранены в панели, но агент недоступен: " + agentErr.Error(),
+			"ports":  ports,
+		})
+		return
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = fmt.Sprintf("агент вернул %d", status)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"saved":  true,
+			"node":   s.publicNode(*updated),
+			"error":  "порты сохранены в панели, агент ответил ошибкой: " + msg,
+			"ports":  ports,
+			"agent":  json.RawMessage(respBody),
+		})
+		return
+	}
+	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
+
+	var agentResp map[string]any
+	_ = json.Unmarshal(respBody, &agentResp)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"saved":  true,
+		"node":   s.publicNode(*updated),
+		"ports":  ports,
+		"agent":  agentResp,
+	})
+}
+
+func (s *Server) handleNodeProtect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	var body protect.Profile
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	p, err := protect.Normalize(body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updated, err := s.store.SetNodeProtect(id, p)
+	if err != nil {
+		s.logger.Error("save protect", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if updated == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	payload, _ := json.Marshal(p)
+	status, respBody, agentErr := s.agent.SetProtect(r.Context(), updated.URL, updated.Token, bytes.NewReader(payload))
+	now := time.Now().UTC()
+	if agentErr != nil {
+		s.logger.Warn("agent protect failed", "node", id, "err", agentErr)
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      false,
+			"saved":   true,
+			"node":    s.publicNode(*updated),
+			"error":   "защита сохранена в панели, но агент недоступен: " + agentErr.Error(),
+			"protect": p,
+		})
+		return
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = fmt.Sprintf("агент вернул %d", status)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      false,
+			"saved":   true,
+			"node":    s.publicNode(*updated),
+			"error":   "защита сохранена в панели, агент ответил ошибкой: " + msg,
+			"protect": p,
+			"agent":   json.RawMessage(respBody),
+		})
+		return
+	}
+	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
+
+	var agentResp map[string]any
+	_ = json.Unmarshal(respBody, &agentResp)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"saved":   true,
+		"node":    s.publicNode(*updated),
+		"protect": p,
+		"agent":   agentResp,
+	})
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.proxyNode(w, r, func(ctx context.Context, n *store.Node) (int, []byte, error) {
 		return s.agent.Health(ctx, n.URL, n.Token)
@@ -952,6 +1119,8 @@ func (s *Server) publicNode(n store.Node) map[string]any {
 		"provider_account_id":    n.ProviderAccountID,
 		"provider_account_login": "",
 		"traffic_log":            n.TrafficLog,
+		"listen_ports":           n.ListenPorts,
+		"protect":                n.Protect,
 		"created_at":             n.CreatedAt.Format(time.RFC3339),
 		"status":                 n.Status,
 	}

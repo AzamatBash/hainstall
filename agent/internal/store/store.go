@@ -17,9 +17,24 @@ type Server struct {
 	Weight  int    `json:"weight"`
 }
 
+// ProtectProfile is HAProxy (and later host) protection settings.
+type ProtectProfile struct {
+	ClientHello         bool `json:"client_hello"`
+	ClientHelloDelaySec int  `json:"client_hello_delay_sec"`
+	RateLimit           bool `json:"rate_limit"`
+	MaxConnPerIP        int  `json:"max_conn_per_ip"`
+	MaxRatePerIP        int  `json:"max_rate_per_ip"`
+	RateWindowSec       int  `json:"rate_window_sec"`
+	RUOnly              bool `json:"ru_only"`
+	SynProxy            bool `json:"synproxy"`
+}
+
 // State is the on-disk agent state restored across reloads.
 type State struct {
-	Servers []Server `json:"servers"`
+	Servers     []Server            `json:"servers"`
+	Balances    map[string]string   `json:"balances,omitempty"` // backend name -> HAProxy balance algorithm
+	ListenPorts []int               `json:"listen_ports,omitempty"`
+	Protect     *ProtectProfile     `json:"protect,omitempty"`
 }
 
 // Store persists backend server inventory to a JSON file.
@@ -44,7 +59,7 @@ func (s *Store) loadUnlocked() (State, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return State{Servers: []Server{}}, nil
+			return State{Servers: []Server{}, Balances: map[string]string{}}, nil
 		}
 		return State{}, fmt.Errorf("read state: %w", err)
 	}
@@ -54,6 +69,9 @@ func (s *Store) loadUnlocked() (State, error) {
 	}
 	if st.Servers == nil {
 		st.Servers = []Server{}
+	}
+	if st.Balances == nil {
+		st.Balances = map[string]string{}
 	}
 	return st, nil
 }
@@ -69,8 +87,27 @@ func (s *Store) List() ([]Server, error) {
 	return out, nil
 }
 
+// Balances returns a copy of per-backend balance algorithms.
+func (s *Store) Balances() (map[string]string, error) {
+	st, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(st.Balances))
+	for k, v := range st.Balances {
+		out[k] = v
+	}
+	return out, nil
+}
+
 // Upsert adds or updates a server and persists.
 func (s *Store) Upsert(srv Server) error {
+	return s.UpsertWithBalance(srv, "")
+}
+
+// UpsertWithBalance upserts a server and, when balance is non-empty, sets the
+// HAProxy balance algorithm for that backend name.
+func (s *Store) UpsertWithBalance(srv Server, balance string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -88,6 +125,12 @@ func (s *Store) Upsert(srv Server) error {
 	}
 	if !found {
 		st.Servers = append(st.Servers, srv)
+	}
+	if balance != "" {
+		if st.Balances == nil {
+			st.Balances = map[string]string{}
+		}
+		st.Balances[srv.Backend] = balance
 	}
 	return s.saveUnlocked(st)
 }
@@ -114,10 +157,30 @@ func (s *Store) Delete(backend, name string) (bool, error) {
 		return false, nil
 	}
 	st.Servers = next
+	still := false
+	for _, existing := range st.Servers {
+		if existing.Backend == backend {
+			still = true
+			break
+		}
+	}
+	if !still && st.Balances != nil {
+		delete(st.Balances, backend)
+	}
 	if err := s.saveUnlocked(st); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// Save persists the full state document.
+func (s *Store) Save(st State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st.Servers == nil {
+		st.Servers = []Server{}
+	}
+	return s.saveUnlocked(st)
 }
 
 func (s *Store) saveUnlocked(st State) error {

@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/azabash/hapanel/panel/internal/protect"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
@@ -31,8 +33,10 @@ type Node struct {
 	CreatedAt         time.Time     `json:"created_at"`
 	LastSeen          *time.Time    `json:"last_seen,omitempty"`
 	Status            NodeStatus    `json:"status"`
-	TrafficLog        bool          `json:"traffic_log"`
-	Snapshot          *NodeSnapshot `json:"live,omitempty"`
+	TrafficLog        bool             `json:"traffic_log"`
+	ListenPorts       []int            `json:"listen_ports"`
+	Protect           protect.Profile  `json:"protect"`
+	Snapshot          *NodeSnapshot    `json:"live,omitempty"`
 }
 
 // NodeSnapshot is the last known live metrics for the nodes list (Remnawave-style).
@@ -121,6 +125,12 @@ CREATE TABLE IF NOT EXISTS nodes (
 		return err
 	}
 	if err := s.ensureColumn("nodes", "traffic_log", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("nodes", "listen_ports", "TEXT NOT NULL DEFAULT '[8443]'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("nodes", "protect", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if err := s.backfillSortOrder(); err != nil {
@@ -440,7 +450,7 @@ func (s *Store) backfillSortOrder() error {
 	return nil
 }
 
-const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log`
+const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log, listen_ports, protect`
 
 func (s *Store) ListNodes() ([]Node, error) {
 	rows, err := s.db.Query(`
@@ -547,6 +557,49 @@ func (s *Store) SetNodeTrafficLog(id string, enabled bool) (*Node, error) {
 		v = 1
 	}
 	res, err := s.db.Exec(`UPDATE nodes SET traffic_log = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	return s.GetNode(id)
+}
+
+// SetNodeProtect stores desired HAProxy protect profile as JSON.
+func (s *Store) SetNodeProtect(id string, p protect.Profile) (*Node, error) {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.Exec(`UPDATE nodes SET protect = ? WHERE id = ?`, string(raw), id)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	return s.GetNode(id)
+}
+
+// SetNodeListenPorts stores desired HAProxy client listen ports as JSON.
+func (s *Store) SetNodeListenPorts(id string, ports []int) (*Node, error) {
+	if len(ports) == 0 {
+		ports = []int{8443}
+	}
+	raw, err := json.Marshal(ports)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.Exec(`UPDATE nodes SET listen_ports = ? WHERE id = ?`, string(raw), id)
 	if err != nil {
 		return nil, err
 	}
@@ -771,17 +824,35 @@ type rowScanner interface {
 
 func scanNode(r rowScanner) (Node, error) {
 	var (
-		n          Node
-		createdAt  string
-		lastSeen   sql.NullString
-		status     string
-		snapshot   sql.NullString
-		trafficLog int
+		n           Node
+		createdAt   string
+		lastSeen    sql.NullString
+		status      string
+		snapshot    sql.NullString
+		trafficLog  int
+		listenPorts sql.NullString
+		protectRaw  sql.NullString
 	)
-	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog); err != nil {
+	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog, &listenPorts, &protectRaw); err != nil {
 		return Node{}, err
 	}
 	n.TrafficLog = trafficLog != 0
+	n.ListenPorts = []int{8443}
+	if listenPorts.Valid && strings.TrimSpace(listenPorts.String) != "" {
+		var ports []int
+		if err := json.Unmarshal([]byte(listenPorts.String), &ports); err == nil && len(ports) > 0 {
+			n.ListenPorts = ports
+		}
+	}
+	n.Protect = protect.Default()
+	if protectRaw.Valid && strings.TrimSpace(protectRaw.String) != "" {
+		var p protect.Profile
+		if err := json.Unmarshal([]byte(protectRaw.String), &p); err == nil {
+			if np, err := protect.Normalize(p); err == nil {
+				n.Protect = np
+			}
+		}
+	}
 	t, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		t, err = time.Parse(time.RFC3339, createdAt)

@@ -9,6 +9,7 @@ import {
   formatBytes,
   formatUptime,
   Node,
+  ProtectProfile,
   Provider,
   RemnaBackendStat,
   RemnaPanel,
@@ -256,6 +257,19 @@ export default function NodeDetailPage() {
   const [editPort, setEditPort] = useState('47893')
   const [editOpen, setEditOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
+  const [listenPortsText, setListenPortsText] = useState('8443')
+  const [listenPortsBusy, setListenPortsBusy] = useState(false)
+  const [protectForm, setProtectForm] = useState<ProtectProfile>({
+    client_hello: true,
+    client_hello_delay_sec: 5,
+    rate_limit: true,
+    max_conn_per_ip: 100,
+    max_rate_per_ip: 60,
+    rate_window_sec: 10,
+    ru_only: false,
+    synproxy: false,
+  })
+  const [protectBusy, setProtectBusy] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [showAddBackend, setShowAddBackend] = useState(false)
   const actionsRef = useRef<HTMLDivElement | null>(null)
@@ -266,6 +280,7 @@ export default function NodeDetailPage() {
     address: '',
     port: '8443',
     weight: '100',
+    balance: 'leastconn',
   })
 
   const [remnaPanels, setRemnaPanels] = useState<RemnaPanel[]>([])
@@ -392,6 +407,19 @@ export default function NodeDetailPage() {
       } catch {
         setEditHost('')
         setEditPort('47893')
+      }
+      setListenPortsText((found.listen_ports?.length ? found.listen_ports : [8443]).join(', '))
+      if (found.protect) {
+        setProtectForm({
+          client_hello: found.protect.client_hello,
+          client_hello_delay_sec: found.protect.client_hello_delay_sec || 5,
+          rate_limit: found.protect.rate_limit,
+          max_conn_per_ip: found.protect.max_conn_per_ip || 100,
+          max_rate_per_ip: found.protect.max_rate_per_ip || 60,
+          rate_window_sec: found.protect.rate_window_sec || 10,
+          ru_only: found.protect.ru_only ?? false,
+          synproxy: found.protect.synproxy ?? false,
+        })
       }
       if (found.status !== 'online') {
         setStats(null)
@@ -764,6 +792,7 @@ export default function NodeDetailPage() {
           address: form.address,
           port: Number(form.port),
           weight: Number(form.weight),
+          balance: form.balance,
         }),
       })
       setForm((f) => ({ ...f, name: '', address: '' }))
@@ -956,6 +985,90 @@ export default function NodeDetailPage() {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить адрес')
     } finally {
       setEditBusy(false)
+    }
+  }
+
+  async function onSaveProtect(e: FormEvent) {
+    e.preventDefault()
+    setProtectBusy(true)
+    setError('')
+    try {
+      const res = await api<{
+        ok: boolean
+        saved?: boolean
+        error?: string
+        node: Node
+        protect?: ProtectProfile
+      }>(`/api/nodes/${id}/protect`, {
+        method: 'PUT',
+        body: JSON.stringify(protectForm),
+      })
+      setNode(res.node)
+      if (res.protect) setProtectForm({ ...protectForm, ...res.protect })
+      if (!res.ok) {
+        setToast({
+          kind: 'fail',
+          text: res.error || 'Защита сохранена в панели, но на VPS не применена',
+        })
+      } else {
+        setToast({ kind: 'ok', text: 'Защита HAProxy применена на ноде' })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить защиту')
+    } finally {
+      setProtectBusy(false)
+    }
+  }
+
+  async function onSaveListenPorts(e: FormEvent) {
+    e.preventDefault()
+    setListenPortsBusy(true)
+    setError('')
+    try {
+      const ports = listenPortsText
+        .split(/[,;\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => Number(s))
+      if (ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535)) {
+        throw new Error('Укажите порты числами от 1 до 65535 через запятую')
+      }
+      const res = await api<{
+        ok: boolean
+        saved?: boolean
+        error?: string
+        node: Node
+        ports?: number[]
+        agent?: { opened?: number[]; closed?: number[] }
+      }>(`/api/nodes/${id}/listen-ports`, {
+        method: 'PUT',
+        body: JSON.stringify({ ports }),
+      })
+      setNode(res.node)
+      if (res.ports?.length) {
+        setListenPortsText(res.ports.join(', '))
+      }
+      if (!res.ok) {
+        setToast({
+          kind: 'fail',
+          text: res.error || 'Порты сохранены в панели, но на VPS не применены',
+        })
+      } else {
+        const opened = res.agent?.opened?.length
+          ? ` открыты: ${res.agent.opened.join(', ')}`
+          : ''
+        const closed = res.agent?.closed?.length
+          ? ` закрыты: ${res.agent.closed.join(', ')}`
+          : ''
+        setToast({
+          kind: 'ok',
+          text: `Клиентские порты обновлены${opened}${closed}`,
+        })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить порты')
+    } finally {
+      setListenPortsBusy(false)
     }
   }
 
@@ -1220,6 +1333,175 @@ export default function NodeDetailPage() {
         </section>
       )}
 
+      {node && (
+        <section className="panel" style={{ marginBottom: '1rem' }}>
+          <h2>Клиентские порты HAProxy</h2>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            Порты, которые слушает HAProxy на VPS. При сохранении агент обновит bind, publish в
+            Docker Compose и правила UFW (откроет новые, закроет убранные).
+          </p>
+          <form className="stack" onSubmit={(e) => void onSaveListenPorts(e)}>
+            <div className="field">
+              <label htmlFor="listen-ports">Порты (через запятую)</label>
+              <input
+                id="listen-ports"
+                className="mono"
+                value={listenPortsText}
+                onChange={(e) => setListenPortsText(e.target.value)}
+                placeholder="443, 8443"
+                required
+              />
+            </div>
+            <div className="row">
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={listenPortsBusy || st !== 'online'}
+              >
+                {listenPortsBusy ? 'Применение…' : 'Применить на VPS'}
+              </button>
+              {st !== 'online' && (
+                <span className="muted" style={{ fontSize: '0.85rem' }}>
+                  Сначала проверьте связь с нодой
+                </span>
+              )}
+            </div>
+          </form>
+        </section>
+      )}
+
+      {node && (
+        <section className="panel" style={{ marginBottom: '1rem' }}>
+          <h2>Защита HAProxy</h2>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            По умолчанию включены проверка TLS ClientHello (5с) и лимиты на IP. RU allowlist и
+            SYNPROXY пока только сохраняются в профиле — применение на хост будет в следующем
+            этапе.
+          </p>
+          <form className="stack" onSubmit={(e) => void onSaveProtect(e)}>
+            <label className="row" style={{ alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={protectForm.client_hello}
+                onChange={(e) =>
+                  setProtectForm((p) => ({ ...p, client_hello: e.target.checked }))
+                }
+              />
+              <span>
+                Требовать TLS ClientHello за{' '}
+                <input
+                  className="mono"
+                  style={{ width: '3.5rem' }}
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={protectForm.client_hello_delay_sec}
+                  onChange={(e) =>
+                    setProtectForm((p) => ({
+                      ...p,
+                      client_hello_delay_sec: Number(e.target.value) || 5,
+                    }))
+                  }
+                />{' '}
+                с (режет пустой TCP)
+              </span>
+            </label>
+            <label className="row" style={{ alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={protectForm.rate_limit}
+                onChange={(e) =>
+                  setProtectForm((p) => ({ ...p, rate_limit: e.target.checked }))
+                }
+              />
+              <span>Лимиты на IP (stick-table)</span>
+            </label>
+            {protectForm.rate_limit && (
+              <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                <div className="field" style={{ flex: '0 0 8rem' }}>
+                  <label htmlFor="max-conn">max conn/IP</label>
+                  <input
+                    id="max-conn"
+                    className="mono"
+                    type="number"
+                    min={1}
+                    value={protectForm.max_conn_per_ip}
+                    onChange={(e) =>
+                      setProtectForm((p) => ({
+                        ...p,
+                        max_conn_per_ip: Number(e.target.value) || 100,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field" style={{ flex: '0 0 8rem' }}>
+                  <label htmlFor="max-rate">новых / окно</label>
+                  <input
+                    id="max-rate"
+                    className="mono"
+                    type="number"
+                    min={1}
+                    value={protectForm.max_rate_per_ip}
+                    onChange={(e) =>
+                      setProtectForm((p) => ({
+                        ...p,
+                        max_rate_per_ip: Number(e.target.value) || 60,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field" style={{ flex: '0 0 7rem' }}>
+                  <label htmlFor="rate-win">окно, с</label>
+                  <input
+                    id="rate-win"
+                    className="mono"
+                    type="number"
+                    min={1}
+                    value={protectForm.rate_window_sec}
+                    onChange={(e) =>
+                      setProtectForm((p) => ({
+                        ...p,
+                        rate_window_sec: Number(e.target.value) || 10,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+            )}
+            <label
+              className="row"
+              style={{ alignItems: 'center', gap: 8, opacity: 0.55, cursor: 'not-allowed' }}
+              title="Скоро: nftables на хосте"
+            >
+              <input type="checkbox" checked={false} disabled />
+              <span>Только RU (ASN) — скоро</span>
+            </label>
+            <label
+              className="row"
+              style={{ alignItems: 'center', gap: 8, opacity: 0.55, cursor: 'not-allowed' }}
+              title="Скоро: nftables на хосте"
+            >
+              <input type="checkbox" checked={false} disabled />
+              <span>SYNPROXY — скоро</span>
+            </label>
+            <div className="row">
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={protectBusy || st !== 'online'}
+              >
+                {protectBusy ? 'Применение…' : 'Применить защиту'}
+              </button>
+              {st !== 'online' && (
+                <span className="muted" style={{ fontSize: '0.85rem' }}>
+                  Сначала проверьте связь с нодой
+                </span>
+              )}
+            </div>
+          </form>
+        </section>
+      )}
+
       {toast && (
         <div className={`toast toast-${toast.kind}`} role="status">
           {toast.text}
@@ -1373,6 +1655,15 @@ export default function NodeDetailPage() {
                 disabled={busy || connecting || st !== 'online'}
                 onClick={() => {
                   setError('')
+                  setForm((f) => {
+                    const existing = backends.find((b) => b.backend === f.backend)
+                    return {
+                      ...f,
+                      balance: existing?.balance
+                        ? String(existing.balance)
+                        : f.balance || 'leastconn',
+                    }
+                  })
                   setShowAddBackend(true)
                 }}
               >
@@ -1393,6 +1684,7 @@ export default function NodeDetailPage() {
                   <th>Адрес</th>
                   <th>Порт</th>
                   <th>Вес</th>
+                  <th>Баланс</th>
                   <th>Статус</th>
                   <th />
                 </tr>
@@ -1400,7 +1692,7 @@ export default function NodeDetailPage() {
               <tbody>
                 {backends.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="muted">
+                    <td colSpan={8} className="muted">
                       {st === 'online'
                         ? 'Пока нет серверов — добавьте через кнопку выше'
                         : 'Нет данных — сначала установите связь'}
@@ -1424,6 +1716,7 @@ export default function NodeDetailPage() {
                           <td className="mono">{b.address}</td>
                           <td className="mono">{b.port}</td>
                           <td className="mono">{b.weight ?? '—'}</td>
+                          <td className="mono">{b.balance ?? 'leastconn'}</td>
                           <td>{b.status ?? '—'}</td>
                           <td>
                             <button
@@ -1437,7 +1730,7 @@ export default function NodeDetailPage() {
                           </td>
                         </tr>
                         <tr className="backend-remna-row">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="backend-remna">
                               {!linked ? (
                                 <div className="backend-remna-bind">
@@ -1713,7 +2006,17 @@ export default function NodeDetailPage() {
                     id={`add-${key}`}
                     className={key === 'address' || key === 'backend' ? 'mono' : undefined}
                     value={form[key]}
-                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setForm((f) => {
+                        const next = { ...f, [key]: value }
+                        if (key === 'backend') {
+                          const existing = backends.find((b) => b.backend === value)
+                          if (existing?.balance) next.balance = String(existing.balance)
+                        }
+                        return next
+                      })
+                    }}
                     required
                     disabled={busy}
                     placeholder={
@@ -1730,6 +2033,25 @@ export default function NodeDetailPage() {
                   />
                 </div>
               ))}
+              <div className="field">
+                <label htmlFor="add-balance">Балансировка</label>
+                <select
+                  id="add-balance"
+                  value={form.balance}
+                  disabled={busy}
+                  onChange={(e) => setForm((f) => ({ ...f, balance: e.target.value }))}
+                >
+                  <option value="leastconn">leastconn — меньше соединений</option>
+                  <option value="roundrobin">roundrobin — по кругу</option>
+                  <option value="source">source — по IP клиента</option>
+                  <option value="first">first — первый доступный</option>
+                  <option value="random">random — случайно</option>
+                </select>
+                <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.8rem' }}>
+                  Алгоритм для всего backend (все серверы с этим именем). Вес по-прежнему
+                  задаётся отдельно на каждый сервер.
+                </p>
+              </div>
               <div className="modal-actions">
                 <button
                   className="btn"

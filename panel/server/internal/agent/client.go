@@ -52,7 +52,7 @@ func NewWithHello(insecureSkipVerify bool, hello string) *Client {
 		DialTLSContext:        c.dialTLSContext,
 	}
 	c.httpClient = &http.Client{
-		Timeout:   45 * time.Second,
+		Timeout:   120 * time.Second,
 		Transport: &schemeTransport{http: plain, https: https},
 	}
 	return c
@@ -237,6 +237,40 @@ func (c *Client) Restart(ctx context.Context, baseURL, token string) (int, []byt
 		Method: http.MethodPost,
 		Path:   "/_hapctl/v1/haproxy/restart",
 		Token:  token,
+	}, nil)
+}
+
+func (c *Client) GetListenPorts(ctx context.Context, baseURL, token string) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodGet,
+		Path:   "/_hapctl/v1/listen-ports",
+		Token:  token,
+	}, nil)
+}
+
+func (c *Client) SetListenPorts(ctx context.Context, baseURL, token string, body io.Reader) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodPut,
+		Path:   "/_hapctl/v1/listen-ports",
+		Token:  token,
+		Body:   body,
+	}, nil)
+}
+
+func (c *Client) GetProtect(ctx context.Context, baseURL, token string) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodGet,
+		Path:   "/_hapctl/v1/protect",
+		Token:  token,
+	}, nil)
+}
+
+func (c *Client) SetProtect(ctx context.Context, baseURL, token string, body io.Reader) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodPut,
+		Path:   "/_hapctl/v1/protect",
+		Token:  token,
+		Body:   body,
 	}, nil)
 }
 

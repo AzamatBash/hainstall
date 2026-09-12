@@ -6,26 +6,33 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/azabash/hapanel/panel/internal/protect"
 )
 
 // AgentImage is the Docker Hub image for the node agent.
 // Also published as azamatbash/hanode:latest — prefer the version tag in production.
-const AgentImage = "azamatbash/hanode:0.1.0"
+const AgentImage = "azamatbash/hanode:0.1.2"
 
-// DefaultMgmtPort is the panel↔agent HTTP port (clients stay on 8443).
+// DefaultMgmtPort is the panel↔agent HTTP port (clients stay on listen ports).
 const DefaultMgmtPort = 47893
+
+// DefaultListenPorts is the default HAProxy client publish/bind set.
+var DefaultListenPorts = []int{8443}
 
 // Bundle is everything the operator copies onto the VPS.
 type Bundle struct {
-	Token      string            `json:"token"`
-	URL        string            `json:"url"`
-	Host       string            `json:"host"`
-	Port       int               `json:"port"`
-	Files      map[string]string `json:"files"`
-	Commands   string            `json:"commands"`
-	AgentImage string            `json:"agent_image"`
+	Token       string            `json:"token"`
+	URL         string            `json:"url"`
+	Host        string            `json:"host"`
+	Port        int               `json:"port"`
+	ListenPorts []int             `json:"listen_ports"`
+	Files       map[string]string `json:"files"`
+	Commands    string            `json:"commands"`
+	AgentImage  string            `json:"agent_image"`
 }
 
 // NewToken returns a 32-byte hex token.
@@ -35,6 +42,29 @@ func NewToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// NormalizeListenPorts validates and deduplicates client listen ports.
+func NormalizeListenPorts(in []int) ([]int, error) {
+	if len(in) == 0 {
+		out := make([]int, len(DefaultListenPorts))
+		copy(out, DefaultListenPorts)
+		return out, nil
+	}
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, p := range in {
+		if p < 1 || p > 65535 {
+			return nil, fmt.Errorf("invalid listen port %d (want 1–65535)", p)
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	return out, nil
 }
 
 // BuildURL builds the panel→node management base URL (plain HTTP to agent).
@@ -89,10 +119,34 @@ func normalizeHost(host string) string {
 	return host
 }
 
+func formatComposePorts(ports []int) string {
+	var b strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&b, "      - \"%d:%d\"\n", p, p)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatBindLines(ports []int) string {
+	var b strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&b, "    bind *:%d\n", p)
+	}
+	return b.String()
+}
+
+func formatPortsList(ports []int) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = strconv.Itoa(p)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // Generate creates install files for a node.
 // port is the host management port published on the agent (panel → agent HTTP).
-// HAProxy only serves clients on 8443 — no /_hapctl routing.
-func Generate(name, host string, port int, token string) (Bundle, error) {
+// listenPorts are HAProxy client ports (default 8443).
+func Generate(name, host string, port int, token string, listenPorts []int) (Bundle, error) {
 	host = normalizeHost(host)
 	if host == "" {
 		return Bundle{}, fmt.Errorf("host is required")
@@ -103,8 +157,12 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 	if port > 65535 {
 		return Bundle{}, fmt.Errorf("port must be 1–65535")
 	}
+	var err error
+	listenPorts, err = NormalizeListenPorts(listenPorts)
+	if err != nil {
+		return Bundle{}, err
+	}
 	if token == "" {
-		var err error
 		token, err = NewToken()
 		if err != nil {
 			return Bundle{}, err
@@ -112,9 +170,10 @@ func Generate(name, host string, port int, token string) (Bundle, error) {
 	}
 
 	mgmtMap := fmt.Sprintf("%d:9100", port)
+	portsList := formatPortsList(listenPorts)
 
 	compose := fmt.Sprintf(`# hapanel node — generated for %q
-# 8443 = клиенты (HAProxy TCP) | %d = панель → агент напрямую (HTTP)
+# клиенты HAProxy TCP: %s | %d = панель → агент напрямую (HTTP)
 # Конфиг фронтендов пишет агент в backends.d (без bind-mount файла haproxy.cfg).
 services:
   haproxy:
@@ -122,7 +181,7 @@ services:
     container_name: haproxy
     restart: unless-stopped
     ports:
-      - "8443:8443"
+%s
     volumes:
       - ./haproxy/backends.d:/etc/haproxy/backends.d
       - ./certs:/etc/haproxy/certs:ro
@@ -177,9 +236,9 @@ networks:
 
 volumes:
   agent-state:
-`, name, port, AgentImage, mgmtMap, token)
+`, name, portsList, port, formatComposePorts(listenPorts), AgentImage, mgmtMap, token)
 
-	baseCfg := `# Managed by hapanel agent — do not edit by hand
+	baseCfg := fmt.Sprintf(`# Managed by hapanel agent — do not edit by hand
 # Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
     maxconn 50000
@@ -203,10 +262,9 @@ defaults
 
 frontend https_front
     mode tcp
-    bind *:8443
-    maxconn 40000
-    default_backend app
-`
+%s    maxconn 40000
+%s    default_backend app
+`, formatBindLines(listenPorts), protect.FrontendExtras(protect.Default()))
 
 	appCfg := `# Managed by hapanel agent — do not edit by hand
 backend app
@@ -222,7 +280,7 @@ DOCKER_GID=0
 	readme := fmt.Sprintf(`# hapanel node: %s
 
 Порты:
-- **8443** — клиентский трафик (HAProxy TCP passthrough → app)
+- **%s** — клиентский трафик (HAProxy TCP passthrough → app)
 - **%d** — панель ↔ агент напрямую (HTTP /_hapctl)
 
 Важно: ограничьте доступ к порту %d (firewall: только IP панели).
@@ -234,31 +292,32 @@ DOCKER_GID=0
 5. DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
 6. В панели → «Проверить связь».
 
-Агент сам пишет фронтенды :8443 в backends.d при старте.
-`, name, port, port, AgentImage)
+Агент сам пишет фронтенды (%s) в backends.d при старте.
+`, name, portsList, port, port, AgentImage, portsList)
 
 	nodeURL := BuildURL(host, port)
 	commands := fmt.Sprintf(`mkdir -p /opt/hapanel-node/haproxy/backends.d /opt/hapanel-node/certs
 cd /opt/hapanel-node
 # запишите docker-compose.yml и файлы backends.d из бандла панели
-# 8443 = клиенты TCP, %d = панель→агент (HTTP); порт 80 не публикуем
+# клиенты TCP: %s | %d = панель→агент (HTTP)
 export DOCKER_GID=$(getent group docker | cut -d: -f3)
 docker compose up -d
 # затем «Проверить связь» в панели → %s
-`, port, nodeURL)
+`, portsList, port, nodeURL)
 
 	return Bundle{
-		Token:      token,
-		URL:        nodeURL,
-		Host:       host,
-		Port:       port,
-		AgentImage: AgentImage,
+		Token:       token,
+		URL:         nodeURL,
+		Host:        host,
+		Port:        port,
+		ListenPorts: listenPorts,
+		AgentImage:  AgentImage,
 		Files: map[string]string{
-			"docker-compose.yml":                      compose,
-			"haproxy/backends.d/00-hapanel-base.cfg":  baseCfg,
-			"haproxy/backends.d/app.cfg":              appCfg,
-			".env":                                    envFile,
-			"README.md":                               readme,
+			"docker-compose.yml":                     compose,
+			"haproxy/backends.d/00-hapanel-base.cfg": baseCfg,
+			"haproxy/backends.d/app.cfg":             appCfg,
+			".env":                                   envFile,
+			"README.md":                              readme,
 		},
 		Commands: commands,
 	}, nil
@@ -266,10 +325,10 @@ docker compose up -d
 
 // GenerateFromURL regenerates a bundle for an existing node.
 // Management is always HTTP to the agent (never via HAProxy).
-func GenerateFromURL(name, rawURL, token string) (Bundle, error) {
+func GenerateFromURL(name, rawURL, token string, listenPorts []int) (Bundle, error) {
 	host, port, err := ParseURL(rawURL)
 	if err != nil {
 		return Bundle{}, err
 	}
-	return Generate(name, host, port, token)
+	return Generate(name, host, port, token, listenPorts)
 }

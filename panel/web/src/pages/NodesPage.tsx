@@ -1055,6 +1055,7 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
   const [sshPassword, setSshPassword] = useState('')
   const [sshPort, setSshPort] = useState('22')
   const [mgmtPort, setMgmtPort] = useState('47893')
+  const [listenPorts, setListenPorts] = useState('8443')
   const [keepRemnanode, setKeepRemnanode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -1146,6 +1147,10 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
           ssh_password: sshPassword,
           ssh_port: Number(sshPort) || 22,
           mgmt_port: Number(mgmtPort) || 47893,
+          listen_ports: listenPorts
+            .split(/[,;\s]+/)
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isInteger(n) && n > 0 && n <= 65535),
           keep_remnanode: keepRemnanode,
         }),
       })
@@ -1231,6 +1236,18 @@ function AgentDeployChat({ onDone }: { onDone: () => void }) {
               value={mgmtPort}
               onChange={(e) => setMgmtPort(e.target.value)}
               disabled={busy}
+            />
+          </div>
+          <div className="field" style={{ width: 120 }}>
+            <label htmlFor="ag-listen">клиент</label>
+            <input
+              id="ag-listen"
+              className="mono"
+              value={listenPorts}
+              onChange={(e) => setListenPorts(e.target.value)}
+              disabled={busy}
+              placeholder="443,8443"
+              title="Клиентские порты HAProxy"
             />
           </div>
           <button className="btn btn-primary" type="submit" disabled={busy}>
@@ -1913,6 +1930,7 @@ function AddNodeWizard({
   const [name, setName] = useState(resume?.node.name ?? '')
   const [host, setHost] = useState(resume?.bundle.host ?? '')
   const [port, setPort] = useState(String(resume?.bundle.port ?? 47893))
+  const [listenPorts, setListenPorts] = useState('8443')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [node, setNode] = useState<Node | null>(resume?.node ?? null)
@@ -1933,6 +1951,10 @@ function AddNodeWizard({
           name,
           host,
           port: Number(port) || 47893,
+          listen_ports: listenPorts
+            .split(/[,;\s]+/)
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isInteger(n) && n > 0 && n <= 65535),
         }),
       })
       setNode(res.node)
@@ -2046,8 +2068,22 @@ function AddNodeWizard({
                 required
               />
               <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
-                Клиенты — 8443 (HAProxy). Панель ходит к агенту напрямую по HTTP
-                на этом порту (по умолчанию 47893), не через HAProxy.
+                Панель ходит к агенту напрямую по HTTP на этом порту (по умолчанию 47893), не через
+                HAProxy.
+              </p>
+            </div>
+            <div className="field">
+              <label htmlFor="listen-ports">Клиентские порты HAProxy</label>
+              <input
+                id="listen-ports"
+                className="mono"
+                value={listenPorts}
+                onChange={(e) => setListenPorts(e.target.value)}
+                required
+                placeholder="443, 8443"
+              />
+              <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                Через запятую. По умолчанию 8443; для фронта под TSPU часто нужен 443.
               </p>
             </div>
             {error && <p className="error">{error}</p>}

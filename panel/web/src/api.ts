@@ -32,7 +32,20 @@ export interface Node {
   last_seen?: string
   status: NodeStatus
   traffic_log?: boolean
+  listen_ports?: number[]
+  protect?: ProtectProfile
   live?: NodeLive
+}
+
+export interface ProtectProfile {
+  client_hello: boolean
+  client_hello_delay_sec: number
+  rate_limit: boolean
+  max_conn_per_ip: number
+  max_rate_per_ip: number
+  rate_window_sec: number
+  ru_only?: boolean
+  synproxy?: boolean
 }
 
 export interface BackendServer {
@@ -41,6 +54,7 @@ export interface BackendServer {
   address: string
   port: number
   weight?: number
+  balance?: string
   status?: string
   [key: string]: unknown
 }
@@ -414,9 +428,11 @@ export function flattenBackends(data: unknown): BackendServer[] {
       for (const s of servers) {
         const be = String(s.backend || backendName)
         if (isInternalBackend(be)) continue
+        const balance = String(g.balance ?? s.balance ?? '')
         out.push({
           ...s,
           backend: be,
+          ...(balance ? { balance } : {}),
         })
       }
     }

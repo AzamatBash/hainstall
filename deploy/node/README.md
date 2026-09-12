@@ -9,7 +9,7 @@
 
 ## Quick start
 
-Образы по умолчанию: `azamatbash/hanode:0.1.0` + `haproxy:3.0-alpine`
+Образы по умолчанию: `azamatbash/hanode:0.1.2` + `haproxy:3.0-alpine`
 (или бандл из мастера панели).
 
 ```bash

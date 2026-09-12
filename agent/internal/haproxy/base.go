@@ -40,7 +40,16 @@ func nbthreadCount() int {
 }
 
 // BaseConfigBody returns the canonical HAProxy frontends for client traffic.
-func BaseConfigBody() string {
+// listenPorts are host/container TCP ports HAProxy binds (default 8443).
+func BaseConfigBody(listenPorts []int, protect ProtectOpts) string {
+	if len(listenPorts) == 0 {
+		listenPorts = []int{8443}
+	}
+	var binds strings.Builder
+	for _, p := range listenPorts {
+		fmt.Fprintf(&binds, "    bind *:%d\n", p)
+	}
+	extras := protect.frontendExtras()
 	return fmt.Sprintf(`# Managed by hapanel agent — do not edit by hand
 # Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
@@ -65,14 +74,18 @@ defaults
 
 frontend https_front
     mode tcp
-    bind *:8443
-    maxconn 40000
-    default_backend app
-`, nbthreadCount())
+%s    maxconn 40000
+%s    default_backend app
+`, nbthreadCount(), binds.String(), extras)
+}
+
+// AtomicWriteFile writes body to path atomically (exported for listen-ports apply).
+func AtomicWriteFile(path, body string) error {
+	return atomicWrite(path, body)
 }
 
 // EnsureBaseConfig writes frontends into backends.d and reloads HAProxy when needed.
-func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client) (changed bool, err error) {
+func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, listenPorts []int, protect ProtectOpts) (changed bool, err error) {
 	if backendsDir == "" {
 		return false, fmt.Errorf("backends dir is empty")
 	}
@@ -80,7 +93,7 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 		return false, err
 	}
 	path := filepath.Join(backendsDir, BaseConfigFile)
-	body := BaseConfigBody()
+	body := BaseConfigBody(listenPorts, protect)
 	prev, _ := os.ReadFile(path)
 	if string(prev) == body {
 		return false, nil
@@ -99,17 +112,17 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 }
 
 // EnsureBaseConfigLoop keeps base frontends present (fixes empty/missing mounts).
-func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, log func(msg string, args ...any)) {
+func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, listenPorts []int, protect ProtectOpts, log func(msg string, args ...any)) {
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		changed, err := EnsureBaseConfig(ctx, backendsDir, docker, ha)
+		changed, err := EnsureBaseConfig(ctx, backendsDir, docker, ha, listenPorts, protect)
 		if err == nil {
 			if log != nil {
 				if changed {
-					log("haproxy base config applied", "file", BaseConfigFile)
+					log("haproxy base config applied", "file", BaseConfigFile, "ports", listenPorts)
 				} else {
 					log("haproxy base config ok", "file", BaseConfigFile)
 				}

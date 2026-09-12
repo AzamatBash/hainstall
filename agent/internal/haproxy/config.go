@@ -48,7 +48,8 @@ func NewConfigWriter(dir string) *ConfigWriter {
 
 // Write regenerates one `{backend}.cfg` per backend with a full backend section.
 // Frontends live in 00-hapanel-base.cfg (written by the agent).
-func (w *ConfigWriter) Write(servers []store.Server) error {
+// balances maps backend name → HAProxy balance algorithm (empty → leastconn).
+func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string) error {
 	if w.Dir == "" {
 		return fmt.Errorf("backends dir is empty")
 	}
@@ -70,7 +71,11 @@ func (w *ConfigWriter) Write(servers []store.Server) error {
 	for backend, list := range byBackend {
 		sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 		path := filepath.Join(w.Dir, backend+".cfg")
-		body := renderBackendSection(backend, list)
+		bal := ""
+		if balances != nil {
+			bal = balances[backend]
+		}
+		body := renderBackendSection(backend, list, bal)
 		if err := atomicWrite(path, body); err != nil {
 			return err
 		}
@@ -101,12 +106,16 @@ func (w *ConfigWriter) Write(servers []store.Server) error {
 	return nil
 }
 
-func renderBackendSection(backend string, servers []store.Server) string {
+func renderBackendSection(backend string, servers []store.Server, balance string) string {
+	bal, err := NormalizeBalance(balance)
+	if err != nil {
+		bal = DefaultBalance
+	}
 	var b strings.Builder
 	b.WriteString("# Managed by hapanel agent — do not edit by hand\n")
 	fmt.Fprintf(&b, "backend %s\n", backend)
 	b.WriteString("    mode tcp\n")
-	b.WriteString("    balance leastconn\n")
+	fmt.Fprintf(&b, "    balance %s\n", bal)
 	// No health-check by default: ssl-hello-chk / aggressive checks break Reality
 	// (server marked DOWN → clients cannot connect).
 	for _, s := range servers {

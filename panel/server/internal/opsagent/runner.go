@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/azabash/hapanel/panel/internal/protect"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/store"
 	"github.com/google/uuid"
@@ -66,6 +67,7 @@ type DeployRequest struct {
 	SSHPassword   string
 	SSHPort       int
 	MgmtPort      int
+	ListenPorts   []int
 	PanelIP       string
 	KeepRemnanode bool
 }
@@ -142,7 +144,7 @@ func (r *Runner) runDeploy(job *Job, req DeployRequest) {
 
 	// 1) Provision in panel DB
 	job.add("agent", "provision", "Создаю ноду в панели и генерирую compose…")
-	bundle, err := provision.Generate(req.Name, req.Host, req.MgmtPort, "")
+	bundle, err := provision.Generate(req.Name, req.Host, req.MgmtPort, "", req.ListenPorts)
 	if err != nil {
 		fail("provision", err.Error())
 		return
@@ -151,6 +153,12 @@ func (r *Runner) runDeploy(job *Job, req DeployRequest) {
 	if err != nil {
 		fail("provision", "ошибка БД: "+err.Error())
 		return
+	}
+	if updated, err := r.Store.SetNodeListenPorts(n.ID, bundle.ListenPorts); err == nil && updated != nil {
+		n = updated
+	}
+	if updated, err := r.Store.SetNodeProtect(n.ID, protect.Default()); err == nil && updated != nil {
+		n = updated
 	}
 	_ = r.Store.UpdateNodeStatus(n.ID, store.StatusUnknown, nil)
 	job.NodeID = n.ID
@@ -222,7 +230,7 @@ func (r *Runner) runDeploy(job *Job, req DeployRequest) {
 
 	// 4) Firewall + fail2ban
 	panelIP := strings.TrimSpace(req.PanelIP)
-	fw := hardenScript(panelIP, req.MgmtPort)
+	fw := hardenScript(panelIP, req.MgmtPort, bundle.ListenPorts)
 	if !runStep("harden", "UFW + fail2ban (sshd)…", fw, 5*time.Minute) {
 		job.add("agent", "harden", "Харденинг не обязателен — продолжаю")
 	}
@@ -376,11 +384,18 @@ docker compose version
 `
 }
 
-func hardenScript(panelIP string, mgmtPort int) string {
+func hardenScript(panelIP string, mgmtPort int, listenPorts []int) string {
 	panelIP = strings.TrimSpace(panelIP)
 	ufwMgmt := `echo "PANEL_IP empty — skip mgmt UFW rule"`
 	if panelIP != "" {
 		ufwMgmt = fmt.Sprintf(`ufw allow from %s to any port %d proto tcp || true`, panelIP, mgmtPort)
+	}
+	if len(listenPorts) == 0 {
+		listenPorts = append([]int(nil), provision.DefaultListenPorts...)
+	}
+	var ufwClient strings.Builder
+	for _, p := range listenPorts {
+		fmt.Fprintf(&ufwClient, "ufw allow %d/tcp || true\n", p)
 	}
 	return fmt.Sprintf(`set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -389,7 +404,7 @@ apt-get install -y ufw fail2ban
 
 echo "=== UFW ==="
 ufw allow OpenSSH || ufw allow 22/tcp || true
-ufw allow 8443/tcp || true
+%s
 %s
 # Non-interactive enable
 ufw --force enable || true
@@ -414,5 +429,5 @@ systemctl enable --now fail2ban
 systemctl restart fail2ban
 fail2ban-client status sshd 2>/dev/null || fail2ban-client status || true
 echo "harden done"
-`, ufwMgmt)
+`, ufwClient.String(), ufwMgmt)
 }

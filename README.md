@@ -58,14 +58,14 @@ All agent routes are under `/_hapctl/v1/...` with `Authorization: Bearer <token>
 
 | Image | Tags | Role |
 |-------|------|------|
-| `azamatbash/hapanel` | `0.1.0`, `latest` | Panel (UI + API). **Prod digest:** `sha256:99a718b5cdb7448c13baa6ee54d33ecd8a8879c97c4beebf4bd4fa87a748f7ee` (см. `deploy/panel/PROD_IMAGE.txt`) |
-| `azamatbash/hanode` | `0.1.0`, `latest` | Node agent |
+| `azamatbash/hapanel` | `0.1.2`, `latest` | Panel (UI + API). **Prod digest:** `sha256:29ad6f65637e7086beeda0e582dc5b741ae6fa713736d3b25834e02afe11ba91` (см. `deploy/panel/PROD_IMAGE.txt`) |
+| `azamatbash/hanode` | `0.1.2`, `latest` | Node agent (`sha256:4375dcdd09e0209681b90d54e10e2edcd59109648dc204ec6794e5a780a77fea`) |
 | `haproxy:3.0-alpine` | official | HAProxy on nodes |
 
-Теги `0.1.0` и `latest` указывают на **один и тот же** образ, что крутится на проде (одни и те же layers). Ставить лучше по digest:
+Теги `0.1.2` и `latest` указывают на **один и тот же** образ, что крутится на проде (одни и те же layers). Ставить лучше по digest:
 
 ```bash
-docker pull azamatbash/hapanel@sha256:99a718b5cdb7448c13baa6ee54d33ecd8a8879c97c4beebf4bd4fa87a748f7ee
+docker pull azamatbash/hapanel@sha256:29ad6f65637e7086beeda0e582dc5b741ae6fa713736d3b25834e02afe11ba91
 ```
 
 В репозитории точные бинарник и UI с прода лежат в `deploy/panel/prod-frozen/` (сверка с живым контейнером).
@@ -74,8 +74,8 @@ docker pull azamatbash/hapanel@sha256:99a718b5cdb7448c13baa6ee54d33ecd8a8879c97c
 
 ```bash
 docker login
-./scripts/push-images.sh
-# optional: VERSION=0.1.0 ./scripts/push-images.sh
+REBUILD_PANEL=1 ./scripts/push-images.sh
+# optional: VERSION=0.1.2 REBUILD_PANEL=1 ./scripts/push-images.sh
 ```
 
 Builds from repo root:
@@ -84,7 +84,7 @@ Builds from repo root:
 
 ### Как развернуть панель (Docker Hub)
 
-Нужен сервер с Docker и плагином Compose. Образ панели: `azamatbash/hapanel:0.1.0`.
+Нужен сервер с Docker и плагином Compose. Образ панели: `azamatbash/hapanel:0.1.2`.
 
 **Вариант 1 — одной командой (рекомендуется)**
 
@@ -130,8 +130,8 @@ docker compose up -d
 ### Nodes from the panel wizard
 
 В мастере «Добавить ноду» панель сама генерирует `docker-compose.yml` с образом
-`azamatbash/hanode:0.1.0` (без локальной сборки), HAProxy — `haproxy:3.0-alpine`.
-На VPS: скопировать файлы бандла → `docker pull azamatbash/hanode:0.1.0` →
+`azamatbash/hanode:0.1.2` (без локальной сборки), HAProxy — `haproxy:3.0-alpine`.
+На VPS: скопировать файлы бандла → `docker pull azamatbash/hanode:0.1.2` →
 `docker compose up -d` → «Проверить связь».
 
 ## Quickstart — panel (Docker)
@@ -180,7 +180,7 @@ npm run dev          # http://localhost:5173 → proxies /api to :3080
 
 ## Quickstart — node
 
-Prefer the install bundle from the panel wizard (`azamatbash/hanode:0.1.0`).
+Prefer the install bundle from the panel wizard (`azamatbash/hanode:0.1.2`).
 
 Local stack (`deploy/node`):
 

@@ -14,6 +14,8 @@ import (
 	"github.com/azabash/hapanel/agent/internal/auth"
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
 	"github.com/azabash/hapanel/agent/internal/haproxy"
+	"github.com/azabash/hapanel/agent/internal/listenports"
+	"github.com/azabash/hapanel/agent/internal/protect"
 	"github.com/azabash/hapanel/agent/internal/store"
 )
 
@@ -32,8 +34,19 @@ func main() {
 	ha := haproxy.NewClient(socket)
 	cfgWriter := haproxy.NewConfigWriter(cfg.BackendsDir)
 
+	listenPorts, err := listenports.Current(st)
+	if err != nil {
+		log.Warn("listen ports from state", "err", err)
+		listenPorts = []int{8443}
+	}
+	prot, err := protect.EnsurePersistedDefaults(st)
+	if err != nil {
+		log.Warn("protect defaults", "err", err)
+		prot = protect.Default()
+	}
+
 	// Write frontends into backends.d before HAProxy starts (compose depends_on agent).
-	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil); err != nil {
+	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil, listenPorts, protect.ToHAProxy(prot)); err != nil {
 		log.Warn("base config write failed", "err", err)
 	}
 
@@ -43,7 +56,12 @@ func main() {
 		log.Error("load state", "err", err)
 		os.Exit(1)
 	}
-	if err := cfgWriter.Write(servers); err != nil {
+	balances, err := st.Balances()
+	if err != nil {
+		log.Error("load balances", "err", err)
+		os.Exit(1)
+	}
+	if err := cfgWriter.Write(servers, balances); err != nil {
 		log.Warn("initial config write failed", "err", err)
 	}
 
@@ -57,11 +75,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Self-heal: write client frontends (:8443) into backends.d (never rely
+	// Self-heal: write client frontends into backends.d (never rely
 	// on a host bind-mounted haproxy.cfg — Docker turns a missing file into a dir).
 	// Then ensure TCP runtime API for the panel.
 	go func() {
-		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
+		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, listenPorts, protect.ToHAProxy(prot), func(msg string, args ...any) {
 			log.Info(msg, args...)
 		})
 		haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {
@@ -85,7 +103,7 @@ func main() {
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      180 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 

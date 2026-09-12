@@ -21,6 +21,7 @@ func (s *Server) handleAgentDeploy(w http.ResponseWriter, r *http.Request) {
 		SSHPassword   string `json:"ssh_password"`
 		SSHPort       int    `json:"ssh_port"`
 		MgmtPort      int    `json:"mgmt_port"`
+		ListenPorts   []int  `json:"listen_ports"`
 		PanelIP       string `json:"panel_ip"`
 		KeepRemnanode bool   `json:"keep_remnanode"`
 	}
@@ -35,6 +36,7 @@ func (s *Server) handleAgentDeploy(w http.ResponseWriter, r *http.Request) {
 		SSHPassword:   body.SSHPassword,
 		SSHPort:       body.SSHPort,
 		MgmtPort:      body.MgmtPort,
+		ListenPorts:   body.ListenPorts,
 		PanelIP:       strings.TrimSpace(body.PanelIP),
 		KeepRemnanode: body.KeepRemnanode,
 	})
