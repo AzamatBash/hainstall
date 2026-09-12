@@ -9,6 +9,7 @@ export interface NodeLive {
   down_bps?: number | null
   up_bps?: number | null
   backends?: BackendServer[]
+  agent_version?: string
   updated_at?: string
 }
 

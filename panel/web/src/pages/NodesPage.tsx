@@ -919,6 +919,15 @@ export default function NodesPage() {
                                   )}
                                 </div>
                                 <StatusInline status={n.status} />
+                                {n.status === 'online' && n.live?.agent_version ? (
+                                  <span
+                                    className="mono muted"
+                                    style={{ fontSize: '0.75rem' }}
+                                    title="Версия агента (hanode)"
+                                  >
+                                    v{n.live.agent_version}
+                                  </span>
+                                ) : null}
                               </div>
                               {n.status === 'online' && metricsMap[n.id] && (
                                 <NodeLiveRow m={metricsMap[n.id]} />

@@ -429,11 +429,22 @@ export default function NodeDetailPage() {
         setDownBps(null)
         return
       }
-      const [statsRes, backendsRes, systemRes] = await Promise.all([
+      const [statsRes, backendsRes, systemRes, healthRes] = await Promise.all([
         api<StatsSummary>(`/api/nodes/${id}/stats`),
         api<unknown>(`/api/nodes/${id}/backends`),
         api<SystemMetrics>(`/api/nodes/${id}/system`).catch(() => null),
+        api<{ version?: string }>(`/api/nodes/${id}/health`).catch(() => null),
       ])
+      if (healthRes?.version) {
+        setNode((cur) =>
+          cur
+            ? {
+                ...cur,
+                live: { ...(cur.live ?? {}), agent_version: healthRes.version },
+              }
+            : cur,
+        )
+      }
       setStats(statsRes)
       const flat = flattenBackends(backendsRes)
       setBackends(flat)
@@ -1532,6 +1543,14 @@ export default function NodeDetailPage() {
             <h2>Система</h2>
             <div className="panel-head-aside">
               <StatusBadge status={st} />
+              {st === 'online' && node?.live?.agent_version ? (
+                <span
+                  className="mono muted"
+                  title="Контейнер hapanel-agent (образ azamatbash/hanode)"
+                >
+                  агент {node.live.agent_version}
+                </span>
+              ) : null}
               <button
                 className="btn btn-primary btn-connect"
                 type="button"

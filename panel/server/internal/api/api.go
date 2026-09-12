@@ -512,13 +512,28 @@ func (s *Server) handleConnectNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
+	agentVer := parseAgentHealthVersion(hBody)
+	if agentVer != "" {
+		_ = s.store.SetSnapshotAgentVersion(id, agentVer)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"online": true,
-		"status": statsStatus,
-		"body":   string(statsBody),
-		"node":   publicNodeMust(s, id),
+		"ok":            true,
+		"online":        true,
+		"status":        statsStatus,
+		"body":          string(statsBody),
+		"agent_version": agentVer,
+		"node":          publicNodeMust(s, id),
 	})
+}
+
+func parseAgentHealthVersion(body []byte) string {
+	var h struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &h); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(h.Version)
 }
 
 func publicNodeMust(s *Server, id string) map[string]any {

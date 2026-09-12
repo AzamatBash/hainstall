@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-0.1.3}"
+VERSION="${VERSION:-0.1.4}"
 PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel}"
 NODE_IMAGE="${NODE_IMAGE:-azamatbash/hanode}"
 PROD_CONFIG_ID="sha256:159d4cbf632a54b85b6cba257cb2a0bbe307e5da2f042f65f0b0edb97742002c"

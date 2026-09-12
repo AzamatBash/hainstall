@@ -133,7 +133,25 @@ func pollNode(ctx context.Context, st *store.Store, ag *agent.Client, n store.No
 		}
 	}
 
+	if hStatus, hBody, hErr := ag.Health(ctx, n.URL, n.Token); hErr == nil && hStatus >= 200 && hStatus < 300 {
+		if ver := parseAgentVersion(hBody); ver != "" {
+			snap.AgentVersion = ver
+		}
+	} else if prev != nil {
+		snap.AgentVersion = prev.AgentVersion
+	}
+
 	return st.SaveSnapshot(n.ID, store.StatusOnline, snap)
+}
+
+func parseAgentVersion(body []byte) string {
+	var h struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &h); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(h.Version)
 }
 
 func floatPtr(v float64) *float64 { return &v }

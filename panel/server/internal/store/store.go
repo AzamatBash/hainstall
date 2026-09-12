@@ -41,15 +41,16 @@ type Node struct {
 
 // NodeSnapshot is the last known live metrics for the nodes list (Remnawave-style).
 type NodeSnapshot struct {
-	Sessions  *int              `json:"sessions,omitempty"`
-	CPU       *float64          `json:"cpu,omitempty"`
-	LoadAvg   []float64         `json:"load_avg,omitempty"`
-	DownBps   *float64          `json:"down_bps,omitempty"`
-	UpBps     *float64          `json:"up_bps,omitempty"`
-	NetRx     int64             `json:"net_rx_bytes,omitempty"`
-	NetTx     int64             `json:"net_tx_bytes,omitempty"`
-	Backends  []SnapshotBackend `json:"backends,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Sessions     *int              `json:"sessions,omitempty"`
+	CPU          *float64          `json:"cpu,omitempty"`
+	LoadAvg      []float64         `json:"load_avg,omitempty"`
+	DownBps      *float64          `json:"down_bps,omitempty"`
+	UpBps        *float64          `json:"up_bps,omitempty"`
+	NetRx        int64             `json:"net_rx_bytes,omitempty"`
+	NetTx        int64             `json:"net_tx_bytes,omitempty"`
+	Backends     []SnapshotBackend `json:"backends,omitempty"`
+	AgentVersion string            `json:"agent_version,omitempty"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 type SnapshotBackend struct {
@@ -731,6 +732,28 @@ UPDATE nodes SET status = ?, last_seen = ?, snapshot = ? WHERE id = ?`,
 		_ = s.AppendTrafficSample(id, now, down, up)
 	}
 	return nil
+}
+
+// SetSnapshotAgentVersion updates only the cached agent version inside the live snapshot.
+func (s *Store) SetSnapshotAgentVersion(id, version string) error {
+	version = strings.TrimSpace(version)
+	if id == "" || version == "" {
+		return nil
+	}
+	n, err := s.GetNode(id)
+	if err != nil || n == nil {
+		return err
+	}
+	snap := NodeSnapshot{}
+	if n.Snapshot != nil {
+		snap = *n.Snapshot
+	}
+	snap.AgentVersion = version
+	status := n.Status
+	if status == "" {
+		status = StatusOnline
+	}
+	return s.SaveSnapshot(id, status, snap)
 }
 
 // TrafficSample is one RX/TX rate point (bytes/sec) for charts.
