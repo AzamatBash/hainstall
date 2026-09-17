@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/azabash/hapanel/agent/internal/store"
 )
 
 func TestNbthreadCountDefault(t *testing.T) {
@@ -27,12 +29,14 @@ func TestNbthreadCountEnv(t *testing.T) {
 
 func TestBaseConfigBodyOptimizations(t *testing.T) {
 	t.Setenv("HAPROXY_NBTHREAD", "2")
-	body := BaseConfigBody([]int{8443}, DefaultProtectOpts())
+	body := BaseConfigBody([]store.Entrance{{Port: 8443, Backend: "app"}}, DefaultProtectOpts())
 	for _, needle := range []string{
 		"nbthread 2",
 		"hard-stop-after 5m",
 		"option  splice-auto",
+		"frontend entrance_8443",
 		"bind *:8443",
+		"default_backend app",
 		"tcp-request inspect-delay 5s",
 		"req_ssl_hello_type 1",
 		"stick-table type ip",
@@ -45,17 +49,32 @@ func TestBaseConfigBodyOptimizations(t *testing.T) {
 	}
 }
 
-func TestBaseConfigBodyMultiPort(t *testing.T) {
+func TestBaseConfigBodyMultiEntrance(t *testing.T) {
 	t.Setenv("HAPROXY_NBTHREAD", "1")
-	body := BaseConfigBody([]int{443, 8443}, DefaultProtectOpts())
-	if !strings.Contains(body, "bind *:443") || !strings.Contains(body, "bind *:8443") {
-		t.Fatalf("expected both binds:\n%s", body)
+	body := BaseConfigBody([]store.Entrance{
+		{Port: 443, Backend: "edge"},
+		{Port: 8443, Backend: "app"},
+	}, DefaultProtectOpts())
+	for _, needle := range []string{
+		"frontend entrance_443",
+		"bind *:443",
+		"default_backend edge",
+		"frontend entrance_8443",
+		"bind *:8443",
+		"default_backend app",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, body)
+		}
+	}
+	if strings.Contains(body, "frontend https_front") {
+		t.Fatalf("legacy single frontend should be gone:\n%s", body)
 	}
 }
 
 func TestBaseConfigBodyProtectOff(t *testing.T) {
 	t.Setenv("HAPROXY_NBTHREAD", "1")
-	body := BaseConfigBody([]int{8443}, ProtectOpts{})
+	body := BaseConfigBody([]store.Entrance{{Port: 8443, Backend: "app"}}, ProtectOpts{})
 	if strings.Contains(body, "inspect-delay") || strings.Contains(body, "stick-table") {
 		t.Fatalf("expected no protect rules:\n%s", body)
 	}

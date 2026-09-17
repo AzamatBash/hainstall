@@ -12,7 +12,7 @@ COPY agent/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
-      -ldflags "-s -w -X github.com/azabash/hapanel/agent/internal/api.Version=0.1.4" \
+      -ldflags "-s -w -X github.com/azabash/hapanel/agent/internal/api.Version=0.1.6" \
       -o /out/hapanel-agent ./cmd/agent
 
 FROM alpine:3.20

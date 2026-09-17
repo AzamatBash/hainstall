@@ -64,6 +64,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/haproxy/restart", d.handleRestart)
 			r.Get("/listen-ports", d.handleGetListenPorts)
 			r.Put("/listen-ports", d.handlePutListenPorts)
+			r.Get("/entrances", d.handleGetEntrances)
+			r.Put("/entrances", d.handlePutEntrances)
 			r.Get("/protect", d.handleGetProtect)
 			r.Put("/protect", d.handlePutProtect)
 		})
@@ -294,10 +296,17 @@ func (d Deps) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 	}
 	name := haproxy.SanitizeName(rawName)
 
-	removed, err := d.Store.Delete(backend, name)
+	removed, err := d.Store.Delete(backend, rawName)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if !removed && name != rawName {
+		removed, err = d.Store.Delete(backend, name)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if !removed {
 		writeErr(w, http.StatusNotFound, "server not found in store")
@@ -311,19 +320,25 @@ func (d Deps) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 
 	// Prefer disable then delete via runtime; ignore failures and reload.
 	_ = d.HA.SetServerState(backend, name, "maint")
+	_ = d.HA.SetServerState(backend, rawName, "maint")
 	if err := d.HA.DelServerRuntime(backend, name); err != nil {
+		_ = d.HA.DelServerRuntime(backend, rawName)
 		d.Log.Info("runtime del skipped/failed, will reload", "err", err)
 	}
+	reloadWarn := ""
 	if err := d.Docker.Reload(r.Context()); err != nil {
-		writeErr(w, http.StatusBadGateway, "config written but reload failed: "+err.Error())
-		return
-	}
-	if err := d.waitHAReady(r.Context()); err != nil {
-		writeErr(w, http.StatusBadGateway, "config written but haproxy not ready: "+err.Error())
-		return
+		d.Log.Error("reload after delete", "err", err)
+		reloadWarn = "сервер удалён, но reload HAProxy не удался: " + err.Error()
+	} else if err := d.waitHAReady(r.Context()); err != nil {
+		d.Log.Error("haproxy not ready after delete reload", "err", err)
+		reloadWarn = "сервер удалён, но HAProxy ещё не готов: " + err.Error()
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": name, "backend": backend})
+	out := map[string]any{"ok": true, "deleted": name, "backend": backend}
+	if reloadWarn != "" {
+		out["warning"] = reloadWarn
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (d Deps) handleReload(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +376,8 @@ func (d Deps) handleGetListenPorts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ports": ports})
+	ents, _ := listenports.CurrentEntrances(d.Store)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ports": ports, "entrances": ents})
 }
 
 func (d Deps) handlePutListenPorts(w http.ResponseWriter, r *http.Request) {
@@ -378,11 +394,55 @@ func (d Deps) handlePutListenPorts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	ents, _ := listenports.CurrentEntrances(d.Store)
+	if err := d.writeHAProxyConfig(); err != nil {
+		d.Log.Warn("ensure backends after listen-ports", "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"ports":  newPorts,
-		"opened": opened,
-		"closed": closed,
+		"ok":        true,
+		"ports":     newPorts,
+		"entrances": ents,
+		"opened":    opened,
+		"closed":    closed,
+	})
+}
+
+func (d Deps) handleGetEntrances(w http.ResponseWriter, r *http.Request) {
+	ents, err := listenports.CurrentEntrances(d.Store)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"entrances": ents,
+		"ports":     store.PortsFromEntrances(ents),
+	})
+}
+
+func (d Deps) handlePutEntrances(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Entrances []store.Entrance `json:"entrances"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	ents, opened, closed, err := listenports.ApplyEntrances(r.Context(), d.Store, d.BackendsDir, d.Docker, d.HA, body.Entrances)
+	if err != nil {
+		d.Log.Error("entrances", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if err := d.writeHAProxyConfig(); err != nil {
+		d.Log.Warn("ensure backends after entrances", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"entrances": ents,
+		"ports":     store.PortsFromEntrances(ents),
+		"opened":    opened,
+		"closed":    closed,
 	})
 }
 
@@ -427,7 +487,15 @@ func (d Deps) writeHAProxyConfig() error {
 	if err != nil {
 		return err
 	}
-	if err := d.Cfg.Write(all, balances); err != nil {
+	ents, err := d.Store.Entrances()
+	if err != nil {
+		return err
+	}
+	ensure := make([]string, 0, len(ents))
+	for _, e := range ents {
+		ensure = append(ensure, e.Backend)
+	}
+	if err := d.Cfg.Write(all, balances, ensure...); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil

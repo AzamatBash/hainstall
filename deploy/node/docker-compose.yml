@@ -28,7 +28,7 @@ services:
 
   agent:
     container_name: hapanel-agent
-    image: azamatbash/hanode:0.1.4
+    image: azamatbash/hanode:0.1.6
     restart: unless-stopped
     ports:
       - "47893:9100"

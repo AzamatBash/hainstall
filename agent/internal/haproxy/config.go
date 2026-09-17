@@ -49,7 +49,8 @@ func NewConfigWriter(dir string) *ConfigWriter {
 // Write regenerates one `{backend}.cfg` per backend with a full backend section.
 // Frontends live in 00-hapanel-base.cfg (written by the agent).
 // balances maps backend name → HAProxy balance algorithm (empty → leastconn).
-func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string) error {
+// ensureBackends forces empty backend sections so entrances can reference them.
+func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string, ensureBackends ...string) error {
 	if w.Dir == "" {
 		return fmt.Errorf("backends dir is empty")
 	}
@@ -65,6 +66,15 @@ func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string)
 	// Ensure default backend file exists even if empty.
 	if _, ok := byBackend["app"]; !ok {
 		byBackend["app"] = nil
+	}
+	for _, name := range ensureBackends {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := byBackend[name]; !ok {
+			byBackend[name] = nil
+		}
 	}
 
 	written := map[string]struct{}{}

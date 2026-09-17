@@ -8,11 +8,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-0.1.4}"
+VERSION="${VERSION:-0.1.6}"
 PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel}"
 NODE_IMAGE="${NODE_IMAGE:-azamatbash/hanode}"
-PROD_CONFIG_ID="sha256:159d4cbf632a54b85b6cba257cb2a0bbe307e5da2f042f65f0b0edb97742002c"
-PROD_HUB_DIGEST="sha256:5216e1827df372167e1581be1af1447690b0b7803e16251081a09bfdb6320056"
+PROD_CONFIG_ID="sha256:f7de7a7d3cf9e5e61b88c2998782a0b1739ce3f9d64fed414ef7f5e8088ca18f"
+PROD_HUB_DIGEST="sha256:e0a6c6c915f15241feeec87973ea669ff269621e794e260ce23e46f0cd65181b"
 
 if [[ "${REBUILD_PANEL:-}" == "1" ]]; then
   echo "==> REBUILD_PANEL=1 — building from sources (will NOT match prod digest)"

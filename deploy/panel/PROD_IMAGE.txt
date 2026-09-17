@@ -1,9 +1,9 @@
 # Exact production image (hapanel-panel)
 # Config ID (docker image id):
-sha256:159d4cbf632a54b85b6cba257cb2a0bbe307e5da2f042f65f0b0edb97742002c
-# Docker Hub manifest digest for tags 0.1.3 and latest:
-sha256:5216e1827df372167e1581be1af1447690b0b7803e16251081a09bfdb6320056
-# Node agent Hub digest (azamatbash/hanode:0.1.3 / :latest):
-sha256:a5cf2456f20b2f2e63105c62a35936537dffac4f996b8c60d0e2138c08847f26
+sha256:f7de7a7d3cf9e5e61b88c2998782a0b1739ce3f9d64fed414ef7f5e8088ca18f
+# Docker Hub manifest digest for tags 0.1.4 and latest:
+sha256:e0a6c6c915f15241feeec87973ea669ff269621e794e260ce23e46f0cd65181b
+# Node agent Hub digest (azamatbash/hanode:0.1.4 / :latest):
+sha256:d09a6cee810826e8686c45d5aaee34e9317d726d8644adc2f372d69297c17719
 # Synced:
-2026-09-12T12:18:00Z
+2026-09-12T14:05:00Z

@@ -9,16 +9,23 @@ RUN npm run build
 FROM golang:1.22-alpine AS server
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
-COPY panel/server/ ./panel/server/
-WORKDIR /src/panel/server
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/panel ./cmd/panel
+COPY panel/server/go.mod panel/server/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY panel/server/ ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/panel ./cmd/panel
 
 FROM golang:1.22-alpine AS olcnode
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
-COPY olcnode/ ./olcnode/
-WORKDIR /src/olcnode
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/olcnode ./cmd/olcnode
+COPY olcnode/go.mod ./
+COPY olcnode/ ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/olcnode ./cmd/olcnode
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata \

@@ -35,8 +35,15 @@ type Node struct {
 	Status            NodeStatus    `json:"status"`
 	TrafficLog        bool             `json:"traffic_log"`
 	ListenPorts       []int            `json:"listen_ports"`
+	Entrances         []Entrance       `json:"entrances"`
 	Protect           protect.Profile  `json:"protect"`
 	Snapshot          *NodeSnapshot    `json:"live,omitempty"`
+}
+
+// Entrance is one client listen port routed to a HAProxy backend.
+type Entrance struct {
+	Port    int    `json:"port"`
+	Backend string `json:"backend"`
 }
 
 // NodeSnapshot is the last known live metrics for the nodes list (Remnawave-style).
@@ -129,6 +136,9 @@ CREATE TABLE IF NOT EXISTS nodes (
 		return err
 	}
 	if err := s.ensureColumn("nodes", "listen_ports", "TEXT NOT NULL DEFAULT '[8443]'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("nodes", "entrances", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("nodes", "protect", "TEXT NOT NULL DEFAULT ''"); err != nil {
@@ -451,7 +461,7 @@ func (s *Store) backfillSortOrder() error {
 	return nil
 }
 
-const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log, listen_ports, protect`
+const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log, listen_ports, entrances, protect`
 
 func (s *Store) ListNodes() ([]Node, error) {
 	rows, err := s.db.Query(`
@@ -592,15 +602,37 @@ func (s *Store) SetNodeProtect(id string, p protect.Profile) (*Node, error) {
 }
 
 // SetNodeListenPorts stores desired HAProxy client listen ports as JSON.
+// Also syncs entrances (preserving backends for kept ports).
 func (s *Store) SetNodeListenPorts(id string, ports []int) (*Node, error) {
 	if len(ports) == 0 {
 		ports = []int{8443}
 	}
-	raw, err := json.Marshal(ports)
+	n, err := s.GetNode(id)
+	if n == nil || err != nil {
+		return n, err
+	}
+	ents := entrancesFromPorts(ports, n.Entrances)
+	return s.SetNodeEntrances(id, ents)
+}
+
+// SetNodeEntrances stores entrances and derived listen_ports.
+func (s *Store) SetNodeEntrances(id string, ents []Entrance) (*Node, error) {
+	if len(ents) == 0 {
+		ents = []Entrance{{Port: 8443, Backend: "app"}}
+	}
+	ports := make([]int, len(ents))
+	for i, e := range ents {
+		ports[i] = e.Port
+	}
+	portsRaw, err := json.Marshal(ports)
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.Exec(`UPDATE nodes SET listen_ports = ? WHERE id = ?`, string(raw), id)
+	entsRaw, err := json.Marshal(ents)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.Exec(`UPDATE nodes SET listen_ports = ?, entrances = ? WHERE id = ?`, string(portsRaw), string(entsRaw), id)
 	if err != nil {
 		return nil, err
 	}
@@ -612,6 +644,22 @@ func (s *Store) SetNodeListenPorts(id string, ports []int) (*Node, error) {
 		return nil, nil
 	}
 	return s.GetNode(id)
+}
+
+func entrancesFromPorts(ports []int, prev []Entrance) []Entrance {
+	byPort := make(map[int]string, len(prev))
+	for _, e := range prev {
+		byPort[e.Port] = e.Backend
+	}
+	out := make([]Entrance, 0, len(ports))
+	for _, p := range ports {
+		backend := "app"
+		if b, ok := byPort[p]; ok && strings.TrimSpace(b) != "" {
+			backend = b
+		}
+		out = append(out, Entrance{Port: p, Backend: backend})
+	}
+	return out
 }
 
 // UpdateNodeURL changes the management URL (and optionally name) for a node.
@@ -854,9 +902,10 @@ func scanNode(r rowScanner) (Node, error) {
 		snapshot    sql.NullString
 		trafficLog  int
 		listenPorts sql.NullString
+		entrances   sql.NullString
 		protectRaw  sql.NullString
 	)
-	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog, &listenPorts, &protectRaw); err != nil {
+	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog, &listenPorts, &entrances, &protectRaw); err != nil {
 		return Node{}, err
 	}
 	n.TrafficLog = trafficLog != 0
@@ -866,6 +915,22 @@ func scanNode(r rowScanner) (Node, error) {
 		if err := json.Unmarshal([]byte(listenPorts.String), &ports); err == nil && len(ports) > 0 {
 			n.ListenPorts = ports
 		}
+	}
+	n.Entrances = nil
+	if entrances.Valid && strings.TrimSpace(entrances.String) != "" {
+		var ents []Entrance
+		if err := json.Unmarshal([]byte(entrances.String), &ents); err == nil && len(ents) > 0 {
+			n.Entrances = ents
+		}
+	}
+	if len(n.Entrances) == 0 {
+		n.Entrances = entrancesFromPorts(n.ListenPorts, nil)
+	} else {
+		ports := make([]int, len(n.Entrances))
+		for i, e := range n.Entrances {
+			ports[i] = e.Port
+		}
+		n.ListenPorts = ports
 	}
 	n.Protect = protect.Default()
 	if protectRaw.Valid && strings.TrimSpace(protectRaw.String) != "" {

@@ -15,13 +15,19 @@ import (
 
 // AgentImage is the Docker Hub image for the node agent.
 // Also published as azamatbash/hanode:latest — prefer the version tag in production.
-const AgentImage = "azamatbash/hanode:0.1.2"
+const AgentImage = "azamatbash/hanode:0.1.6"
 
 // DefaultMgmtPort is the panel↔agent HTTP port (clients stay on listen ports).
 const DefaultMgmtPort = 47893
 
 // DefaultListenPorts is the default HAProxy client publish/bind set.
 var DefaultListenPorts = []int{8443}
+
+// Entrance is one client listen port routed to a HAProxy backend.
+type Entrance struct {
+	Port    int    `json:"port"`
+	Backend string `json:"backend"`
+}
 
 // Bundle is everything the operator copies onto the VPS.
 type Bundle struct {
@@ -30,6 +36,7 @@ type Bundle struct {
 	Host        string            `json:"host"`
 	Port        int               `json:"port"`
 	ListenPorts []int             `json:"listen_ports"`
+	Entrances   []Entrance        `json:"entrances"`
 	Files       map[string]string `json:"files"`
 	Commands    string            `json:"commands"`
 	AgentImage  string            `json:"agent_image"`
@@ -65,6 +72,57 @@ func NormalizeListenPorts(in []int) ([]int, error) {
 	}
 	sort.Ints(out)
 	return out, nil
+}
+
+// NormalizeEntrances validates entrances (port + backend). Empty → default 8443→app.
+func NormalizeEntrances(in []Entrance) ([]Entrance, error) {
+	if len(in) == 0 {
+		return []Entrance{{Port: 8443, Backend: "app"}}, nil
+	}
+	seen := make(map[int]struct{}, len(in))
+	out := make([]Entrance, 0, len(in))
+	for _, e := range in {
+		if e.Port < 1 || e.Port > 65535 {
+			return nil, fmt.Errorf("invalid entrance port %d (want 1–65535)", e.Port)
+		}
+		if _, ok := seen[e.Port]; ok {
+			continue
+		}
+		seen[e.Port] = struct{}{}
+		backend := strings.TrimSpace(e.Backend)
+		if backend == "" {
+			backend = "app"
+		}
+		out = append(out, Entrance{Port: e.Port, Backend: backend})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
+	return out, nil
+}
+
+// EntrancesFromPorts builds one entrance per port (all → app), preserving backends from prev.
+func EntrancesFromPorts(ports []int, prev []Entrance) []Entrance {
+	byPort := make(map[int]string, len(prev))
+	for _, e := range prev {
+		byPort[e.Port] = e.Backend
+	}
+	out := make([]Entrance, 0, len(ports))
+	for _, p := range ports {
+		backend := "app"
+		if b, ok := byPort[p]; ok && strings.TrimSpace(b) != "" {
+			backend = b
+		}
+		out = append(out, Entrance{Port: p, Backend: backend})
+	}
+	return out
+}
+
+// PortsFromEntrances returns listen ports derived from entrances.
+func PortsFromEntrances(ents []Entrance) []int {
+	out := make([]int, len(ents))
+	for i, e := range ents {
+		out[i] = e.Port
+	}
+	return out
 }
 
 // BuildURL builds the panel→node management base URL (plain HTTP to agent).
@@ -135,6 +193,20 @@ func formatBindLines(ports []int) string {
 	return b.String()
 }
 
+func formatEntranceFrontends(ents []Entrance, extras string) string {
+	var b strings.Builder
+	for _, e := range ents {
+		fmt.Fprintf(&b, `
+frontend entrance_%d
+    mode tcp
+    bind *:%d
+    maxconn 40000
+%s    default_backend %s
+`, e.Port, e.Port, extras, e.Backend)
+	}
+	return b.String()
+}
+
 func formatPortsList(ports []int) string {
 	parts := make([]string, len(ports))
 	for i, p := range ports {
@@ -159,6 +231,10 @@ func Generate(name, host string, port int, token string, listenPorts []int) (Bun
 	}
 	var err error
 	listenPorts, err = NormalizeListenPorts(listenPorts)
+	if err != nil {
+		return Bundle{}, err
+	}
+	entrances, err := NormalizeEntrances(EntrancesFromPorts(listenPorts, nil))
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -259,12 +335,7 @@ defaults
     timeout client-fin 30s
     timeout server-fin 30s
     retries 2
-
-frontend https_front
-    mode tcp
-%s    maxconn 40000
-%s    default_backend app
-`, formatBindLines(listenPorts), protect.FrontendExtras(protect.Default()))
+%s`, formatEntranceFrontends(entrances, protect.FrontendExtras(protect.Default())))
 
 	appCfg := `# Managed by hapanel agent — do not edit by hand
 backend app
@@ -280,7 +351,7 @@ DOCKER_GID=0
 	readme := fmt.Sprintf(`# hapanel node: %s
 
 Порты:
-- **%s** — клиентский трафик (HAProxy TCP passthrough → app)
+- **%s** — клиентский трафик (HAProxy TCP passthrough → backends по входам)
 - **%d** — панель ↔ агент напрямую (HTTP /_hapctl)
 
 Важно: ограничьте доступ к порту %d (firewall: только IP панели).
@@ -311,6 +382,7 @@ docker compose up -d
 		Host:        host,
 		Port:        port,
 		ListenPorts: listenPorts,
+		Entrances:   entrances,
 		AgentImage:  AgentImage,
 		Files: map[string]string{
 			"docker-compose.yml":                     compose,

@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/reload", s.requireAuth(s.handleReload))
 	s.mux.HandleFunc("POST /api/nodes/{id}/haproxy/restart", s.requireAuth(s.handleRestart))
 	s.mux.HandleFunc("PUT /api/nodes/{id}/listen-ports", s.requireAuth(s.handleNodeListenPorts))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/entrances", s.requireAuth(s.handleNodeEntrances))
 	s.mux.HandleFunc("PUT /api/nodes/{id}/protect", s.requireAuth(s.handleNodeProtect))
 	s.mux.HandleFunc("GET /api/nodes/{id}/health", s.requireAuth(s.handleHealth))
 
@@ -957,11 +958,12 @@ func (s *Server) handleNodeListenPorts(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("agent listen-ports failed", "node", id, "err", agentErr)
 		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":     false,
-			"saved":  true,
-			"node":   s.publicNode(*updated),
-			"error":  "порты сохранены в панели, но агент недоступен: " + agentErr.Error(),
-			"ports":  ports,
+			"ok":        false,
+			"saved":     true,
+			"node":      s.publicNode(*updated),
+			"error":     "порты сохранены в панели, но агент недоступен: " + agentErr.Error(),
+			"ports":     ports,
+			"entrances": updated.Entrances,
 		})
 		return
 	}
@@ -971,12 +973,13 @@ func (s *Server) handleNodeListenPorts(w http.ResponseWriter, r *http.Request) {
 			msg = fmt.Sprintf("агент вернул %d", status)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":     false,
-			"saved":  true,
-			"node":   s.publicNode(*updated),
-			"error":  "порты сохранены в панели, агент ответил ошибкой: " + msg,
-			"ports":  ports,
-			"agent":  json.RawMessage(respBody),
+			"ok":        false,
+			"saved":     true,
+			"node":      s.publicNode(*updated),
+			"error":     "порты сохранены в панели, агент ответил ошибкой: " + msg,
+			"ports":     ports,
+			"entrances": updated.Entrances,
+			"agent":     json.RawMessage(respBody),
 		})
 		return
 	}
@@ -985,11 +988,99 @@ func (s *Server) handleNodeListenPorts(w http.ResponseWriter, r *http.Request) {
 	var agentResp map[string]any
 	_ = json.Unmarshal(respBody, &agentResp)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"saved":  true,
-		"node":   s.publicNode(*updated),
-		"ports":  ports,
-		"agent":  agentResp,
+		"ok":        true,
+		"saved":     true,
+		"node":      s.publicNode(*updated),
+		"ports":     ports,
+		"entrances": updated.Entrances,
+		"agent":     agentResp,
+	})
+}
+
+func (s *Server) handleNodeEntrances(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	var body struct {
+		Entrances []provision.Entrance `json:"entrances"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	ents, err := provision.NormalizeEntrances(body.Entrances)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	storeEnts := make([]store.Entrance, len(ents))
+	for i, e := range ents {
+		storeEnts[i] = store.Entrance{Port: e.Port, Backend: e.Backend}
+	}
+
+	updated, err := s.store.SetNodeEntrances(id, storeEnts)
+	if err != nil {
+		s.logger.Error("save entrances", "err", err)
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if updated == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]any{"entrances": ents})
+	status, respBody, agentErr := s.agent.SetEntrances(r.Context(), updated.URL, updated.Token, bytes.NewReader(payload))
+	now := time.Now().UTC()
+	ports := provision.PortsFromEntrances(ents)
+	if agentErr != nil {
+		s.logger.Warn("agent entrances failed", "node", id, "err", agentErr)
+		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        false,
+			"saved":     true,
+			"node":      s.publicNode(*updated),
+			"error":     "входы сохранены в панели, но агент недоступен: " + agentErr.Error(),
+			"entrances": updated.Entrances,
+			"ports":     ports,
+		})
+		return
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = fmt.Sprintf("агент вернул %d", status)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        false,
+			"saved":     true,
+			"node":      s.publicNode(*updated),
+			"error":     "входы сохранены в панели, агент ответил ошибкой: " + msg,
+			"entrances": updated.Entrances,
+			"ports":     ports,
+			"agent":     json.RawMessage(respBody),
+		})
+		return
+	}
+	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
+
+	var agentResp map[string]any
+	_ = json.Unmarshal(respBody, &agentResp)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"saved":     true,
+		"node":      s.publicNode(*updated),
+		"entrances": updated.Entrances,
+		"ports":     ports,
+		"agent":     agentResp,
 	})
 }
 
@@ -1135,6 +1226,7 @@ func (s *Server) publicNode(n store.Node) map[string]any {
 		"provider_account_login": "",
 		"traffic_log":            n.TrafficLog,
 		"listen_ports":           n.ListenPorts,
+		"entrances":              n.Entrances,
 		"protect":                n.Protect,
 		"created_at":             n.CreatedAt.Format(time.RFC3339),
 		"status":                 n.Status,

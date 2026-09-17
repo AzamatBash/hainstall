@@ -257,6 +257,23 @@ func (c *Client) SetListenPorts(ctx context.Context, baseURL, token string, body
 	}, nil)
 }
 
+func (c *Client) GetEntrances(ctx context.Context, baseURL, token string) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodGet,
+		Path:   "/_hapctl/v1/entrances",
+		Token:  token,
+	}, nil)
+}
+
+func (c *Client) SetEntrances(ctx context.Context, baseURL, token string, body io.Reader) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodPut,
+		Path:   "/_hapctl/v1/entrances",
+		Token:  token,
+		Body:   body,
+	}, nil)
+}
+
 func (c *Client) GetProtect(ctx context.Context, baseURL, token string) (int, []byte, error) {
 	return c.DoJSON(ctx, baseURL, RequestOptions{
 		Method: http.MethodGet,

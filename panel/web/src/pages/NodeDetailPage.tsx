@@ -4,6 +4,7 @@ import {
   api,
   BackendRemnaLink,
   BackendServer,
+  Entrance,
   flattenBackends,
   formatBitrateShort,
   formatBytes,
@@ -257,8 +258,10 @@ export default function NodeDetailPage() {
   const [editPort, setEditPort] = useState('47893')
   const [editOpen, setEditOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
-  const [listenPortsText, setListenPortsText] = useState('8443')
-  const [listenPortsBusy, setListenPortsBusy] = useState(false)
+  const [entrancesForm, setEntrancesForm] = useState<{ port: string; backend: string }[]>([
+    { port: '8443', backend: 'app' },
+  ])
+  const [entrancesBusy, setEntrancesBusy] = useState(false)
   const [protectForm, setProtectForm] = useState<ProtectProfile>({
     client_hello: true,
     client_hello_delay_sec: 5,
@@ -408,7 +411,15 @@ export default function NodeDetailPage() {
         setEditHost('')
         setEditPort('47893')
       }
-      setListenPortsText((found.listen_ports?.length ? found.listen_ports : [8443]).join(', '))
+      setEntrancesForm(
+        (found.entrances?.length
+          ? found.entrances
+          : (found.listen_ports?.length ? found.listen_ports : [8443]).map((p) => ({
+              port: p,
+              backend: 'app',
+            }))
+        ).map((e) => ({ port: String(e.port), backend: e.backend || 'app' })),
+      )
       if (found.protect) {
         setProtectForm({
           client_hello: found.protect.client_hello,
@@ -827,15 +838,30 @@ export default function NodeDetailPage() {
     setBusy(true)
     setError('')
     try {
-      await api(
+      const res = await api<{ ok?: boolean; warning?: string }>(
         `/api/nodes/${id}/backends/${encodeURIComponent(backend)}/${encodeURIComponent(name)}`,
         { method: 'DELETE' },
       )
-      await load()
+      if (res?.warning) {
+        setToast({ kind: 'fail', text: res.warning })
+      } else {
+        setToast({ kind: 'ok', text: `Удалено: ${backend}/${name}` })
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось удалить')
+      const msg = err instanceof Error ? err.message : 'Не удалось удалить'
+      // Already gone on agent — treat as success so the UI can refresh.
+      if (/not found|404/i.test(msg)) {
+        setToast({ kind: 'ok', text: 'Уже удалено' })
+      } else {
+        setError(msg)
+      }
     } finally {
       setBusy(false)
+      try {
+        await load()
+      } catch {
+        /* ignore refresh errors */
+      }
     }
   }
 
@@ -1031,18 +1057,24 @@ export default function NodeDetailPage() {
     }
   }
 
-  async function onSaveListenPorts(e: FormEvent) {
+  async function onSaveEntrances(e: FormEvent) {
     e.preventDefault()
-    setListenPortsBusy(true)
+    setEntrancesBusy(true)
     setError('')
     try {
-      const ports = listenPortsText
-        .split(/[,;\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => Number(s))
-      if (ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535)) {
-        throw new Error('Укажите порты числами от 1 до 65535 через запятую')
+      const entrances: Entrance[] = entrancesForm.map((row) => ({
+        port: Number(row.port.trim()),
+        backend: row.backend.trim() || 'app',
+      }))
+      if (
+        entrances.length === 0 ||
+        entrances.some((x) => !Number.isInteger(x.port) || x.port < 1 || x.port > 65535)
+      ) {
+        throw new Error('Укажите порт 1–65535 и backend для каждого входа')
+      }
+      const ports = new Set(entrances.map((x) => x.port))
+      if (ports.size !== entrances.length) {
+        throw new Error('Порты входов должны быть уникальны')
       }
       const res = await api<{
         ok: boolean
@@ -1050,19 +1082,22 @@ export default function NodeDetailPage() {
         error?: string
         node: Node
         ports?: number[]
+        entrances?: Entrance[]
         agent?: { opened?: number[]; closed?: number[] }
-      }>(`/api/nodes/${id}/listen-ports`, {
+      }>(`/api/nodes/${id}/entrances`, {
         method: 'PUT',
-        body: JSON.stringify({ ports }),
+        body: JSON.stringify({ entrances }),
       })
       setNode(res.node)
-      if (res.ports?.length) {
-        setListenPortsText(res.ports.join(', '))
+      if (res.entrances?.length) {
+        setEntrancesForm(
+          res.entrances.map((x) => ({ port: String(x.port), backend: x.backend || 'app' })),
+        )
       }
       if (!res.ok) {
         setToast({
           kind: 'fail',
-          text: res.error || 'Порты сохранены в панели, но на VPS не применены',
+          text: res.error || 'Входы сохранены в панели, но на VPS не применены',
         })
       } else {
         const opened = res.agent?.opened?.length
@@ -1073,13 +1108,13 @@ export default function NodeDetailPage() {
           : ''
         setToast({
           kind: 'ok',
-          text: `Клиентские порты обновлены${opened}${closed}`,
+          text: `Входы HAProxy обновлены${opened}${closed}`,
         })
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось сохранить порты')
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить входы')
     } finally {
-      setListenPortsBusy(false)
+      setEntrancesBusy(false)
     }
   }
 
@@ -1346,30 +1381,76 @@ export default function NodeDetailPage() {
 
       {node && (
         <section className="panel" style={{ marginBottom: '1rem' }}>
-          <h2>Клиентские порты HAProxy</h2>
+          <h2>Входы HAProxy</h2>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Порты, которые слушает HAProxy на VPS. При сохранении агент обновит bind, publish в
-            Docker Compose и правила UFW (откроет новые, закроет убранные).
+            Каждый вход — свой порт и свой backend. Агент обновит frontend, publish в Docker Compose
+            и UFW.
           </p>
-          <form className="stack" onSubmit={(e) => void onSaveListenPorts(e)}>
-            <div className="field">
-              <label htmlFor="listen-ports">Порты (через запятую)</label>
-              <input
-                id="listen-ports"
-                className="mono"
-                value={listenPortsText}
-                onChange={(e) => setListenPortsText(e.target.value)}
-                placeholder="443, 8443"
-                required
-              />
+          <form className="stack" onSubmit={(e) => void onSaveEntrances(e)}>
+            <div className="stack" style={{ gap: '0.5rem' }}>
+              {entrancesForm.map((row, idx) => (
+                <div className="row" key={idx} style={{ gap: '0.5rem', alignItems: 'flex-end' }}>
+                  <div className="field" style={{ flex: '0 0 7rem' }}>
+                    <label htmlFor={`entrance-port-${idx}`}>Порт</label>
+                    <input
+                      id={`entrance-port-${idx}`}
+                      className="mono"
+                      value={row.port}
+                      onChange={(e) =>
+                        setEntrancesForm((rows) =>
+                          rows.map((r, i) => (i === idx ? { ...r, port: e.target.value } : r)),
+                        )
+                      }
+                      placeholder="8443"
+                      required
+                      inputMode="numeric"
+                    />
+                  </div>
+                  <div className="field" style={{ flex: 1 }}>
+                    <label htmlFor={`entrance-backend-${idx}`}>Backend</label>
+                    <input
+                      id={`entrance-backend-${idx}`}
+                      className="mono"
+                      value={row.backend}
+                      onChange={(e) =>
+                        setEntrancesForm((rows) =>
+                          rows.map((r, i) => (i === idx ? { ...r, backend: e.target.value } : r)),
+                        )
+                      }
+                      placeholder="app"
+                      required
+                    />
+                  </div>
+                  <button
+                    className="btn btn-ghost"
+                    type="button"
+                    disabled={entrancesForm.length <= 1 || entrancesBusy}
+                    onClick={() =>
+                      setEntrancesForm((rows) => rows.filter((_, i) => i !== idx))
+                    }
+                  >
+                    Удалить
+                  </button>
+                </div>
+              ))}
             </div>
             <div className="row">
               <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={entrancesBusy}
+                onClick={() =>
+                  setEntrancesForm((rows) => [...rows, { port: '', backend: 'app' }])
+                }
+              >
+                + Вход
+              </button>
+              <button
                 className="btn btn-primary"
                 type="submit"
-                disabled={listenPortsBusy || st !== 'online'}
+                disabled={entrancesBusy || st !== 'online'}
               >
-                {listenPortsBusy ? 'Применение…' : 'Применить на VPS'}
+                {entrancesBusy ? 'Применение…' : 'Применить на VPS'}
               </button>
               {st !== 'online' && (
                 <span className="muted" style={{ fontSize: '0.85rem' }}>

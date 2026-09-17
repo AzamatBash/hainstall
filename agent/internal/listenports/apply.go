@@ -16,21 +16,20 @@ import (
 	"github.com/azabash/hapanel/agent/internal/ufw"
 )
 
-// Apply updates HAProxy binds, docker publish ports, UFW, and persisted state.
-func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *dockerctl.Controller, ha *haproxy.Client, want []int) (newPorts, opened, closed []int, err error) {
-	newPorts, err = ports.Normalize(want)
+// ApplyEntrances updates HAProxy frontends, docker publish ports, UFW, and state.
+func ApplyEntrances(ctx context.Context, st *store.Store, backendsDir string, docker *dockerctl.Controller, ha *haproxy.Client, want []store.Entrance) (ents []store.Entrance, opened, closed []int, err error) {
+	ents, err = store.NormalizeEntrances(want)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	newPorts := store.PortsFromEntrances(ents)
+
 	state, err := st.Load()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	oldPorts, err := ports.Normalize(state.ListenPorts)
-	if err != nil {
-		oldPorts = append([]int(nil), ports.DefaultListen...)
-	}
-	if len(state.ListenPorts) == 0 {
+	oldPorts := store.PortsFromEntrances(state.Entrances)
+	if len(oldPorts) == 0 {
 		oldPorts = append([]int(nil), ports.DefaultListen...)
 	}
 
@@ -51,7 +50,7 @@ func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *doc
 		}
 	}
 
-	body := haproxy.BaseConfigBody(newPorts, protect.ToHAProxy(prot))
+	body := haproxy.BaseConfigBody(ents, protect.ToHAProxy(prot))
 	path := filepath.Join(backendsDir, haproxy.BaseConfigFile)
 	if err := haproxy.AtomicWriteFile(path, body); err != nil {
 		return nil, nil, nil, fmt.Errorf("write base cfg: %w", err)
@@ -76,11 +75,30 @@ func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *doc
 		}
 	}
 
+	state.Entrances = ents
 	state.ListenPorts = newPorts
 	if err := st.Save(state); err != nil {
 		return nil, nil, nil, fmt.Errorf("save state: %w", err)
 	}
-	return newPorts, opened, closed, nil
+	return ents, opened, closed, nil
+}
+
+// Apply updates entrances from a flat port list (preserves backends for kept ports).
+func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *dockerctl.Controller, ha *haproxy.Client, want []int) (newPorts, opened, closed []int, err error) {
+	newPorts, err = ports.Normalize(want)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	state, err := st.Load()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ents := store.EntrancesFromPorts(newPorts, state.Entrances, "app")
+	applied, opened, closed, err := ApplyEntrances(ctx, st, backendsDir, docker, ha, ents)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return store.PortsFromEntrances(applied), opened, closed, nil
 }
 
 func republishHAProxy(ctx context.Context, docker *dockerctl.Controller, listenPorts []int) error {
@@ -120,9 +138,14 @@ docker compose up -d --force-recreate haproxy
 
 // Current returns persisted listen ports (default 8443).
 func Current(st *store.Store) ([]int, error) {
-	state, err := st.Load()
+	ents, err := CurrentEntrances(st)
 	if err != nil {
 		return nil, err
 	}
-	return ports.Normalize(state.ListenPorts)
+	return store.PortsFromEntrances(ents), nil
+}
+
+// CurrentEntrances returns persisted entrances.
+func CurrentEntrances(st *store.Store) ([]store.Entrance, error) {
+	return st.Entrances()
 }

@@ -34,10 +34,16 @@ func main() {
 	ha := haproxy.NewClient(socket)
 	cfgWriter := haproxy.NewConfigWriter(cfg.BackendsDir)
 
-	listenPorts, err := listenports.Current(st)
+	if migrated, err := st.MigrateEntrances(); err != nil {
+		log.Warn("migrate entrances", "err", err)
+	} else if migrated {
+		log.Info("migrated listen_ports to entrances")
+	}
+
+	entrances, err := listenports.CurrentEntrances(st)
 	if err != nil {
-		log.Warn("listen ports from state", "err", err)
-		listenPorts = []int{8443}
+		log.Warn("entrances from state", "err", err)
+		entrances = []store.Entrance{store.DefaultEntrance}
 	}
 	prot, err := protect.EnsurePersistedDefaults(st)
 	if err != nil {
@@ -46,11 +52,16 @@ func main() {
 	}
 
 	// Write frontends into backends.d before HAProxy starts (compose depends_on agent).
-	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil, listenPorts, protect.ToHAProxy(prot)); err != nil {
+	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil, entrances, protect.ToHAProxy(prot)); err != nil {
 		log.Warn("base config write failed", "err", err)
 	}
 
 	// Sync persisted servers into backends.d on startup.
+	if n, err := st.MigrateSanitizeNames(); err != nil {
+		log.Warn("sanitize server names", "err", err)
+	} else if n > 0 {
+		log.Info("migrated server names to HAProxy-safe form", "count", n)
+	}
 	servers, err := st.List()
 	if err != nil {
 		log.Error("load state", "err", err)
@@ -61,7 +72,11 @@ func main() {
 		log.Error("load balances", "err", err)
 		os.Exit(1)
 	}
-	if err := cfgWriter.Write(servers, balances); err != nil {
+	ensure := make([]string, 0, len(entrances))
+	for _, e := range entrances {
+		ensure = append(ensure, e.Backend)
+	}
+	if err := cfgWriter.Write(servers, balances, ensure...); err != nil {
 		log.Warn("initial config write failed", "err", err)
 	}
 
@@ -79,7 +94,7 @@ func main() {
 	// on a host bind-mounted haproxy.cfg — Docker turns a missing file into a dir).
 	// Then ensure TCP runtime API for the panel.
 	go func() {
-		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, listenPorts, protect.ToHAProxy(prot), func(msg string, args ...any) {
+		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, entrances, protect.ToHAProxy(prot), func(msg string, args ...any) {
 			log.Info(msg, args...)
 		})
 		haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {

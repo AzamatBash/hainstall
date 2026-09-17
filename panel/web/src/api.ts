@@ -34,8 +34,14 @@ export interface Node {
   status: NodeStatus
   traffic_log?: boolean
   listen_ports?: number[]
+  entrances?: Entrance[]
   protect?: ProtectProfile
   live?: NodeLive
+}
+
+export interface Entrance {
+  port: number
+  backend: string
 }
 
 export interface ProtectProfile {
@@ -359,6 +365,7 @@ const ERROR_MAP: Record<string, string> = {
   'read body failed': 'Не удалось прочитать ответ',
   'too many requests': 'Слишком много попыток. Подождите 15 мин.',
   'Too Many Requests': 'Слишком много попыток. Подождите 15 мин.',
+  'server not found in store': 'Сервер уже удалён (или имя не совпало) — обновите список',
 }
 
 export function translateError(msg: string): string {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
+	"github.com/azabash/hapanel/agent/internal/store"
 )
 
 // BaseConfigFile holds global/defaults/frontends. Loaded from backends.d so we
@@ -39,17 +40,29 @@ func nbthreadCount() int {
 	return n
 }
 
+// FrontendName returns the HAProxy frontend section name for an entrance port.
+func FrontendName(port int) string {
+	return fmt.Sprintf("entrance_%d", port)
+}
+
 // BaseConfigBody returns the canonical HAProxy frontends for client traffic.
-// listenPorts are host/container TCP ports HAProxy binds (default 8443).
-func BaseConfigBody(listenPorts []int, protect ProtectOpts) string {
-	if len(listenPorts) == 0 {
-		listenPorts = []int{8443}
-	}
-	var binds strings.Builder
-	for _, p := range listenPorts {
-		fmt.Fprintf(&binds, "    bind *:%d\n", p)
+// Each entrance is its own frontend (one bind + default_backend).
+func BaseConfigBody(entrances []store.Entrance, protect ProtectOpts) string {
+	ents, err := store.NormalizeEntrances(entrances)
+	if err != nil || len(ents) == 0 {
+		ents = []store.Entrance{store.DefaultEntrance}
 	}
 	extras := protect.frontendExtras()
+	var fronts strings.Builder
+	for _, e := range ents {
+		fmt.Fprintf(&fronts, `
+frontend %s
+    mode tcp
+    bind *:%d
+    maxconn 40000
+%s    default_backend %s
+`, FrontendName(e.Port), e.Port, extras, e.Backend)
+	}
 	return fmt.Sprintf(`# Managed by hapanel agent — do not edit by hand
 # Client frontends live here (not a host bind-mounted haproxy.cfg).
 global
@@ -71,12 +84,7 @@ defaults
     timeout client-fin 30s
     timeout server-fin 30s
     retries 2
-
-frontend https_front
-    mode tcp
-%s    maxconn 40000
-%s    default_backend app
-`, nbthreadCount(), binds.String(), extras)
+%s`, nbthreadCount(), fronts.String())
 }
 
 // AtomicWriteFile writes body to path atomically (exported for listen-ports apply).
@@ -85,7 +93,7 @@ func AtomicWriteFile(path, body string) error {
 }
 
 // EnsureBaseConfig writes frontends into backends.d and reloads HAProxy when needed.
-func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, listenPorts []int, protect ProtectOpts) (changed bool, err error) {
+func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, entrances []store.Entrance, protect ProtectOpts) (changed bool, err error) {
 	if backendsDir == "" {
 		return false, fmt.Errorf("backends dir is empty")
 	}
@@ -93,7 +101,7 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 		return false, err
 	}
 	path := filepath.Join(backendsDir, BaseConfigFile)
-	body := BaseConfigBody(listenPorts, protect)
+	body := BaseConfigBody(entrances, protect)
 	prev, _ := os.ReadFile(path)
 	if string(prev) == body {
 		return false, nil
@@ -112,17 +120,18 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 }
 
 // EnsureBaseConfigLoop keeps base frontends present (fixes empty/missing mounts).
-func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, listenPorts []int, protect ProtectOpts, log func(msg string, args ...any)) {
+func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, entrances []store.Entrance, protect ProtectOpts, log func(msg string, args ...any)) {
 	backoff := time.Second
+	ports := store.PortsFromEntrances(entrances)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		changed, err := EnsureBaseConfig(ctx, backendsDir, docker, ha, listenPorts, protect)
+		changed, err := EnsureBaseConfig(ctx, backendsDir, docker, ha, entrances, protect)
 		if err == nil {
 			if log != nil {
 				if changed {
-					log("haproxy base config applied", "file", BaseConfigFile, "ports", listenPorts)
+					log("haproxy base config applied", "file", BaseConfigFile, "ports", ports)
 				} else {
 					log("haproxy base config ok", "file", BaseConfigFile)
 				}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
 	"github.com/azabash/hapanel/agent/internal/haproxy"
-	"github.com/azabash/hapanel/agent/internal/ports"
 	"github.com/azabash/hapanel/agent/internal/store"
 )
 
@@ -24,7 +23,7 @@ func Current(st *store.Store) (Profile, error) {
 	return Normalize(*state.Protect)
 }
 
-// Apply writes base.cfg from listen ports + protect profile and reloads HAProxy.
+// Apply writes base.cfg from entrances + protect profile and reloads HAProxy.
 func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *dockerctl.Controller, ha *haproxy.Client, want Profile) (Profile, error) {
 	p, err := Normalize(want)
 	if err != nil {
@@ -34,12 +33,12 @@ func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *doc
 	if err != nil {
 		return Profile{}, err
 	}
-	listenPorts, err := ports.Normalize(state.ListenPorts)
-	if err != nil {
-		listenPorts = append([]int(nil), ports.DefaultListen...)
+	ents := state.Entrances
+	if len(ents) == 0 {
+		ents = []store.Entrance{store.DefaultEntrance}
 	}
 
-	body := haproxy.BaseConfigBody(listenPorts, ToHAProxy(p))
+	body := haproxy.BaseConfigBody(ents, ToHAProxy(p))
 	path := filepath.Join(backendsDir, haproxy.BaseConfigFile)
 	if err := haproxy.AtomicWriteFile(path, body); err != nil {
 		return Profile{}, fmt.Errorf("write base cfg: %w", err)
