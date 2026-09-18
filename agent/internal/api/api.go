@@ -196,6 +196,18 @@ func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 		}
 		byBackend[s.Backend] = append(byBackend[s.Backend], s)
 	}
+	// Entrances may reference backends with no servers yet — still list them.
+	if ents, eerr := d.Store.Entrances(); eerr == nil {
+		for _, e := range ents {
+			if e.Backend == "" {
+				continue
+			}
+			if _, ok := byBackend[e.Backend]; !ok {
+				byBackend[e.Backend] = nil
+				order = append(order, e.Backend)
+			}
+		}
+	}
 
 	out := backendsResponse{Backends: make([]backendGroup, 0, len(order))}
 	for _, name := range order {
@@ -205,10 +217,14 @@ func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 		} else {
 			bal = haproxy.DefaultBalance
 		}
+		srv := byBackend[name]
+		if srv == nil {
+			srv = []haproxy.ServerInfo{}
+		}
 		out.Backends = append(out.Backends, backendGroup{
 			Name:    name,
 			Balance: bal,
-			Servers: byBackend[name],
+			Servers: srv,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

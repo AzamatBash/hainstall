@@ -15,7 +15,7 @@ import (
 
 // AgentImage is the Docker Hub image for the node agent.
 // Also published as azamatbash/hanode:latest — prefer the version tag in production.
-const AgentImage = "azamatbash/hanode:0.1.6"
+const AgentImage = "azamatbash/hanode:0.1.7"
 
 // DefaultMgmtPort is the panel↔agent HTTP port (clients stay on listen ports).
 const DefaultMgmtPort = 47893

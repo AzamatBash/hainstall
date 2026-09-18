@@ -12,6 +12,7 @@ import {
   Node,
   ProtectProfile,
   Provider,
+  realServers,
   RemnaBackendStat,
   RemnaPanel,
   StatsSummary,
@@ -258,10 +259,9 @@ export default function NodeDetailPage() {
   const [editPort, setEditPort] = useState('47893')
   const [editOpen, setEditOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
-  const [entrancesForm, setEntrancesForm] = useState<{ port: string; backend: string }[]>([
-    { port: '8443', backend: 'app' },
-  ])
   const [entrancesBusy, setEntrancesBusy] = useState(false)
+  const [showAddEntrance, setShowAddEntrance] = useState(false)
+  const [entranceDraft, setEntranceDraft] = useState({ port: '', backend: '' })
   const [protectForm, setProtectForm] = useState<ProtectProfile>({
     client_hello: true,
     client_hello_delay_sec: 5,
@@ -296,6 +296,26 @@ export default function NodeDetailPage() {
   const [remnaBusyKey, setRemnaBusyKey] = useState('')
 
   const facing = useMemo(() => userFacingStats(stats), [stats])
+
+  const nodeEntrances: Entrance[] = useMemo(() => {
+    if (node?.entrances?.length) return node.entrances
+    if (node?.listen_ports?.length) {
+      return node.listen_ports.map((p) => ({ port: p, backend: 'app' }))
+    }
+    return [{ port: 8443, backend: 'app' }]
+  }, [node])
+
+  const servers = useMemo(() => realServers(backends), [backends])
+
+  const serversByBackend = useMemo(() => {
+    const map: Record<string, BackendServer[]> = {}
+    for (const s of servers) {
+      const be = s.backend || 'app'
+      if (!map[be]) map[be] = []
+      map[be].push(s)
+    }
+    return map
+  }, [servers])
 
   const remnaKey = (backend: string, name: string) => `${backend}/${name}`
 
@@ -411,15 +431,7 @@ export default function NodeDetailPage() {
         setEditHost('')
         setEditPort('47893')
       }
-      setEntrancesForm(
-        (found.entrances?.length
-          ? found.entrances
-          : (found.listen_ports?.length ? found.listen_ports : [8443]).map((p) => ({
-              port: p,
-              backend: 'app',
-            }))
-        ).map((e) => ({ port: String(e.port), backend: e.backend || 'app' })),
-      )
+      // entrances come from node; no draft form
       if (found.protect) {
         setProtectForm({
           client_hello: found.protect.client_hello,
@@ -801,6 +813,90 @@ export default function NodeDetailPage() {
     }
   }
 
+  async function putEntrances(next: Entrance[], okText: string) {
+    setEntrancesBusy(true)
+    setError('')
+    try {
+      const res = await api<{
+        ok: boolean
+        saved?: boolean
+        error?: string
+        node: Node
+        entrances?: Entrance[]
+        agent?: { opened?: number[]; closed?: number[] }
+      }>(`/api/nodes/${id}/entrances`, {
+        method: 'PUT',
+        body: JSON.stringify({ entrances: next }),
+      })
+      setNode(res.node)
+      if (!res.ok) {
+        setToast({
+          kind: 'fail',
+          text: res.error || 'Входы сохранены в панели, но на VPS не применены',
+        })
+      } else {
+        const opened = res.agent?.opened?.length
+          ? ` открыты: ${res.agent.opened.join(', ')}`
+          : ''
+        const closed = res.agent?.closed?.length
+          ? ` закрыты: ${res.agent.closed.join(', ')}`
+          : ''
+        setToast({ kind: 'ok', text: `${okText}${opened}${closed}` })
+      }
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить входы')
+    } finally {
+      setEntrancesBusy(false)
+    }
+  }
+
+  async function onAddEntrance(e: FormEvent) {
+    e.preventDefault()
+    const port = Number(entranceDraft.port.trim())
+    const backend = entranceDraft.backend.trim() || 'app'
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setError('Порт входа: число 1–65535')
+      return
+    }
+    if (nodeEntrances.some((x) => x.port === port)) {
+      setError(`Порт ${port} уже занят другим входом`)
+      return
+    }
+    setShowAddEntrance(false)
+    setEntranceDraft({ port: '', backend: '' })
+    await putEntrances(
+      [...nodeEntrances, { port, backend }],
+      `Вход :${port} → ${backend} добавлен`,
+    )
+  }
+
+  async function onDeleteEntrance(port: number) {
+    if (nodeEntrances.length <= 1) {
+      setError('Нужен хотя бы один вход')
+      return
+    }
+    if (!confirm(`Удалить вход :${port}? Порт закроется на VPS.`)) return
+    await putEntrances(
+      nodeEntrances.filter((x) => x.port !== port),
+      `Вход :${port} удалён`,
+    )
+  }
+
+  function openAddServer(backend: string) {
+    setError('')
+    const existing = servers.find((b) => b.backend === backend)
+    setForm({
+      backend,
+      name: '',
+      address: '',
+      port: '8443',
+      weight: '100',
+      balance: existing?.balance ? String(existing.balance) : 'leastconn',
+    })
+    setShowAddBackend(true)
+  }
+
   async function onAddBackend(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -819,10 +915,10 @@ export default function NodeDetailPage() {
       })
       setForm((f) => ({ ...f, name: '', address: '' }))
       setShowAddBackend(false)
-      setToast({ kind: 'ok', text: 'Бэкенд добавлен' })
+      setToast({ kind: 'ok', text: `Сервер добавлен в ${form.backend}` })
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось добавить бэкенд')
+      setError(err instanceof Error ? err.message : 'Не удалось добавить сервер')
     } finally {
       setBusy(false)
     }
@@ -1054,67 +1150,6 @@ export default function NodeDetailPage() {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить защиту')
     } finally {
       setProtectBusy(false)
-    }
-  }
-
-  async function onSaveEntrances(e: FormEvent) {
-    e.preventDefault()
-    setEntrancesBusy(true)
-    setError('')
-    try {
-      const entrances: Entrance[] = entrancesForm.map((row) => ({
-        port: Number(row.port.trim()),
-        backend: row.backend.trim() || 'app',
-      }))
-      if (
-        entrances.length === 0 ||
-        entrances.some((x) => !Number.isInteger(x.port) || x.port < 1 || x.port > 65535)
-      ) {
-        throw new Error('Укажите порт 1–65535 и backend для каждого входа')
-      }
-      const ports = new Set(entrances.map((x) => x.port))
-      if (ports.size !== entrances.length) {
-        throw new Error('Порты входов должны быть уникальны')
-      }
-      const res = await api<{
-        ok: boolean
-        saved?: boolean
-        error?: string
-        node: Node
-        ports?: number[]
-        entrances?: Entrance[]
-        agent?: { opened?: number[]; closed?: number[] }
-      }>(`/api/nodes/${id}/entrances`, {
-        method: 'PUT',
-        body: JSON.stringify({ entrances }),
-      })
-      setNode(res.node)
-      if (res.entrances?.length) {
-        setEntrancesForm(
-          res.entrances.map((x) => ({ port: String(x.port), backend: x.backend || 'app' })),
-        )
-      }
-      if (!res.ok) {
-        setToast({
-          kind: 'fail',
-          text: res.error || 'Входы сохранены в панели, но на VPS не применены',
-        })
-      } else {
-        const opened = res.agent?.opened?.length
-          ? ` открыты: ${res.agent.opened.join(', ')}`
-          : ''
-        const closed = res.agent?.closed?.length
-          ? ` закрыты: ${res.agent.closed.join(', ')}`
-          : ''
-        setToast({
-          kind: 'ok',
-          text: `Входы HAProxy обновлены${opened}${closed}`,
-        })
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось сохранить входы')
-    } finally {
-      setEntrancesBusy(false)
     }
   }
 
@@ -1381,84 +1416,130 @@ export default function NodeDetailPage() {
 
       {node && (
         <section className="panel" style={{ marginBottom: '1rem' }}>
-          <h2>Входы HAProxy</h2>
-          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Каждый вход — свой порт и свой backend. Агент обновит frontend, publish в Docker Compose
-            и UFW.
-          </p>
-          <form className="stack" onSubmit={(e) => void onSaveEntrances(e)}>
-            <div className="stack" style={{ gap: '0.5rem' }}>
-              {entrancesForm.map((row, idx) => (
-                <div className="row" key={idx} style={{ gap: '0.5rem', alignItems: 'flex-end' }}>
-                  <div className="field" style={{ flex: '0 0 7rem' }}>
-                    <label htmlFor={`entrance-port-${idx}`}>Порт</label>
-                    <input
-                      id={`entrance-port-${idx}`}
-                      className="mono"
-                      value={row.port}
-                      onChange={(e) =>
-                        setEntrancesForm((rows) =>
-                          rows.map((r, i) => (i === idx ? { ...r, port: e.target.value } : r)),
-                        )
-                      }
-                      placeholder="8443"
-                      required
-                      inputMode="numeric"
-                    />
-                  </div>
-                  <div className="field" style={{ flex: 1 }}>
-                    <label htmlFor={`entrance-backend-${idx}`}>Backend</label>
-                    <input
-                      id={`entrance-backend-${idx}`}
-                      className="mono"
-                      value={row.backend}
-                      onChange={(e) =>
-                        setEntrancesForm((rows) =>
-                          rows.map((r, i) => (i === idx ? { ...r, backend: e.target.value } : r)),
-                        )
-                      }
-                      placeholder="app"
-                      required
-                    />
-                  </div>
-                  <button
-                    className="btn btn-ghost"
-                    type="button"
-                    disabled={entrancesForm.length <= 1 || entrancesBusy}
-                    onClick={() =>
-                      setEntrancesForm((rows) => rows.filter((_, i) => i !== idx))
-                    }
-                  >
-                    Удалить
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="row">
+          <div className="panel-head">
+            <h2>Входы</h2>
+            <div className="panel-head-aside">
               <button
-                className="btn btn-ghost"
+                className="btn btn-sm btn-primary"
                 type="button"
-                disabled={entrancesBusy}
-                onClick={() =>
-                  setEntrancesForm((rows) => [...rows, { port: '', backend: 'app' }])
-                }
+                disabled={entrancesBusy || st !== 'online'}
+                onClick={() => {
+                  setError('')
+                  setEntranceDraft({ port: '', backend: '' })
+                  setShowAddEntrance(true)
+                }}
               >
                 + Вход
               </button>
-              <button
-                className="btn btn-primary"
-                type="submit"
-                disabled={entrancesBusy || st !== 'online'}
-              >
-                {entrancesBusy ? 'Применение…' : 'Применить на VPS'}
-              </button>
-              {st !== 'online' && (
-                <span className="muted" style={{ fontSize: '0.85rem' }}>
-                  Сначала проверьте связь с нодой
-                </span>
-              )}
             </div>
-          </form>
+          </div>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            Вход = порт на ноде. Трафик с этого порта идёт в backend, а в backend вы добавляете
+            серверы (IP:порт). Без серверов вход пустой.
+          </p>
+          <div className="stack" style={{ gap: '0.75rem' }}>
+            {nodeEntrances.map((ent) => {
+              const list = serversByBackend[ent.backend] || []
+              return (
+                <div
+                  key={`${ent.port}-${ent.backend}`}
+                  style={{
+                    border: '1px solid var(--border, #333)',
+                    borderRadius: 8,
+                    padding: '0.75rem 1rem',
+                  }}
+                >
+                  <div
+                    className="row"
+                    style={{
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem',
+                      flexWrap: 'wrap',
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <strong className="mono">:{ent.port}</strong>
+                      <span className="muted"> → backend </span>
+                      <strong className="mono">{ent.backend}</strong>
+                      <span className="muted" style={{ marginLeft: 8, fontSize: '0.85rem' }}>
+                        {list.length
+                          ? `${list.length} сервер(ов)`
+                          : 'серверов нет'}
+                      </span>
+                    </div>
+                    <div className="row" style={{ gap: 8 }}>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        type="button"
+                        disabled={busy || st !== 'online'}
+                        onClick={() => openAddServer(ent.backend)}
+                      >
+                        Добавить сервер
+                      </button>
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        type="button"
+                        disabled={entrancesBusy || nodeEntrances.length <= 1}
+                        onClick={() => void onDeleteEntrance(ent.port)}
+                      >
+                        Удалить вход
+                      </button>
+                    </div>
+                  </div>
+                  {list.length === 0 ? (
+                    <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+                      Нажмите «Добавить сервер» — укажите IP/домен и порт цели.
+                    </p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Имя</th>
+                            <th>Адрес</th>
+                            <th>Порт</th>
+                            <th>Вес</th>
+                            <th>Баланс</th>
+                            <th>Статус</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {list.map((b) => (
+                            <tr key={`${b.backend}/${b.name}`}>
+                              <td className="mono">{b.name}</td>
+                              <td className="mono">{b.address}</td>
+                              <td className="mono">{b.port}</td>
+                              <td className="mono">{b.weight ?? '—'}</td>
+                              <td className="mono">{b.balance ?? 'leastconn'}</td>
+                              <td>{b.status ?? '—'}</td>
+                              <td>
+                                <button
+                                  className="btn btn-sm btn-danger"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void onDeleteBackend(b.backend, b.name)}
+                                >
+                                  Удалить
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {st !== 'online' && (
+            <p className="muted" style={{ margin: '0.75rem 0 0', fontSize: '0.85rem' }}>
+              Сначала проверьте связь с нодой — иначе изменения не уйдут на VPS.
+            </p>
+          )}
         </section>
       )}
 
@@ -1747,33 +1828,10 @@ export default function NodeDetailPage() {
 
         <section className="panel">
           <div className="panel-head">
-            <h2>Бэкенды приложений</h2>
-            <div className="panel-head-aside">
-              <button
-                className="btn btn-sm btn-primary"
-                type="button"
-                disabled={busy || connecting || st !== 'online'}
-                onClick={() => {
-                  setError('')
-                  setForm((f) => {
-                    const existing = backends.find((b) => b.backend === f.backend)
-                    return {
-                      ...f,
-                      balance: existing?.balance
-                        ? String(existing.balance)
-                        : f.balance || 'leastconn',
-                    }
-                  })
-                  setShowAddBackend(true)
-                }}
-              >
-                Добавить бэкенд
-              </button>
-            </div>
+            <h2>Remnawave</h2>
           </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Только пользовательские серверы (app и добавленные вами). Служебные
-            hap_agent / acme скрыты.
+            Привязка серверов к нодам Remnawave. Серверы добавляются во вкладке «Входы» выше.
           </p>
           <div className="table-wrap">
             <table className="table">
@@ -1790,16 +1848,16 @@ export default function NodeDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {backends.length === 0 ? (
+                {servers.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="muted">
                       {st === 'online'
-                        ? 'Пока нет серверов — добавьте через кнопку выше'
+                        ? 'Нет серверов — добавьте во «Входах» выше'
                         : 'Нет данных — сначала установите связь'}
                     </td>
                   </tr>
                 ) : (
-                  backends.map((b) => {
+                  servers.map((b) => {
                     const k = remnaKey(b.backend, b.name)
                     const rf = remnaFormFor(b.backend, b.name)
                     const linked = Boolean(remnaLinked[k])
@@ -2077,6 +2135,61 @@ export default function NodeDetailPage() {
         ) : null}
       </div>
 
+      {showAddEntrance && (
+        <div className="modal-backdrop" onClick={() => !entrancesBusy && setShowAddEntrance(false)}>
+          <div
+            className="modal stack"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(28rem, 100%)' }}
+          >
+            <h3 style={{ margin: 0 }}>Новый вход</h3>
+            <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+              Порт, который слушает HAProxy на VPS, и имя backend для серверов.
+            </p>
+            <form className="stack" onSubmit={(e) => void onAddEntrance(e)}>
+              <div className="field">
+                <label htmlFor="new-entrance-port">Порт</label>
+                <input
+                  id="new-entrance-port"
+                  className="mono"
+                  value={entranceDraft.port}
+                  onChange={(e) => setEntranceDraft((d) => ({ ...d, port: e.target.value }))}
+                  placeholder="443"
+                  required
+                  inputMode="numeric"
+                  disabled={entrancesBusy}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="new-entrance-backend">Имя backend</label>
+                <input
+                  id="new-entrance-backend"
+                  className="mono"
+                  value={entranceDraft.backend}
+                  onChange={(e) => setEntranceDraft((d) => ({ ...d, backend: e.target.value }))}
+                  placeholder="edge"
+                  required
+                  disabled={entrancesBusy}
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={entrancesBusy}
+                  onClick={() => setShowAddEntrance(false)}
+                >
+                  Отменить
+                </button>
+                <button className="btn btn-primary" type="submit" disabled={entrancesBusy}>
+                  {entrancesBusy ? 'Сохранение…' : 'Создать вход'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {showAddBackend && (
         <div className="modal-backdrop" onClick={closeAddBackend}>
           <div
@@ -2084,18 +2197,15 @@ export default function NodeDetailPage() {
             onClick={(e) => e.stopPropagation()}
             style={{ width: 'min(32rem, 100%)' }}
           >
-            <h3 style={{ margin: 0 }}>Добавить бэкенд</h3>
+            <h3 style={{ margin: 0 }}>Добавить сервер в {form.backend}</h3>
             <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
-              В «Адрес» пишите IP (или домен) — именно это попадёт в конфиг HAProxy как
-              цель <span className="mono">server …</span>. Поле Remnawave ниже по строке
-              бэкенда на это не влияет.
+              Цель для HAProxy: IP или домен + порт. Backend уже выбран из входа.
             </p>
             <form className="stack" onSubmit={onAddBackend}>
               {(
                 [
-                  ['backend', 'Бэкенд'],
                   ['name', 'Имя сервера'],
-                  ['address', 'Адрес (IP для HAProxy)'],
+                  ['address', 'Адрес (IP/домен)'],
                   ['port', 'Порт'],
                   ['weight', 'Вес'],
                 ] as const
@@ -2104,31 +2214,19 @@ export default function NodeDetailPage() {
                   <label htmlFor={`add-${key}`}>{label}</label>
                   <input
                     id={`add-${key}`}
-                    className={key === 'address' || key === 'backend' ? 'mono' : undefined}
+                    className={key === 'address' ? 'mono' : undefined}
                     value={form[key]}
-                    onChange={(e) => {
-                      const value = e.target.value
-                      setForm((f) => {
-                        const next = { ...f, [key]: value }
-                        if (key === 'backend') {
-                          const existing = backends.find((b) => b.backend === value)
-                          if (existing?.balance) next.balance = String(existing.balance)
-                        }
-                        return next
-                      })
-                    }}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                     required
                     disabled={busy}
                     placeholder={
-                      key === 'backend'
-                        ? 'app'
-                        : key === 'address'
-                          ? '1.2.3.4'
-                          : key === 'port'
-                            ? '8443'
-                            : key === 'weight'
-                              ? '100'
-                              : undefined
+                      key === 'address'
+                        ? '1.2.3.4'
+                        : key === 'port'
+                          ? '8443'
+                          : key === 'weight'
+                            ? '100'
+                            : undefined
                     }
                   />
                 </div>
@@ -2147,10 +2245,6 @@ export default function NodeDetailPage() {
                   <option value="first">first — первый доступный</option>
                   <option value="random">random — случайно</option>
                 </select>
-                <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.8rem' }}>
-                  Алгоритм для всего backend (все серверы с этим именем). Вес по-прежнему
-                  задаётся отдельно на каждый сервер.
-                </p>
               </div>
               <div className="modal-actions">
                 <button
@@ -2162,7 +2256,7 @@ export default function NodeDetailPage() {
                   Отменить
                 </button>
                 <button className="btn btn-primary" type="submit" disabled={busy}>
-                  {busy ? 'Сохранение…' : 'Сохранить'}
+                  {busy ? 'Сохранение…' : 'Добавить сервер'}
                 </button>
               </div>
             </form>

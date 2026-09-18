@@ -429,8 +429,15 @@ export function flattenBackends(data: unknown): BackendServer[] {
       const backendName = String(g.name ?? g.backend ?? '')
       if (isInternalBackend(backendName)) continue
       const servers = Array.isArray(g.servers) ? (g.servers as BackendServer[]) : []
-      if (servers.length === 0 && g.name && g.address) {
-        out.push(g as unknown as BackendServer)
+      if (servers.length === 0) {
+        // Keep empty backend groups visible (entrance without servers yet).
+        out.push({
+          backend: backendName,
+          name: '',
+          address: '',
+          port: 0,
+          balance: String(g.balance ?? 'leastconn'),
+        })
         continue
       }
       for (const s of servers) {
@@ -447,6 +454,11 @@ export function flattenBackends(data: unknown): BackendServer[] {
     return out
   }
   return []
+}
+
+/** Real servers only (drops empty-backend placeholders). */
+export function realServers(servers: BackendServer[]): BackendServer[] {
+  return servers.filter((s) => Boolean(s.name) && Boolean(s.address) && s.port > 0)
 }
 
 const TOKEN_KEY = 'hapanel_token'
