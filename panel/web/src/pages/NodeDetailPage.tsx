@@ -32,9 +32,21 @@ import { ProviderBadge } from './NodesPage'
 
 const HISTORY_MAX = 720
 const POLL_MS = 5000
+const AGENT_FETCH_MS = 10000
 const TRAFFIC_HOURS_OPTIONS = [1, 2, 3, 6, 12, 24] as const
 const TRAFFIC_HISTORY_MAX = (24 * 60 * 60) / 5
 const MSK = 'Europe/Moscow'
+
+/** Timed fetch so a hung /stats cannot freeze the detail page. */
+async function apiTimed<T = unknown>(path: string, ms = AGENT_FETCH_MS): Promise<T> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), ms)
+  try {
+    return await api<T>(path, { signal: ctrl.signal })
+  } finally {
+    clearTimeout(t)
+  }
+}
 
 function ymdMsk(d = new Date()): string {
   return d.toLocaleDateString('en-CA', { timeZone: MSK })
@@ -260,8 +272,9 @@ export default function NodeDetailPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
   const [entrancesBusy, setEntrancesBusy] = useState(false)
+  const entrancesBusyRef = useRef(false)
   const [showAddEntrance, setShowAddEntrance] = useState(false)
-  const [entranceDraft, setEntranceDraft] = useState({ port: '', backend: '' })
+  const [entranceDraft, setEntranceDraft] = useState({ port: '' })
   const [protectForm, setProtectForm] = useState<ProtectProfile>({
     client_hello: true,
     client_hello_delay_sec: 5,
@@ -297,8 +310,14 @@ export default function NodeDetailPage() {
 
   const facing = useMemo(() => userFacingStats(stats), [stats])
 
+  /** One HAProxy backend per listen port — used for NEW multi-port isolation only. */
+  function backendForPort(port: number) {
+    return `p${port}`
+  }
+
   const nodeEntrances: Entrance[] = useMemo(() => {
     if (node?.entrances?.length) return node.entrances
+    // Match agent/provision default: legacy listen_ports all map to backend "app".
     if (node?.listen_ports?.length) {
       return node.listen_ports.map((p) => ({ port: p, backend: 'app' }))
     }
@@ -316,6 +335,34 @@ export default function NodeDetailPage() {
     }
     return map
   }, [servers])
+
+  /** Resolve servers for an entrance by its stored backend only. */
+  function serversForEntrance(ent: Entrance): BackendServer[] {
+    const primary = (ent.backend || 'app').trim() || 'app'
+    const direct = serversByBackend[primary]
+    if (direct?.length) return direct
+    // Desync only: panel points at empty p{port}, servers still on app, and no entrance owns app.
+    if (primary !== 'app' && (serversByBackend.app?.length ?? 0) > 0) {
+      const appOwned = nodeEntrances.some((e) => (e.backend || 'app') === 'app')
+      if (appOwned) return []
+      const emptyPorts = nodeEntrances
+        .filter((e) => !(serversByBackend[(e.backend || '').trim()]?.length))
+        .sort((a, b) => a.port - b.port)
+      if (emptyPorts[0]?.port === ent.port) return serversByBackend.app
+    }
+    return []
+  }
+
+  const orphanServers = useMemo(() => {
+    const claimed = new Set<string>()
+    for (const ent of nodeEntrances) {
+      for (const s of serversForEntrance(ent)) {
+        claimed.add(`${s.backend || 'app'}/${s.name}`)
+      }
+    }
+    return servers.filter((s) => !claimed.has(`${s.backend || 'app'}/${s.name}`))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- serversForEntrance closes over maps
+  }, [servers, serversByBackend, nodeEntrances])
 
   const remnaKey = (backend: string, name: string) => `${backend}/${name}`
 
@@ -367,15 +414,20 @@ export default function NodeDetailPage() {
   const loadRemnaStats = useCallback(async () => {
     if (!id) return
     try {
-      const res = await api<{ stats: RemnaBackendStat[] }>(
+      const res = await apiTimed<{ stats: RemnaBackendStat[] }>(
         `/api/nodes/${id}/backends/remna-stats`,
+        15000,
       )
       const list = Array.isArray(res.stats) ? res.stats : []
       const map: Record<string, RemnaBackendStat> = {}
       for (const s of list) {
         map[remnaKey(s.backend, s.name)] = s
       }
-      setRemnaStats(map)
+      // Never blank the strip on a partial/empty answer while we already have numbers.
+      setRemnaStats((prev) => {
+        if (Object.keys(map).length === 0 && Object.keys(prev).length > 0) return prev
+        return { ...prev, ...map }
+      })
     } catch {
       /* ignore transient */
     }
@@ -416,7 +468,7 @@ export default function NodeDetailPage() {
   const load = useCallback(async () => {
     setError('')
     try {
-      const list = await api<{ nodes: Node[] }>('/api/nodes')
+      const list = await apiTimed<{ nodes: Node[] }>('/api/nodes', 15000)
       const found = list.nodes.find((n) => n.id === id) ?? null
       setNode(found)
       if (!found) {
@@ -445,19 +497,36 @@ export default function NodeDetailPage() {
         })
       }
       if (found.status !== 'online') {
-        setStats(null)
-        setSystem(null)
-        setBackends([])
-        setUpBps(null)
-        setDownBps(null)
+        // Soft degrade: keep last backends/stats/remna so a transient offline
+        // (port add / HAProxy recreate) does not blank the page.
         return
       }
-      const [statsRes, backendsRes, systemRes, healthRes] = await Promise.all([
-        api<StatsSummary>(`/api/nodes/${id}/stats`),
-        api<unknown>(`/api/nodes/${id}/backends`),
-        api<SystemMetrics>(`/api/nodes/${id}/system`).catch(() => null),
-        api<{ version?: string }>(`/api/nodes/${id}/health`).catch(() => null),
+      // Seed from list snapshot so a flaky stats call cannot blank the page.
+      if (Array.isArray(found.live?.backends) && found.live.backends.length) {
+        setBackends((prev) => (prev.length ? prev : realServers(found.live!.backends!)))
+      }
+      const settled = await Promise.allSettled([
+        apiTimed<StatsSummary>(`/api/nodes/${id}/stats`),
+        apiTimed<unknown>(`/api/nodes/${id}/backends`),
+        apiTimed<SystemMetrics>(`/api/nodes/${id}/system`),
+        apiTimed<{ version?: string }>(`/api/nodes/${id}/health`),
       ])
+      const statsRes =
+        settled[0].status === 'fulfilled' ? settled[0].value : null
+      const backendsRes =
+        settled[1].status === 'fulfilled' ? settled[1].value : null
+      const systemRes =
+        settled[2].status === 'fulfilled' ? settled[2].value : null
+      const healthRes =
+        settled[3].status === 'fulfilled' ? settled[3].value : null
+      const loadErrs = settled
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+      if (loadErrs.length && !backendsRes && !statsRes) {
+        setError(loadErrs[0] || 'Ошибка загрузки')
+      } else {
+        setError('')
+      }
       if (healthRes?.version) {
         setNode((cur) =>
           cur
@@ -468,10 +537,17 @@ export default function NodeDetailPage() {
             : cur,
         )
       }
-      setStats(statsRes)
-      const flat = flattenBackends(backendsRes)
-      setBackends(flat)
-      const facingNow = userFacingStats(statsRes)
+      if (statsRes) setStats(statsRes)
+      let flatForCache: BackendServer[] = []
+      if (backendsRes != null) {
+        const flat = flattenBackends(backendsRes)
+        setBackends((prev) => {
+          const next = flat.length === 0 && prev.length > 0 ? prev : flat
+          flatForCache = realServers(next)
+          return next
+        })
+      }
+      const facingNow = statsRes ? userFacingStats(statsRes) : null
       let metrics
       if (systemRes) {
         setSystem(systemRes)
@@ -487,13 +563,17 @@ export default function NodeDetailPage() {
           upBps: rates.upBps,
         }
       }
-      putNodeCache(id!, {
-        backends: flat,
-        sessions:
-          facingNow.active_sessions !== null ? String(facingNow.active_sessions) : '—',
-        metrics,
-      })
-      if (facingNow.active_sessions !== null) {
+      if (flatForCache.length || metrics) {
+        putNodeCache(id!, {
+          backends: flatForCache,
+          sessions:
+            facingNow && facingNow.active_sessions !== null
+              ? String(facingNow.active_sessions)
+              : '—',
+          metrics,
+        })
+      }
+      if (facingNow?.active_sessions != null) {
         setSessHist((h) => pushPoint(h, facingNow.active_sessions ?? 0))
       }
     } catch (err) {
@@ -600,27 +680,45 @@ export default function NodeDetailPage() {
     void loadRemnaLinks()
   }, [loadRemnaPanels, loadProviders, loadRemnaLinks])
 
-  // Live poll while detail page is open and node is online.
+  // Live poll while detail page is open. Keep polling even if status flickers —
+  // clearing the timer on offline used to freeze the page until hard refresh.
   useEffect(() => {
-    if (!node || node.status !== 'online') return
-    const timer = setInterval(() => {
-      void (async () => {
-        try {
-          const [statsRes, systemRes] = await Promise.all([
-            api<StatsSummary>(`/api/nodes/${id}/stats`),
-            api<SystemMetrics>(`/api/nodes/${id}/system`),
-          ])
+    if (!id) return
+    let cancelled = false
+    const tick = async () => {
+      if (cancelled || entrancesBusyRef.current) return
+      try {
+        const settled = await Promise.allSettled([
+          apiTimed<StatsSummary>(`/api/nodes/${id}/stats`),
+          apiTimed<SystemMetrics>(`/api/nodes/${id}/system`),
+          apiTimed<unknown>(`/api/nodes/${id}/backends`),
+        ])
+        if (cancelled || entrancesBusyRef.current) return
+        const statsRes =
+          settled[0].status === 'fulfilled' ? settled[0].value : null
+        const systemRes =
+          settled[1].status === 'fulfilled' ? settled[1].value : null
+        const backendsRes =
+          settled[2].status === 'fulfilled' ? settled[2].value : null
+        if (statsRes) {
           setStats(statsRes)
-          setSystem(systemRes)
-          const rates = applyTraffic(systemRes)
-          setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
-          setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
           const facingNow = userFacingStats(statsRes)
-          putNodeCache(id!, {
+          if (facingNow.active_sessions !== null) {
+            setSessHist((h) => pushPoint(h, facingNow.active_sessions ?? 0))
+          }
+          putNodeCache(id, {
             sessions:
               facingNow.active_sessions !== null
                 ? String(facingNow.active_sessions)
                 : undefined,
+          })
+        }
+        if (systemRes) {
+          setSystem(systemRes)
+          const rates = applyTraffic(systemRes)
+          setCpuHist((h) => pushPoint(h, Number(systemRes.cpu_percent) || 0))
+          setMemHist((h) => pushPoint(h, Number(systemRes.mem_percent) || 0))
+          putNodeCache(id, {
             metrics: {
               cpu: Number(systemRes.cpu_percent) || 0,
               loadAvg: Array.isArray(systemRes.load_avg)
@@ -630,32 +728,47 @@ export default function NodeDetailPage() {
               upBps: rates.upBps,
             },
           })
-          if (facingNow.active_sessions !== null) {
-            setSessHist((h) => pushPoint(h, facingNow.active_sessions ?? 0))
-          }
-        } catch {
-          /* ignore transient poll errors */
+          // Successful poll ⇒ treat as online even if list briefly said offline.
+          setNode((cur) =>
+            cur && cur.status !== 'online' ? { ...cur, status: 'online' } : cur,
+          )
         }
-      })()
+        if (backendsRes != null) {
+          const flat = flattenBackends(backendsRes)
+          setBackends((prev) => (flat.length === 0 && prev.length > 0 ? prev : flat))
+        }
+      } catch {
+        /* ignore transient poll errors */
+      }
+    }
+    void tick()
+    const timer = setInterval(() => {
+      void tick()
     }, POLL_MS)
-    return () => clearInterval(timer)
-  }, [id, node?.status, applyTraffic])
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [id, applyTraffic])
 
-  // Remna stats poll (~5s) when backends are present.
+  // Remna stats poll (~5s) — keep going even if backends briefly empty.
   useEffect(() => {
-    if (!id || backends.length === 0) return
+    if (!id) return
     void loadRemnaStats()
     const timer = setInterval(() => {
-      void loadRemnaStats()
+      if (!entrancesBusyRef.current) void loadRemnaStats()
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [id, backends.length, loadRemnaStats])
+  }, [id, loadRemnaStats])
 
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 4500)
     return () => clearTimeout(t)
   }, [toast])
+
+  const title = useMemo(() => node?.name ?? 'Нода', [node])
+  const st = node?.status || 'unknown'
 
   useEffect(() => {
     if (!actionsOpen) return
@@ -675,8 +788,6 @@ export default function NodeDetailPage() {
     }
   }, [actionsOpen])
 
-  const title = useMemo(() => node?.name ?? 'Нода', [node])
-  const st = node?.status || 'unknown'
   const usageMin = shiftYmd(ymdMsk(), -89)
   const usageMax = ymdMsk()
 
@@ -814,8 +925,19 @@ export default function NodeDetailPage() {
   }
 
   async function putEntrances(next: Entrance[], okText: string) {
+    entrancesBusyRef.current = true
     setEntrancesBusy(true)
     setError('')
+    // Optimistic: keep existing servers on screen while agent reloads HAProxy.
+    setNode((cur) =>
+      cur
+        ? {
+            ...cur,
+            entrances: next,
+            listen_ports: next.map((e) => e.port),
+          }
+        : cur,
+    )
     try {
       const res = await api<{
         ok: boolean
@@ -832,7 +954,7 @@ export default function NodeDetailPage() {
       if (!res.ok) {
         setToast({
           kind: 'fail',
-          text: res.error || 'Входы сохранены в панели, но на VPS не применены',
+          text: res.error || 'Не удалось применить входы на VPS',
         })
       } else {
         const opened = res.agent?.opened?.length
@@ -843,10 +965,27 @@ export default function NodeDetailPage() {
           : ''
         setToast({ kind: 'ok', text: `${okText}${opened}${closed}` })
       }
-      await load()
+      // Soft refresh only — full load() used to race HAProxy recreate and wipe the page.
+      try {
+        const backendsRes = await apiTimed<unknown>(`/api/nodes/${id}/backends`, 15000)
+        const flat = flattenBackends(backendsRes)
+        setBackends((prev) => (flat.length === 0 && prev.length > 0 ? prev : flat))
+      } catch {
+        /* keep previous */
+      }
+      void loadRemnaStats()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить входы')
+      // Re-sync entrances from server without clearing backends.
+      try {
+        const list = await apiTimed<{ nodes: Node[] }>('/api/nodes', 15000)
+        const found = list.nodes.find((n) => n.id === id)
+        if (found) setNode(found)
+      } catch {
+        /* ignore */
+      }
     } finally {
+      entrancesBusyRef.current = false
       setEntrancesBusy(false)
     }
   }
@@ -854,20 +993,27 @@ export default function NodeDetailPage() {
   async function onAddEntrance(e: FormEvent) {
     e.preventDefault()
     const port = Number(entranceDraft.port.trim())
-    const backend = entranceDraft.backend.trim() || 'app'
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       setError('Порт входа: число 1–65535')
       return
     }
     if (nodeEntrances.some((x) => x.port === port)) {
-      setError(`Порт ${port} уже занят другим входом`)
+      setError(`Порт ${port} уже занят`)
       return
     }
+    // New port gets its own backend. Existing ports keep theirs — never rewrite them.
+    const backend = backendForPort(port)
     setShowAddEntrance(false)
-    setEntranceDraft({ port: '', backend: '' })
+    setEntranceDraft({ port: '' })
     await putEntrances(
-      [...nodeEntrances, { port, backend }],
-      `Вход :${port} → ${backend} добавлен`,
+      [
+        ...nodeEntrances.map((e) => ({
+          port: e.port,
+          backend: e.backend || 'app',
+        })),
+        { port, backend },
+      ],
+      `Вход :${port} создан`,
     )
   }
 
@@ -876,15 +1022,46 @@ export default function NodeDetailPage() {
       setError('Нужен хотя бы один вход')
       return
     }
-    if (!confirm(`Удалить вход :${port}? Порт закроется на VPS.`)) return
+    const ent = nodeEntrances.find((x) => x.port === port)
+    const list = ent ? serversForEntrance(ent) : []
+    const be = list[0]?.backend || ent?.backend || backendForPort(port)
+    if (
+      !confirm(
+        list.length
+          ? `Удалить вход :${port} и ${list.length} цел(ей) только с этого порта?`
+          : `Удалить вход :${port}? Порт закроется на VPS.`,
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    try {
+      for (const s of list) {
+        try {
+          await api(
+            `/api/nodes/${id}/backends/${encodeURIComponent(s.backend || be)}/${encodeURIComponent(s.name)}`,
+            { method: 'DELETE' },
+          )
+        } catch {
+          /* ignore */
+        }
+      }
+    } finally {
+      setBusy(false)
+    }
+    // Keep remaining entrance backends unchanged — do not remap to p{port}.
     await putEntrances(
-      nodeEntrances.filter((x) => x.port !== port),
+      nodeEntrances
+        .filter((x) => x.port !== port)
+        .map((e) => ({ port: e.port, backend: e.backend || 'app' })),
       `Вход :${port} удалён`,
     )
   }
 
-  function openAddServer(backend: string) {
+  function openAddServer(port: number) {
     setError('')
+    const ent = nodeEntrances.find((x) => x.port === port)
+    const backend = ent?.backend || 'app'
     const existing = servers.find((b) => b.backend === backend)
     setForm({
       backend,
@@ -915,10 +1092,10 @@ export default function NodeDetailPage() {
       })
       setForm((f) => ({ ...f, name: '', address: '' }))
       setShowAddBackend(false)
-      setToast({ kind: 'ok', text: `Сервер добавлен в ${form.backend}` })
+      setToast({ kind: 'ok', text: 'Цель добавлена на этот порт' })
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось добавить сервер')
+      setError(err instanceof Error ? err.message : 'Не удалось добавить цель')
     } finally {
       setBusy(false)
     }
@@ -930,7 +1107,7 @@ export default function NodeDetailPage() {
   }
 
   async function onDeleteBackend(backend: string, name: string) {
-    if (!confirm(`Удалить ${backend}/${name}?`)) return
+    if (!confirm(`Удалить сервер ${name} только с этого порта?`)) return
     setBusy(true)
     setError('')
     try {
@@ -1417,7 +1594,7 @@ export default function NodeDetailPage() {
       {node && (
         <section className="panel" style={{ marginBottom: '1rem' }}>
           <div className="panel-head">
-            <h2>Входы</h2>
+            <h2>1. Входы (порты)</h2>
             <div className="panel-head-aside">
               <button
                 className="btn btn-sm btn-primary"
@@ -1425,24 +1602,65 @@ export default function NodeDetailPage() {
                 disabled={entrancesBusy || st !== 'online'}
                 onClick={() => {
                   setError('')
-                  setEntranceDraft({ port: '', backend: '' })
+                  setEntranceDraft({ port: '' })
                   setShowAddEntrance(true)
                 }}
               >
-                + Вход
+                + Порт
               </button>
             </div>
           </div>
           <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Вход = порт на ноде. Трафик с этого порта идёт в backend, а в backend вы добавляете
-            серверы (IP:порт). Без серверов вход пустой.
+            Только порты, которые слушает нода. Цели Remnawave добавляются ниже — отдельно на
+            каждый порт.
           </p>
-          <div className="stack" style={{ gap: '0.75rem' }}>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Порт</th>
+                  <th>Целей</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {nodeEntrances.map((ent) => {
+                  const n = serversForEntrance(ent).length
+                  return (
+                    <tr key={ent.port}>
+                      <td className="mono">:{ent.port}</td>
+                      <td className="muted">{n}</td>
+                      <td>
+                        <button
+                          className="btn btn-sm btn-ghost"
+                          type="button"
+                          disabled={entrancesBusy || nodeEntrances.length <= 1}
+                          onClick={() => void onDeleteEntrance(ent.port)}
+                        >
+                          Удалить порт
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {node && (
+        <section className="panel" style={{ marginBottom: '1rem' }}>
+          <h2>2. Бэкенды (серверы на каждый вход)</h2>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            На каждый порт — свои серверы. Удаление сервера с :443 не трогает :8443.
+          </p>
+          <div className="stack" style={{ gap: '1rem' }}>
             {nodeEntrances.map((ent) => {
-              const list = serversByBackend[ent.backend] || []
+              const list = serversForEntrance(ent)
               return (
                 <div
-                  key={`${ent.port}-${ent.backend}`}
+                  key={ent.port}
                   style={{
                     border: '1px solid var(--border, #333)',
                     borderRadius: 8,
@@ -1459,38 +1677,21 @@ export default function NodeDetailPage() {
                       gap: 8,
                     }}
                   >
-                    <div>
-                      <strong className="mono">:{ent.port}</strong>
-                      <span className="muted"> → backend </span>
-                      <strong className="mono">{ent.backend}</strong>
-                      <span className="muted" style={{ marginLeft: 8, fontSize: '0.85rem' }}>
-                        {list.length
-                          ? `${list.length} сервер(ов)`
-                          : 'серверов нет'}
-                      </span>
-                    </div>
-                    <div className="row" style={{ gap: 8 }}>
-                      <button
-                        className="btn btn-sm btn-primary"
-                        type="button"
-                        disabled={busy || st !== 'online'}
-                        onClick={() => openAddServer(ent.backend)}
-                      >
-                        Добавить сервер
-                      </button>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        type="button"
-                        disabled={entrancesBusy || nodeEntrances.length <= 1}
-                        onClick={() => void onDeleteEntrance(ent.port)}
-                      >
-                        Удалить вход
-                      </button>
-                    </div>
+                    <strong>
+                      Порт <span className="mono">:{ent.port}</span>
+                    </strong>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      type="button"
+                      disabled={busy || st !== 'online'}
+                      onClick={() => openAddServer(ent.port)}
+                    >
+                      + Сервер на :{ent.port}
+                    </button>
                   </div>
                   {list.length === 0 ? (
                     <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
-                      Нажмите «Добавить сервер» — укажите IP/домен и порт цели.
+                      Пока пусто — добавьте IP/домен Remnawave-ноды для этого порта.
                     </p>
                   ) : (
                     <div className="table-wrap">
@@ -1499,34 +1700,184 @@ export default function NodeDetailPage() {
                           <tr>
                             <th>Имя</th>
                             <th>Адрес</th>
-                            <th>Порт</th>
+                            <th>Порт цели</th>
                             <th>Вес</th>
-                            <th>Баланс</th>
                             <th>Статус</th>
                             <th />
                           </tr>
                         </thead>
                         <tbody>
-                          {list.map((b) => (
-                            <tr key={`${b.backend}/${b.name}`}>
-                              <td className="mono">{b.name}</td>
-                              <td className="mono">{b.address}</td>
-                              <td className="mono">{b.port}</td>
-                              <td className="mono">{b.weight ?? '—'}</td>
-                              <td className="mono">{b.balance ?? 'leastconn'}</td>
-                              <td>{b.status ?? '—'}</td>
-                              <td>
-                                <button
-                                  className="btn btn-sm btn-danger"
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => void onDeleteBackend(b.backend, b.name)}
-                                >
-                                  Удалить
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {list.map((b) => {
+                            const k = remnaKey(b.backend, b.name)
+                            const rf = remnaFormFor(b.backend, b.name)
+                            const linked = Boolean(remnaLinked[k])
+                            const stRow = remnaStats[k]
+                            const busyRemna = remnaBusyKey === k
+                            const panelId = stRow?.remna_panel_id || rf.panelId
+                            const panelName =
+                              remnaPanels.find((p) => p.id === panelId)?.name ||
+                              panelId ||
+                              'Remna'
+                            return (
+                              <Fragment key={k}>
+                                <tr>
+                                  <td className="mono">{b.name}</td>
+                                  <td className="mono">{b.address}</td>
+                                  <td className="mono">{b.port}</td>
+                                  <td className="mono">{b.weight ?? '—'}</td>
+                                  <td>{b.status ?? '—'}</td>
+                                  <td>
+                                    <button
+                                      className="btn btn-sm btn-danger"
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => void onDeleteBackend(b.backend, b.name)}
+                                    >
+                                      Удалить
+                                    </button>
+                                  </td>
+                                </tr>
+                                <tr className="backend-remna-row">
+                                  <td colSpan={6}>
+                                    <div className="backend-remna">
+                                      {!linked ? (
+                                        <div className="backend-remna-bind">
+                                          <select
+                                            value={rf.panelId}
+                                            aria-label="Панель Remnawave"
+                                            onChange={(e) =>
+                                              setRemnaForm(b.backend, b.name, {
+                                                panelId: e.target.value,
+                                              })
+                                            }
+                                          >
+                                            <option value="">— Remnawave —</option>
+                                            {remnaPanels.map((p) => (
+                                              <option key={p.id} value={p.id}>
+                                                {p.name}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <input
+                                            value={rf.remnaAddress}
+                                            placeholder="Адрес ноды (IP или домен)"
+                                            aria-label="Адрес ноды"
+                                            title="Как в Remnawave → Address: IP или домен"
+                                            onChange={(e) =>
+                                              setRemnaForm(b.backend, b.name, {
+                                                remnaAddress: e.target.value,
+                                              })
+                                            }
+                                          />
+                                          <button
+                                            className="btn btn-sm"
+                                            type="button"
+                                            disabled={busyRemna}
+                                            onClick={() => void onSaveRemna(b.backend, b.name)}
+                                          >
+                                            {busyRemna ? '…' : 'Сохранить'}
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="backend-remna-strip">
+                                          <span
+                                            className="backend-remna-panel"
+                                            title={rf.remnaAddress || undefined}
+                                          >
+                                            {panelName}
+                                          </span>
+                                          {!stRow ? (
+                                            <span className="muted">…</span>
+                                          ) : stRow.error || stRow.missing ? (
+                                            <span className="backend-remna-err">
+                                              {stRow.missing
+                                                ? 'нода не найдена в Remna'
+                                                : stRow.error || 'ошибка'}
+                                            </span>
+                                          ) : (
+                                            <>
+                                              <span
+                                                className={`status-inline ${stRow.online ? 'online' : 'offline'}`}
+                                              >
+                                                <span className="status-inline-dot" aria-hidden />
+                                                {stRow.online ? 'online' : 'offline'}
+                                              </span>
+                                              <span
+                                                className="backend-remna-metric mono"
+                                                title="Users online"
+                                              >
+                                                <span className="label">users</span>
+                                                {stRow.users_online != null &&
+                                                Number.isFinite(stRow.users_online)
+                                                  ? stRow.users_online
+                                                  : '—'}
+                                              </span>
+                                              <span className="backend-remna-metric mono" title="RAM">
+                                                <span className="label">ram</span>
+                                                {stRow.ram_percent != null &&
+                                                Number.isFinite(stRow.ram_percent)
+                                                  ? `${Math.round(stRow.ram_percent)}%`
+                                                  : '—'}
+                                              </span>
+                                              <span
+                                                className="backend-remna-metric mono"
+                                                title={
+                                                  stRow.cpu_count
+                                                    ? `Load average (${stRow.cpu_count} cores)`
+                                                    : 'Load average'
+                                                }
+                                              >
+                                                <span className="label">load</span>
+                                                {stRow.load_avg && stRow.load_avg.length >= 3
+                                                  ? stRow.load_avg
+                                                      .slice(0, 3)
+                                                      .map((n) => Number(n).toFixed(2))
+                                                      .join(' ')
+                                                  : '—'}
+                                              </span>
+                                              <span className="node-live-net down" title="RX ↓">
+                                                <span className="node-live-arrow" aria-hidden>
+                                                  ↓
+                                                </span>
+                                                {formatBitrateShort(stRow.down_bps)}
+                                              </span>
+                                              <span className="node-live-net up" title="TX ↑">
+                                                <span className="node-live-arrow" aria-hidden>
+                                                  ↑
+                                                </span>
+                                                {formatBitrateShort(stRow.up_bps)}
+                                              </span>
+                                              <span
+                                                className="backend-remna-metric mono"
+                                                title="Traffic used / limit"
+                                              >
+                                                <span className="label">traf</span>
+                                                {stRow.traffic_used != null
+                                                  ? formatBytes(stRow.traffic_used)
+                                                  : '—'}
+                                                {stRow.traffic_limit != null &&
+                                                stRow.traffic_limit > 0
+                                                  ? ` / ${formatBytes(stRow.traffic_limit)}`
+                                                  : ''}
+                                              </span>
+                                            </>
+                                          )}
+                                          <button
+                                            className="btn btn-sm btn-ghost"
+                                            type="button"
+                                            disabled={busyRemna}
+                                            onClick={() => void onClearRemna(b.backend, b.name)}
+                                          >
+                                            {busyRemna ? '…' : 'Сбросить'}
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              </Fragment>
+                            )
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1535,9 +1886,57 @@ export default function NodeDetailPage() {
               )
             })}
           </div>
+          {orphanServers.length > 0 && (
+            <div
+              style={{
+                marginTop: '1rem',
+                border: '1px solid var(--border, #333)',
+                borderRadius: 8,
+                padding: '0.75rem 1rem',
+              }}
+            >
+              <strong>Серверы вне входов</strong>
+              <p className="muted" style={{ margin: '0.35rem 0 0.5rem', fontSize: '0.85rem' }}>
+                Есть на ноде, но не привязаны к текущим портам (старый backend).
+              </p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Backend</th>
+                      <th>Имя</th>
+                      <th>Адрес</th>
+                      <th>Порт</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orphanServers.map((b) => (
+                      <tr key={`${b.backend}-${b.name}`}>
+                        <td className="mono">{b.backend}</td>
+                        <td className="mono">{b.name}</td>
+                        <td className="mono">{b.address}</td>
+                        <td className="mono">{b.port}</td>
+                        <td>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onDeleteBackend(b.backend, b.name)}
+                          >
+                            Удалить
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           {st !== 'online' && (
             <p className="muted" style={{ margin: '0.75rem 0 0', fontSize: '0.85rem' }}>
-              Сначала проверьте связь с нодой — иначе изменения не уйдут на VPS.
+              Сначала проверьте связь с нодой.
             </p>
           )}
         </section>
@@ -1828,207 +2227,6 @@ export default function NodeDetailPage() {
 
         <section className="panel">
           <div className="panel-head">
-            <h2>Remnawave</h2>
-          </div>
-          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-            Привязка серверов к нодам Remnawave. Серверы добавляются во вкладке «Входы» выше.
-          </p>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Бэкенд</th>
-                  <th>Имя</th>
-                  <th>Адрес</th>
-                  <th>Порт</th>
-                  <th>Вес</th>
-                  <th>Баланс</th>
-                  <th>Статус</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {servers.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="muted">
-                      {st === 'online'
-                        ? 'Нет серверов — добавьте во «Входах» выше'
-                        : 'Нет данных — сначала установите связь'}
-                    </td>
-                  </tr>
-                ) : (
-                  servers.map((b) => {
-                    const k = remnaKey(b.backend, b.name)
-                    const rf = remnaFormFor(b.backend, b.name)
-                    const linked = Boolean(remnaLinked[k])
-                    const stRow = remnaStats[k]
-                    const busyRemna = remnaBusyKey === k
-                    const panelId = stRow?.remna_panel_id || rf.panelId
-                    const panelName =
-                      remnaPanels.find((p) => p.id === panelId)?.name || panelId || 'Remna'
-                    return (
-                      <Fragment key={k}>
-                        <tr>
-                          <td className="mono">{b.backend}</td>
-                          <td className="mono">{b.name}</td>
-                          <td className="mono">{b.address}</td>
-                          <td className="mono">{b.port}</td>
-                          <td className="mono">{b.weight ?? '—'}</td>
-                          <td className="mono">{b.balance ?? 'leastconn'}</td>
-                          <td>{b.status ?? '—'}</td>
-                          <td>
-                            <button
-                              className="btn btn-sm btn-danger"
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void onDeleteBackend(b.backend, b.name)}
-                            >
-                              Удалить
-                            </button>
-                          </td>
-                        </tr>
-                        <tr className="backend-remna-row">
-                          <td colSpan={8}>
-                            <div className="backend-remna">
-                              {!linked ? (
-                                <div className="backend-remna-bind">
-                                  <select
-                                    value={rf.panelId}
-                                    aria-label="Панель Remnawave"
-                                    onChange={(e) =>
-                                      setRemnaForm(b.backend, b.name, {
-                                        panelId: e.target.value,
-                                      })
-                                    }
-                                  >
-                                    <option value="">— Remnawave —</option>
-                                    {remnaPanels.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <input
-                                    value={rf.remnaAddress}
-                                    placeholder="Адрес ноды (IP или домен)"
-                                    aria-label="Адрес ноды"
-                                    title="Как в Remnawave → Address: IP или домен"
-                                    onChange={(e) =>
-                                      setRemnaForm(b.backend, b.name, {
-                                        remnaAddress: e.target.value,
-                                      })
-                                    }
-                                  />
-                                  <button
-                                    className="btn btn-sm"
-                                    type="button"
-                                    disabled={busyRemna}
-                                    onClick={() => void onSaveRemna(b.backend, b.name)}
-                                  >
-                                    {busyRemna ? '…' : 'Сохранить'}
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="backend-remna-strip">
-                                  <span className="backend-remna-panel" title={rf.remnaAddress || undefined}>
-                                    {panelName}
-                                  </span>
-                                  {!stRow ? (
-                                    <span className="muted">…</span>
-                                  ) : stRow.error || stRow.missing ? (
-                                    <span className="backend-remna-err">
-                                      {stRow.missing
-                                        ? 'нода не найдена в Remna'
-                                        : stRow.error || 'ошибка'}
-                                    </span>
-                                  ) : (
-                                    <>
-                                      <span
-                                        className={`status-inline ${stRow.online ? 'online' : 'offline'}`}
-                                      >
-                                        <span className="status-inline-dot" aria-hidden />
-                                        {stRow.online ? 'online' : 'offline'}
-                                      </span>
-                                      <span className="backend-remna-metric mono" title="Users online">
-                                        <span className="label">users</span>
-                                        {stRow.users_online != null &&
-                                        Number.isFinite(stRow.users_online)
-                                          ? stRow.users_online
-                                          : '—'}
-                                      </span>
-                                      <span className="backend-remna-metric mono" title="RAM">
-                                        <span className="label">ram</span>
-                                        {stRow.ram_percent != null &&
-                                        Number.isFinite(stRow.ram_percent)
-                                          ? `${Math.round(stRow.ram_percent)}%`
-                                          : '—'}
-                                      </span>
-                                      <span
-                                        className="backend-remna-metric mono"
-                                        title={
-                                          stRow.cpu_count
-                                            ? `Load average (${stRow.cpu_count} cores)`
-                                            : 'Load average'
-                                        }
-                                      >
-                                        <span className="label">load</span>
-                                        {stRow.load_avg && stRow.load_avg.length >= 3
-                                          ? stRow.load_avg
-                                              .slice(0, 3)
-                                              .map((n) => Number(n).toFixed(2))
-                                              .join(' ')
-                                          : '—'}
-                                      </span>
-                                      <span className="node-live-net down" title="RX ↓">
-                                        <span className="node-live-arrow" aria-hidden>
-                                          ↓
-                                        </span>
-                                        {formatBitrateShort(stRow.down_bps)}
-                                      </span>
-                                      <span className="node-live-net up" title="TX ↑">
-                                        <span className="node-live-arrow" aria-hidden>
-                                          ↑
-                                        </span>
-                                        {formatBitrateShort(stRow.up_bps)}
-                                      </span>
-                                      <span
-                                        className="backend-remna-metric mono"
-                                        title="Traffic used / limit"
-                                      >
-                                        <span className="label">traf</span>
-                                        {stRow.traffic_used != null
-                                          ? formatBytes(stRow.traffic_used)
-                                          : '—'}
-                                        {stRow.traffic_limit != null && stRow.traffic_limit > 0
-                                          ? ` / ${formatBytes(stRow.traffic_limit)}`
-                                          : ''}
-                                      </span>
-                                    </>
-                                  )}
-                                  <button
-                                    className="btn btn-sm btn-ghost"
-                                    type="button"
-                                    disabled={busyRemna}
-                                    onClick={() => void onClearRemna(b.backend, b.name)}
-                                  >
-                                    {busyRemna ? '…' : 'Сбросить'}
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      </Fragment>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-head">
             <h2>Трафик</h2>
             <div className="panel-head-aside">
               <label className="traffic-hours-label muted" htmlFor="traffic-hours">
@@ -2142,9 +2340,9 @@ export default function NodeDetailPage() {
             onClick={(e) => e.stopPropagation()}
             style={{ width: 'min(28rem, 100%)' }}
           >
-            <h3 style={{ margin: 0 }}>Новый вход</h3>
+            <h3 style={{ margin: 0 }}>Новый вход (порт)</h3>
             <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
-              Порт, который слушает HAProxy на VPS, и имя backend для серверов.
+              Только порт на ноде. Серверы Remnawave добавите ниже, в блоке «2. Бэкенды».
             </p>
             <form className="stack" onSubmit={(e) => void onAddEntrance(e)}>
               <div className="field">
@@ -2153,22 +2351,10 @@ export default function NodeDetailPage() {
                   id="new-entrance-port"
                   className="mono"
                   value={entranceDraft.port}
-                  onChange={(e) => setEntranceDraft((d) => ({ ...d, port: e.target.value }))}
+                  onChange={(e) => setEntranceDraft({ port: e.target.value })}
                   placeholder="443"
                   required
                   inputMode="numeric"
-                  disabled={entrancesBusy}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="new-entrance-backend">Имя backend</label>
-                <input
-                  id="new-entrance-backend"
-                  className="mono"
-                  value={entranceDraft.backend}
-                  onChange={(e) => setEntranceDraft((d) => ({ ...d, backend: e.target.value }))}
-                  placeholder="edge"
-                  required
                   disabled={entrancesBusy}
                 />
               </div>
@@ -2182,7 +2368,7 @@ export default function NodeDetailPage() {
                   Отменить
                 </button>
                 <button className="btn btn-primary" type="submit" disabled={entrancesBusy}>
-                  {entrancesBusy ? 'Сохранение…' : 'Создать вход'}
+                  {entrancesBusy ? 'Сохранение…' : 'Добавить порт'}
                 </button>
               </div>
             </form>
@@ -2197,16 +2383,18 @@ export default function NodeDetailPage() {
             onClick={(e) => e.stopPropagation()}
             style={{ width: 'min(32rem, 100%)' }}
           >
-            <h3 style={{ margin: 0 }}>Добавить сервер в {form.backend}</h3>
+            <h3 style={{ margin: 0 }}>
+              Сервер на :{form.backend.replace(/^p/, '') || '…'}
+            </h3>
             <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
-              Цель для HAProxy: IP или домен + порт. Backend уже выбран из входа.
+              IP или домен Remnawave-ноды + порт цели. Попадёт только на выбранный вход.
             </p>
             <form className="stack" onSubmit={onAddBackend}>
               {(
                 [
-                  ['name', 'Имя сервера'],
+                  ['name', 'Имя'],
                   ['address', 'Адрес (IP/домен)'],
-                  ['port', 'Порт'],
+                  ['port', 'Порт цели'],
                   ['weight', 'Вес'],
                 ] as const
               ).map(([key, label]) => (
@@ -2223,7 +2411,7 @@ export default function NodeDetailPage() {
                       key === 'address'
                         ? '1.2.3.4'
                         : key === 'port'
-                          ? '8443'
+                          ? '443'
                           : key === 'weight'
                             ? '100'
                             : undefined
@@ -2239,20 +2427,15 @@ export default function NodeDetailPage() {
                   disabled={busy}
                   onChange={(e) => setForm((f) => ({ ...f, balance: e.target.value }))}
                 >
-                  <option value="leastconn">leastconn — меньше соединений</option>
-                  <option value="roundrobin">roundrobin — по кругу</option>
-                  <option value="source">source — по IP клиента</option>
-                  <option value="first">first — первый доступный</option>
-                  <option value="random">random — случайно</option>
+                  <option value="leastconn">leastconn</option>
+                  <option value="roundrobin">roundrobin</option>
+                  <option value="source">source</option>
+                  <option value="first">first</option>
+                  <option value="random">random</option>
                 </select>
               </div>
               <div className="modal-actions">
-                <button
-                  className="btn"
-                  type="button"
-                  disabled={busy}
-                  onClick={closeAddBackend}
-                >
+                <button className="btn" type="button" disabled={busy} onClick={closeAddBackend}>
                   Отменить
                 </button>
                 <button className="btn btn-primary" type="submit" disabled={busy}>

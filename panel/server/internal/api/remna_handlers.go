@@ -623,12 +623,15 @@ func (s *Server) putRemnaStatsCache(nodeID string, stats []map[string]any) {
 
 func (s *Server) invalidateRemnaStatsCache(nodeID string) {
 	s.remnaCacheMu.Lock()
-	defer s.remnaCacheMu.Unlock()
 	delete(s.remnaCache, nodeID)
-	delete(s.remnaOnlineByNode, nodeID)
-	// Link changes should refresh Online promptly.
-	clear(s.remnaLiveCache)
-	clear(s.remnaPanelNodesCache)
+	// Keep remnaOnlineByNode[nodeID] until refresh replaces it — deleting it made
+	// the nodes list flash remna_online=0 for every link/backend edit.
+	// Do not clear global remnaLiveCache / remnaPanelNodesCache: that wiped Online
+	// for every other node whenever one backend remna link changed.
+	s.remnaCacheMu.Unlock()
+	if n, err := s.store.GetNode(nodeID); err == nil && n != nil {
+		s.scheduleRemnaOnlineRefresh([]store.Node{*n})
+	}
 }
 
 func publicRemnaPanel(p store.RemnaPanel) map[string]any {

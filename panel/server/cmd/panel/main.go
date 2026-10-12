@@ -91,8 +91,9 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// Entrances / protect can wait on agent docker republish (up to ~2 min).
+		WriteTimeout: 180 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

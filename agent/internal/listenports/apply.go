@@ -125,9 +125,21 @@ func republishHAProxy(ctx context.Context, docker *dockerctl.Controller, listenP
 			return fmt.Errorf("write compose: %w", err)
 		}
 	}
+	// Clear name conflicts left by interrupted `docker compose up --force-recreate`
+	// (e.g. leftover /haproxy while compose tracks <hash>_haproxy).
+	_ = docker.RemoveNameConflicts(ctx, "haproxy")
+	// Avoid `--force-recreate`: stop+rm+up is deterministic.
 	script := fmt.Sprintf(`set -e
 cd %q
-docker compose up -d --force-recreate haproxy
+docker rm -f haproxy 2>/dev/null || true
+docker ps -a --format '{{.ID}} {{.Names}}' | while read -r id name; do
+  case "$name" in
+    *_haproxy|*_haproxy_*) docker rm -f "$id" 2>/dev/null || true ;;
+  esac
+done
+docker compose stop haproxy 2>/dev/null || true
+docker compose rm -f haproxy 2>/dev/null || true
+docker compose up -d --remove-orphans haproxy
 `, dir)
 	out, err := docker.HostShell(ctx, script)
 	if err != nil {

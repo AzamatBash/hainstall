@@ -8,6 +8,7 @@ import NodeDetailPage from './pages/NodeDetailPage'
 import TasksPage from './pages/TasksPage'
 import StatsPage from './pages/StatsPage'
 import OlcrtcPage from './pages/OlcrtcPage'
+import TeamPage from './pages/TeamPage'
 
 function PageFade() {
   const { pathname } = useLocation()
@@ -68,6 +69,7 @@ export default function App() {
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/olcnode" element={<OlcrtcPage />} />
+        <Route path="/team" element={<TeamPage />} />
       </Route>
       <Route path="/olcrtc" element={<Navigate to="/olcnode" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />

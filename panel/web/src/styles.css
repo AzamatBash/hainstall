@@ -3104,6 +3104,194 @@ button.task-image-open {
   pointer-events: none;
 }
 
+.team-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 1rem;
+}
+
+.team-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 560;
+}
+
+.team-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 99px;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.team-rename {
+  width: 7rem;
+  font: inherit;
+}
+
+.team-remove {
+  padding: 0 0.35rem;
+}
+
+.cal {
+  display: grid;
+  grid-template-columns: 14rem 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.cal-people {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cal-person {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+}
+
+.cal-person.active {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.cal-person-pick {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.cal-board {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.cal-month {
+  min-width: 9rem;
+  font-size: 1.15rem;
+  text-transform: capitalize;
+}
+
+.cal-hint {
+  margin-left: auto;
+}
+
+.cal-weekdays,
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.cal-weekdays {
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.cal-weekdays .is-weekend {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.cal-day {
+  min-height: 5.4rem;
+  padding: 0.35rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font: inherit;
+}
+
+.cal-day.weekend {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.cal-day.outside {
+  opacity: 0.38;
+}
+
+.cal-day.today .cal-num {
+  background: var(--accent);
+  color: #042f2e;
+}
+
+.cal-day.mine {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.cal-num {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+.cal-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.cal-pill {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  color: #042f2e;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+@media (max-width: 860px) {
+  .cal {
+    grid-template-columns: 1fr;
+  }
+  .cal-people {
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  }
+  .cal-hint {
+    margin-left: 0;
+  }
+}
+
 .help-tip-plaque::after {
   content: '';
   position: absolute;

@@ -3,6 +3,7 @@ package dockerctl
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -76,6 +77,36 @@ func (c *Controller) Restart(ctx context.Context) error {
 	timeout := 10
 	if err := c.cli.ContainerRestart(ctx, id, container.StopOptions{Timeout: &timeout}); err != nil {
 		return fmt.Errorf("restart container: %w", err)
+	}
+	return nil
+}
+
+// RemoveNameConflicts force-removes containers whose name is exactly name
+// or ends with _name (compose recreate leftovers like 53a6622690e4_haproxy).
+func (c *Controller) RemoveNameConflicts(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return fmt.Errorf("list containers: %w", err)
+	}
+	suffix := "_" + name
+	for _, ctr := range list {
+		match := false
+		for _, n := range ctr.Names {
+			n = strings.TrimPrefix(n, "/")
+			if n == name || strings.HasSuffix(n, suffix) {
+				match = true
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		_ = c.cli.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true})
 	}
 	return nil
 }

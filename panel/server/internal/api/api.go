@@ -174,6 +174,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agent/deploy", s.requireAuth(s.handleAgentDeploy))
 	s.mux.HandleFunc("GET /api/agent/jobs/{id}", s.requireAuth(s.handleAgentJob))
 
+	s.mux.HandleFunc("GET /api/team", s.requireAuth(s.handleTeamBoard))
+	s.mux.HandleFunc("POST /api/team/members", s.requireAuth(s.handleCreateTeamMember))
+	s.mux.HandleFunc("PATCH /api/team/members/{id}", s.requireAuth(s.handleRenameTeamMember))
+	s.mux.HandleFunc("DELETE /api/team/members/{id}", s.requireAuth(s.handleDeleteTeamMember))
+	s.mux.HandleFunc("PUT /api/team/days", s.requireAuth(s.handleSetTeamDay))
+
 	s.mux.HandleFunc("GET /api/tasks", s.requireAuth(s.handleListTasks))
 	s.mux.HandleFunc("POST /api/tasks", s.requireAuth(s.handleCreateTask))
 	s.mux.HandleFunc("GET /api/tasks/{id}", s.requireAuth(s.handleGetTask))
@@ -1026,31 +1032,23 @@ func (s *Server) handleNodeEntrances(w http.ResponseWriter, r *http.Request) {
 		storeEnts[i] = store.Entrance{Port: e.Port, Backend: e.Backend}
 	}
 
-	updated, err := s.store.SetNodeEntrances(id, storeEnts)
-	if err != nil {
-		s.logger.Error("save entrances", "err", err)
-		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
-		return
-	}
-	if updated == nil {
-		writeErr(w, http.StatusNotFound, "нода не найдена")
-		return
-	}
-
+	// Apply on agent first — never leave panel DB ahead of the VPS.
+	prev := append([]store.Entrance(nil), n.Entrances...)
 	payload, _ := json.Marshal(map[string]any{"entrances": ents})
-	status, respBody, agentErr := s.agent.SetEntrances(r.Context(), updated.URL, updated.Token, bytes.NewReader(payload))
+	status, respBody, agentErr := s.agent.SetEntrances(r.Context(), n.URL, n.Token, bytes.NewReader(payload))
 	now := time.Now().UTC()
 	ports := provision.PortsFromEntrances(ents)
 	if agentErr != nil {
 		s.logger.Warn("agent entrances failed", "node", id, "err", agentErr)
-		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		// Do not mark offline: SetEntrances can take >60s (docker republish) and
+		// a timeout here must not blank Remna/online/backends in the UI.
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":        false,
-			"saved":     true,
-			"node":      s.publicNode(*updated),
-			"error":     "входы сохранены в панели, но агент недоступен: " + agentErr.Error(),
-			"entrances": updated.Entrances,
-			"ports":     ports,
+			"saved":     false,
+			"node":      s.publicNode(*n),
+			"error":     "агент недоступен, входы не изменены: " + agentErr.Error(),
+			"entrances": n.Entrances,
+			"ports":     provision.PortsFromEntrances(provisionEntrances(n.Entrances)),
 		})
 		return
 	}
@@ -1061,13 +1059,29 @@ func (s *Server) handleNodeEntrances(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":        false,
-			"saved":     true,
-			"node":      s.publicNode(*updated),
-			"error":     "входы сохранены в панели, агент ответил ошибкой: " + msg,
-			"entrances": updated.Entrances,
-			"ports":     ports,
+			"saved":     false,
+			"node":      s.publicNode(*n),
+			"error":     "агент отклонил входы, панель не изменена: " + msg,
+			"entrances": n.Entrances,
+			"ports":     provision.PortsFromEntrances(provisionEntrances(n.Entrances)),
 			"agent":     json.RawMessage(respBody),
 		})
+		return
+	}
+
+	updated, err := s.store.SetNodeEntrances(id, storeEnts)
+	if err != nil {
+		s.logger.Error("save entrances after agent ok", "err", err)
+		// Best-effort rollback on agent so panel/agent stay aligned.
+		if len(prev) > 0 {
+			rb, _ := json.Marshal(map[string]any{"entrances": prev})
+			_, _, _ = s.agent.SetEntrances(r.Context(), n.URL, n.Token, bytes.NewReader(rb))
+		}
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if updated == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
 		return
 	}
 	_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
@@ -1082,6 +1096,14 @@ func (s *Server) handleNodeEntrances(w http.ResponseWriter, r *http.Request) {
 		"ports":     ports,
 		"agent":     agentResp,
 	})
+}
+
+func provisionEntrances(in []store.Entrance) []provision.Entrance {
+	out := make([]provision.Entrance, len(in))
+	for i, e := range in {
+		out[i] = provision.Entrance{Port: e.Port, Backend: e.Backend}
+	}
+	return out
 }
 
 func (s *Server) handleNodeProtect(w http.ResponseWriter, r *http.Request) {
@@ -1181,24 +1203,23 @@ func (s *Server) proxyNode(w http.ResponseWriter, r *http.Request, fn nodeProxyF
 		return
 	}
 
-	status, body, err := fn(r.Context(), n)
+	// Cap agent wait so one hung node (stats during HAProxy recreate) cannot stall the UI.
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	status, body, err := fn(ctx, n)
 	now := time.Now().UTC()
 	if err != nil {
 		s.logger.Warn("agent request failed", "node", id, "err", err)
-		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		// Never flip to offline here. Snapshot poller decides after repeated misses;
+		// a single blip during docker republish / stats hang used to wipe the detail page.
 		writeErr(w, http.StatusBadGateway, "агент недоступен: "+err.Error())
 		return
 	}
 
 	if status >= 200 && status < 500 {
-		st := store.StatusOnline
-		if status >= 400 {
-			st = store.StatusOnline // auth/app errors still mean reachable
-		}
-		_ = s.store.UpdateNodeStatus(id, st, &now)
-	} else {
-		_ = s.store.UpdateNodeStatus(id, store.StatusOffline, &now)
+		_ = s.store.UpdateNodeStatus(id, store.StatusOnline, &now)
 	}
+	// 5xx from agent: leave status unchanged (same reason as above).
 
 	ct := "application/json"
 	if len(body) == 0 {

@@ -209,6 +209,21 @@ CREATE TABLE IF NOT EXISTS task_images (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id);
+CREATE TABLE IF NOT EXISTS team_members (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_days (
+  member_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  status TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (member_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_team_days_day ON team_days(day);
 CREATE TABLE IF NOT EXISTS remna_online_samples (
   panel_id TEXT NOT NULL,
   ts INTEGER NOT NULL,

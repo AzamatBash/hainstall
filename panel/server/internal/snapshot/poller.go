@@ -65,14 +65,28 @@ func runOnce(parent context.Context, st *store.Store, ag *agent.Client, logger *
 	wg.Wait()
 }
 
+// Consecutive System() misses before flipping a node offline (~15s at 5s interval).
+const offlineAfterFails = 3
+
+var snapFails sync.Map // nodeID -> int
+
 func pollNode(ctx context.Context, st *store.Store, ag *agent.Client, n store.Node) error {
 	prev := n.Snapshot
 	sysStatus, sysBody, err := ag.System(ctx, n.URL, n.Token)
 	if err != nil || sysStatus < 200 || sysStatus >= 300 {
-		now := time.Now().UTC()
-		_ = st.UpdateNodeStatus(n.ID, store.StatusOffline, &now)
+		fails := 1
+		if v, ok := snapFails.Load(n.ID); ok {
+			fails = v.(int) + 1
+		}
+		snapFails.Store(n.ID, fails)
+		// Transient blips during HAProxy docker republish must not blank the UI.
+		if fails >= offlineAfterFails {
+			now := time.Now().UTC()
+			_ = st.UpdateNodeStatus(n.ID, store.StatusOffline, &now)
+		}
 		return err
 	}
+	snapFails.Store(n.ID, 0)
 
 	var sys struct {
 		CPUPercent float64   `json:"cpu_percent"`
