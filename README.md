@@ -210,9 +210,25 @@ See `agent/README.md` and `deploy/node/README.md` for details.
 | `PANEL_LISTEN` | `:3080` | Listen address |
 | `PANEL_PASSWORD` | `changeme` | Admin password |
 | `PANEL_JWT_SECRET` | (dev value) | JWT / session signing key |
+| `PANEL_API_KEY` | (empty) | Optional env bootstrap key for `GET /api/v1/hanodes` (prefer keys from UI **api**) |
 | `PANEL_DB_PATH` | `./data/panel.db` | SQLite path |
 | `PANEL_STATIC_DIR` | `./web/dist` | Built UI directory |
 | `HAPANEL_INSECURE_SKIP_VERIFY` | `true` (Docker) | Skip verify on panel→node TLS |
 | `HAPANEL_UTLS_HELLO` | `randomized` | uTLS fingerprint: `randomized`, `chrome`, `firefox`, `golang` |
+
+### Export API (hanode stats for another panel)
+
+In the panel UI open **api** → **Сгенерировать**. The plaintext key is shown once; afterwards only the prefix is listed. You can revoke/delete keys there.
+
+Read-only snapshot of all hanodes (CPU, load, live traffic rates). Auth: panel-generated key, optional `PANEL_API_KEY`, or admin JWT.
+
+```bash
+curl -sS -H "X-API-Key: $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes"
+# optional period totals (hourly buckets, max 90d):
+curl -sS -H "Authorization: Bearer $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes?hours=24"
+curl -sS -H "X-API-Key: $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes/<id>?hours=24"
+```
+
+Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. No node tokens or management URLs.
 
 Do not commit real secrets (`.env`, tokens, passwords).

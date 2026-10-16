@@ -12,6 +12,7 @@ services:
     environment:
       PANEL_PASSWORD: ${PANEL_PASSWORD:-changeme}
       PANEL_JWT_SECRET: ${PANEL_JWT_SECRET:-change-me-to-a-long-random-secret}
+      PANEL_API_KEY: ${PANEL_API_KEY:-}
       PANEL_LISTEN: ":3080"
       PANEL_DB_PATH: /app/data/panel.db
       PANEL_STATIC_DIR: /app/web/dist

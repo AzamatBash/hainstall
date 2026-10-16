@@ -9,6 +9,7 @@ import TasksPage from './pages/TasksPage'
 import StatsPage from './pages/StatsPage'
 import OlcrtcPage from './pages/OlcrtcPage'
 import TeamPage from './pages/TeamPage'
+import ApiKeysPage from './pages/ApiKeysPage'
 
 function PageFade() {
   const { pathname } = useLocation()
@@ -70,6 +71,7 @@ export default function App() {
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/olcnode" element={<OlcrtcPage />} />
         <Route path="/team" element={<TeamPage />} />
+        <Route path="/api-keys" element={<ApiKeysPage />} />
       </Route>
       <Route path="/olcrtc" element={<Navigate to="/olcnode" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />

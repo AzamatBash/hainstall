@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-export type BrandNavActive = 'panel' | 'tasks' | 'stats' | 'olcnode' | 'team'
+export type BrandNavActive = 'panel' | 'tasks' | 'stats' | 'olcnode' | 'team' | 'api'
 
 export default function BrandNav({ active }: { active: BrandNavActive }) {
   return (
@@ -31,6 +31,12 @@ export default function BrandNav({ active }: { active: BrandNavActive }) {
         className={`brand brand-team${active === 'team' ? ' active' : ''}`}
       >
         te<span>am</span>
+      </Link>
+      <Link
+        to="/api-keys"
+        className={`brand brand-api${active === 'api' ? ' active' : ''}`}
+      >
+        ap<span>i</span>
       </Link>
     </nav>
   )

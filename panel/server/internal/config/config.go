@@ -12,6 +12,7 @@ type Config struct {
 	PanelPassword      string
 	JWTSecret          string
 	SecretsKey         string // PANEL_SECRETS_KEY; empty → caller falls back to JWTSecret
+	APIKey             string // PANEL_API_KEY — Bearer/X-API-Key for /api/v1/* export
 	DBPath             string
 	StaticDir          string
 	BasePath           string // e.g. "/a1b2c3d4e5f6" — empty = root
@@ -31,6 +32,7 @@ func Load() Config {
 		PanelPassword:      envOr("PANEL_PASSWORD", "changeme"),
 		JWTSecret:          envOr("PANEL_JWT_SECRET", "dev-jwt-secret-change-me"),
 		SecretsKey:         os.Getenv("PANEL_SECRETS_KEY"),
+		APIKey:             strings.TrimSpace(os.Getenv("PANEL_API_KEY")),
 		DBPath:             envOr("PANEL_DB_PATH", "./data/panel.db"),
 		StaticDir:          envOr("PANEL_STATIC_DIR", "./web/dist"),
 		BasePath:           normalizeBasePath(os.Getenv("PANEL_BASE_PATH")),

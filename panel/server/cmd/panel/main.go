@@ -67,6 +67,7 @@ func main() {
 
 	apiSrv := api.New(st, au, ag, logger, api.Options{
 		SecretsKey:         secretsKey,
+		APIKey:             cfg.APIKey,
 		GeminiKey:          cfg.GeminiAPIKey,
 		GroqKey:            cfg.GroqAPIKey,
 		LLMProvider:        cfg.LLMProvider,

@@ -25,6 +25,7 @@ import (
 
 type Options struct {
 	SecretsKey         string
+	APIKey             string // PANEL_API_KEY — read-only export for external collectors
 	GeminiKey          string
 	GroqKey            string
 	LLMProvider        string
@@ -45,6 +46,7 @@ type Server struct {
 	ops        *opsagent.Runner
 	remnaStats *remnastats.Poller
 	secretsKey string
+	apiKey     string
 	imagesDir  string
 	logger     *slog.Logger
 	mux        *http.ServeMux
@@ -85,6 +87,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		remnaStats:           opt.RemnaStats,
 		secretsKey:           opt.SecretsKey,
+		apiKey:               strings.TrimSpace(opt.APIKey),
 		imagesDir:            opt.ImagesDir,
 		logger:               logger,
 		mux:                  http.NewServeMux(),
@@ -121,6 +124,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.requireAuth(s.handleLogout))
 	s.mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
+
+	// Read-only export for external panels (API key or admin JWT).
+	s.mux.HandleFunc("GET /api/v1/hanodes", s.requireAPIKeyOrAuth(s.handleExportHanodes))
+	s.mux.HandleFunc("GET /api/v1/hanodes/{id}", s.requireAPIKeyOrAuth(s.handleExportHanode))
+
+	// Manage export API keys (admin session only).
+	s.mux.HandleFunc("GET /api/settings/api-keys", s.requireAuth(s.handleListAPIKeys))
+	s.mux.HandleFunc("POST /api/settings/api-keys", s.requireAuth(s.handleCreateAPIKey))
+	s.mux.HandleFunc("POST /api/settings/api-keys/{id}/revoke", s.requireAuth(s.handleRevokeAPIKey))
+	s.mux.HandleFunc("DELETE /api/settings/api-keys/{id}", s.requireAuth(s.handleDeleteAPIKey))
 
 	s.mux.HandleFunc("GET /api/nodes", s.requireAuth(s.handleListNodes))
 	s.mux.HandleFunc("GET /api/traffic", s.requireAuth(s.handleAllTraffic))
