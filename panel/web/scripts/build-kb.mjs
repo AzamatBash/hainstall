@@ -83,6 +83,7 @@ function parseIndex(raw) {
 function isCodeyLine(line) {
   const t = line.trim()
   if (!t) return false
+  if (/^#/.test(t)) return true // shell / nginx comments
   if (/^[{}\[\]];?$/.test(t)) return true
   if (/^(server|location|upstream|http|events|map|types)\b/i.test(t)) return true
   if (/^(listen|server_name|proxy_|ssl_|root |try_files|return |rewrite )\b/i.test(t)) {
@@ -91,28 +92,47 @@ function isCodeyLine(line) {
   if (/^"(tag|listen|port|protocol|settings|streamSettings|inbounds|outbounds)\b/.test(t)) {
     return true
   }
-  if (/^(apt |yum |dnf |docker |curl |wget |ufw |systemctl |nginx |certbot |mkdir |ln |chmod |chown |echo |cat |tee |export |source )/i.test(t)) {
+  if (
+    /^(apt |yum |dnf |docker |curl |wget |ufw |systemctl |nginx |certbot |mkdir |ln |chmod |chown |echo |cat |tee |export |source |printf |ssh |scp |sed |sysctl |sshd |fail2ban)/i.test(
+      t,
+    )
+  ) {
     return true
   }
   if (/^\$[A-Z_]|^[A-Z_][A-Z0-9_]*=/.test(t)) return true
   return false
 }
 
+/** Interactive builder chrome dumped into .txt (not real article text). */
+function isBuilderChrome(line) {
+  const t = line.trim()
+  return /^(Скопировать|Код|ВАШИ КОМАНДЫ|Порт SSH|Открыть порты\b|Роль сервера|Свой пользователь\b|нода \(клиенты|панель или бот)$/i.test(
+    t,
+  )
+}
+
+/** Shell script dumped without a `bash` fence (common in vpn-hub builders). */
+function isBareShellScriptStart(line) {
+  const t = line.trim()
+  return /^#\s*(\d+\.|проверка\b|обновление\b|вход\b|файрвол\b|защита\b|BBR\b)/i.test(t)
+}
+
 function isHeadingLine(line) {
   const t = line.trim()
   if (!t || t.length > 90) return false
   if (/^оглавление$/i.test(t)) return false
+  if (isBuilderChrome(t)) return false
   if (isCodeyLine(t)) return false
   if (/\t/.test(t)) return false // table row
   if (/^(Шаг|Вариант|Этап)\s+/i.test(t)) return true
   if (
-    /^(Если не получилось|Чего .+ не даёт|Разбор по|Итог:|База:|Грабли|Предусловия|Проверка)/i.test(
+    /^(Если не получилось|Чего .+ не даёт|Разбор по|Итог:|База:|Грабли|Предусловия|Проверка|Соберите свои команды|Настройка за)/i.test(
       t,
     )
   ) {
     return true
   }
-  // ALL-CAPS labels (ПЕРВЫЙ ШАГ, ОСНОВНОЙ, …)
+  // ALL-CAPS labels (ПЕРВЫЙ ШАГ, ОСНОВНОЙ, …) — not builder chrome
   if (/^[А-ЯЁA-Z0-9][А-ЯЁA-Z0-9\s«»"'/-]{2,40}$/.test(t) && /[А-ЯЁA-Z]{3,}/.test(t)) {
     return true
   }
@@ -262,6 +282,28 @@ function parseArticle(raw, relPath) {
         lang: tag,
         code: prettyCode(codeLines.join('\n'), tag),
       })
+      i = nextIdx
+      continue
+    }
+
+    // Drop interactive-builder UI leftovers from the .txt dump
+    if (isBuilderChrome(tag)) {
+      flushPara()
+      i++
+      continue
+    }
+
+    // Shell script without a language fence: "# 1. …" / "# проверка: …"
+    if (isBareShellScriptStart(line)) {
+      flushPara()
+      const { codeLines, nextIdx } = collectCode(lines, i)
+      if (codeLines.length) {
+        blocks.push({
+          type: 'code',
+          lang: 'bash',
+          code: prettyCode(codeLines.join('\n'), 'bash'),
+        })
+      }
       i = nextIdx
       continue
     }

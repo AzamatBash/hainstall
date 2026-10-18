@@ -211,9 +211,9 @@ function tokenize(src, opts = {}) {
 export function normalizeProse(text) {
   let t = text.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n')
 
-  // "…: 1. aaa 2. bbb 3. ccc"
+  // "…: 1. aaa 2. bbb 3. ccc" — but never split shell comments "# 1. …"
   t = t.replace(/:\s*(?=\d+\.\s+\S)/g, ':\n')
-  t = t.replace(/([^\n])\s+(\d+\.\s+)(?=\S)/g, '$1\n$2')
+  t = t.replace(/([^\n#])\s+(\d+\.\s+)(?=\S)/g, '$1\n$2')
 
   // "…: - aaa" / "; - bbb" (bullet lists only)
   t = t.replace(/:\s*(?=-\s+\S)/g, ':\n')
