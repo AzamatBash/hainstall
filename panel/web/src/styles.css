@@ -3649,54 +3649,53 @@ button.task-image-open {
   margin: 0 0 1.4rem;
   max-width: 56rem;
   overflow-x: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, #000);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-soft) 92%, #000);
+  border: 1px solid #5a6d82;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 88%, #000);
 }
 
 .kb-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.92rem;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .kb-table th,
 .kb-table td {
-  padding: 0.65rem 0.85rem;
+  padding: 0.7rem 0.9rem;
   text-align: left;
   vertical-align: top;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border: 1px solid #5a6d82;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: auto;
 }
 
 .kb-table th {
   font-family: var(--font);
   font-weight: 600;
   font-size: 0.82rem;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--bg-soft) 70%, #000);
-  white-space: nowrap;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--text) 75%, var(--muted));
+  background: color-mix(in srgb, var(--bg-soft) 55%, #0a0e14);
 }
 
 .kb-table td {
   font-family: var(--kb-serif);
-  color: color-mix(in srgb, var(--text) 92%, #fff);
+  color: color-mix(in srgb, var(--text) 94%, #fff);
+  background: color-mix(in srgb, var(--bg) 40%, var(--bg-soft));
 }
 
 .kb-table td:first-child {
   font-family: var(--font);
   font-weight: 600;
-  white-space: nowrap;
-}
-
-.kb-table tbody tr:last-child td {
-  border-bottom: none;
+  min-width: 8rem;
+  max-width: 14rem;
 }
 
 .kb-table tbody tr:hover td {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-soft));
 }
 
 .kb-deflist-inline {

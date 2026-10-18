@@ -205,68 +205,31 @@ function tokenize(src, opts = {}) {
 }
 
 /**
- * Break inline numbered / dashed enumerations onto their own lines.
- * Also split very long multi-sentence paragraphs for readability.
+ * Only split jammed enumerations / emoji bullets.
+ * Do NOT insert sentence breaks — sources already have paragraphs; CSS wraps the rest.
  */
 export function normalizeProse(text) {
   let t = text.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n')
 
   // "…: 1. aaa 2. bbb 3. ccc"
-  t = t.replace(/:\s*(?=\d+\.\s)/g, ':\n')
-  t = t.replace(/([^\n])\s+(\d+\.\s+)/g, '$1\n$2')
+  t = t.replace(/:\s*(?=\d+\.\s+\S)/g, ':\n')
+  t = t.replace(/([^\n])\s+(\d+\.\s+)(?=\S)/g, '$1\n$2')
 
-  // "…: - aaa; - bbb"
-  t = t.replace(/:\s*(?=-\s)/g, ':\n')
-  t = t.replace(/;\s*(?=-\s)/g, '\n')
-  t = t.replace(/([.;:])\s+-\s+/g, '$1\n- ')
-  t = t.replace(/([^\n])\s+-\s+(?=[А-ЯA-Z«"0-9])/g, '$1\n- ')
+  // "…: - aaa" / "; - bbb" (bullet lists only)
+  t = t.replace(/:\s*(?=-\s+\S)/g, ':\n')
+  t = t.replace(/;\s*(?=-\s+\S)/g, '\n')
+  t = t.replace(/([.;:])\s+-\s+(?=\S)/g, '$1\n- ')
 
   // "а) … б) …"
   t = t.replace(/:\s*(?=[а-яa-z]\)\s)/gi, ':\n')
   t = t.replace(/([^\n])\s+([а-яa-z]\)\s+)/gi, '$1\n$2')
 
-  // Provider bullets jammed: "... . ⭐ Yandex CDN: ..."
-  // Require whitespace before emoji so inline (что/✅/❌) stays intact.
-  // Use /u so surrogate-pair emoji aren't shredded.
+  // Provider bullets jammed on one line (need whitespace before emoji)
   t = t.replace(
     /([^\n\s])\s+(?=[⭐🟢🔵🟠🟧🔴🟡✅❌⛔💡📖🔑⚠])/gu,
     '$1\n',
   )
 
-  // "Term — def. Other — def2" jammed (em dash / en dash)
-  t = t.replace(
-    /([.!?…»"')\]])\s+(?=[А-ЯA-Z«"][^.\n]{1,50}?\s+[—–]\s+)/g,
-    '$1\n',
-  )
-
-  t = t
-    .split('\n')
-    .map((line) => breakLongSentences(line))
-    .join('\n')
-
-  t = t
-    .split('\n')
-    .map((line) => breakSemicolonList(line))
-    .join('\n')
-
   t = t.replace(/\n{3,}/g, '\n\n')
   return t.trimEnd()
-}
-
-function breakLongSentences(line) {
-  if (line.length < 160) return line
-  const t = line.trim()
-  if (/^[-•*\d]/.test(t)) return line
-  if (/^[⭐🟢🔵🟠🟧🔴🟡✅❌⛔💡📖🔑⚠]/u.test(t)) return line
-  if (/https?:\/\//.test(line) && line.length < 220) return line
-  return line.replace(/([.!?…])\s+(?=[A-ZА-ЯЁ«"0-9])/g, '$1\n\n')
-}
-
-function breakSemicolonList(line) {
-  if (line.length < 120) return line
-  const parts = line.split(/;\s+/)
-  if (parts.length < 3) return line
-  const ok = parts.every((p) => p.length >= 12 && p.length <= 180)
-  if (!ok) return line
-  return parts.join('\n')
 }

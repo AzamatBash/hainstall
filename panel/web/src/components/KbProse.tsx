@@ -244,12 +244,12 @@ export default function KbProse({
           return (
             <div key={i} className="kb-prose-chunk">
               <p>
-                {head.map((line, j, arr) => (
-                  <Fragment key={j}>
-                    {linkifyLine(line, findMatches, usedTermIds, i * 1000 + j * 10)}
-                    {j < arr.length - 1 ? <br /> : null}
-                  </Fragment>
-                ))}
+                {linkifyLine(
+                  head.map((l) => l.trim()).filter(Boolean).join(' '),
+                  findMatches,
+                  usedTermIds,
+                  i * 1000,
+                )}
               </p>
               <ListTag
                 className={`kb-list${numbered ? ' kb-list-num' : ''}${emoji ? ' kb-list-emoji' : ''}`}
@@ -270,14 +270,29 @@ export default function KbProse({
             </div>
           )
         }
+        // Short option/label lines → keep line breaks; flowing prose → join with spaces
+        const shortLabels =
+          lines.length >= 2 &&
+          lines.every((l) => {
+            const t = l.trim()
+            return t.length > 0 && t.length < 72 && !/[.!?…]/.test(t)
+          })
+        if (shortLabels) {
+          return (
+            <p key={i}>
+              {lines.map((line, j, arr) => (
+                <Fragment key={j}>
+                  {linkifyLine(line, findMatches, usedTermIds, i * 1000 + j * 10)}
+                  {j < arr.length - 1 ? <br /> : null}
+                </Fragment>
+              ))}
+            </p>
+          )
+        }
+        const joined = lines.map((l) => l.trim()).filter(Boolean).join(' ')
         return (
           <p key={i}>
-            {lines.map((line, j, arr) => (
-              <Fragment key={j}>
-                {linkifyLine(line, findMatches, usedTermIds, i * 1000 + j * 10)}
-                {j < arr.length - 1 ? <br /> : null}
-              </Fragment>
-            ))}
+            {linkifyLine(joined, findMatches, usedTermIds, i * 1000)}
           </p>
         )
       })}
