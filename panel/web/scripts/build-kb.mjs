@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { normalizeProse, prettyCode } from './format-kb.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webRoot = path.resolve(__dirname, '..')
@@ -114,7 +115,7 @@ function parseArticle(raw, relPath) {
   let para = []
   const flushPara = () => {
     while (para.length && para[para.length - 1] === '') para.pop()
-    const t = para.join('\n').trimEnd()
+    const t = normalizeProse(para.join('\n').trimEnd())
     if (t.trim()) blocks.push({ type: 'p', text: t })
     para = []
   }
@@ -130,7 +131,11 @@ function parseArticle(raw, relPath) {
         codeLines.push(lines[i])
         i++
       }
-      blocks.push({ type: 'code', lang: tag, code: codeLines.join('\n') })
+      blocks.push({
+        type: 'code',
+        lang: tag,
+        code: prettyCode(codeLines.join('\n'), tag),
+      })
       continue
     }
     if (line.trim() === '') {

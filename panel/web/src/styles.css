@@ -3619,7 +3619,7 @@ button.task-image-open {
 
 .kb-list {
   margin: 0 0 1rem;
-  padding-left: 1.25rem;
+  padding-left: 1.35rem;
   max-width: var(--kb-measure);
   font-family: var(--kb-serif);
   font-size: 1.05rem;
@@ -3627,7 +3627,16 @@ button.task-image-open {
 }
 
 .kb-list li {
-  margin: 0.25rem 0;
+  margin: 0.35rem 0;
+  padding-left: 0.15rem;
+}
+
+.kb-list-num {
+  list-style: decimal;
+}
+
+.kb-prose-chunk {
+  margin: 0 0 0.25rem;
 }
 
 .kb-callout {

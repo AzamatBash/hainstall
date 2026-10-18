@@ -137,27 +137,73 @@ export default function KbProse({
   return (
     <div className="kb-prose">
       {paragraphs.map((p, i) => {
-        const lines = p.split('\n')
-        // bullet-ish lines
-        const allBullets = lines.every(
-          (l) => !l.trim() || /^[-•*]\s+/.test(l.trim()) || /^\d+[.)]\s+/.test(l.trim()),
-        )
-        if (allBullets && lines.some((l) => /^[-•*]\s+/.test(l.trim()))) {
+        const lines = p.split('\n').filter((l) => l.trim().length > 0)
+        const allDashes = lines.length > 0 && lines.every((l) => /^[-•*]\s+/.test(l.trim()))
+        if (allDashes) {
           return (
             <ul key={i} className="kb-list">
-              {lines
-                .filter((l) => l.trim())
-                .map((l, j) => (
+              {lines.map((l, j) => (
+                <li key={j}>
+                  {linkifyLine(
+                    l.trim().replace(/^[-•*]\s+/, ''),
+                    findMatches,
+                    usedTermIds,
+                    i * 1000 + j * 10,
+                  )}
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        const allNums = lines.length > 0 && lines.every((l) => /^\d+[.)]\s+/.test(l.trim()))
+        if (allNums) {
+          return (
+            <ol key={i} className="kb-list kb-list-num">
+              {lines.map((l, j) => (
+                <li key={j}>
+                  {linkifyLine(
+                    l.trim().replace(/^\d+[.)]\s+/, ''),
+                    findMatches,
+                    usedTermIds,
+                    i * 1000 + j * 10,
+                  )}
+                </li>
+              ))}
+            </ol>
+          )
+        }
+        // Mixed: intro line + list items → paragraph then list
+        const listStart = lines.findIndex(
+          (l) => /^[-•*]\s+/.test(l.trim()) || /^\d+[.)]\s+/.test(l.trim()),
+        )
+        if (listStart > 0) {
+          const head = lines.slice(0, listStart)
+          const tail = lines.slice(listStart)
+          const numbered = tail.every((l) => /^\d+[.)]\s+/.test(l.trim()))
+          const ListTag = numbered ? 'ol' : 'ul'
+          return (
+            <div key={i} className="kb-prose-chunk">
+              <p>
+                {head.map((line, j, arr) => (
+                  <Fragment key={j}>
+                    {linkifyLine(line, findMatches, usedTermIds, i * 1000 + j * 10)}
+                    {j < arr.length - 1 ? <br /> : null}
+                  </Fragment>
+                ))}
+              </p>
+              <ListTag className={`kb-list${numbered ? ' kb-list-num' : ''}`}>
+                {tail.map((l, j) => (
                   <li key={j}>
                     {linkifyLine(
-                      l.trim().replace(/^[-•*]\s+/, ''),
+                      l.trim().replace(/^([-•*]|\d+[.)])\s+/, ''),
                       findMatches,
                       usedTermIds,
-                      i * 1000 + j * 10,
+                      i * 2000 + j * 10,
                     )}
                   </li>
                 ))}
-            </ul>
+              </ListTag>
+            </div>
           )
         }
         return (
