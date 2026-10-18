@@ -32,6 +32,29 @@ const LANGS = new Set([
   'unit',
 ])
 
+const SKIP_ALIAS = new Set([
+  'ip',
+  'tcp',
+  'udp',
+  'fp',
+  'ss',
+  'ru',
+  'de',
+  'nl',
+  'fi',
+  'host', // too common in configs; keep «Хост»
+  'rw',
+])
+
+function slugify(s) {
+  return s
+    .toLowerCase()
+    .replace(/[«»"'()]/g, '')
+    .replace(/[^a-z0-9а-яё]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+}
+
 function parseIndex(raw) {
   const lines = raw.replace(/^\uFEFF/, '').split(/\r?\n/)
   const sections = []
@@ -48,13 +71,32 @@ function parseIndex(raw) {
       current.articles.push({ title: article[1], path: article[2] })
       continue
     }
-    // Section heading: non-empty line that is not an article bullet
     if (!trimmed.startsWith('-')) {
       current = { title: trimmed, articles: [] }
       sections.push(current)
     }
   }
   return sections.filter((s) => s.articles.length > 0)
+}
+
+function isHeadingLine(line) {
+  const t = line.trim()
+  if (!t || t.length > 90) return false
+  if (/^оглавление$/i.test(t)) return false
+  if (/^(Шаг|Вариант|Этап)\s+/i.test(t)) return true
+  if (/^\d+[.)]\s+\S/.test(t) && t.length < 70) return true
+  // Section-like single line without sentence end
+  if (
+    !t.includes(':') &&
+    !/[.!?…]$/.test(t) &&
+    t.length >= 8 &&
+    t.length <= 60 &&
+    !/^[-•*]/.test(t) &&
+    !/^(https?:|curl |sudo |docker |npm |apt )/i.test(t)
+  ) {
+    return true
+  }
+  return false
 }
 
 function parseArticle(raw, relPath) {
@@ -89,11 +131,16 @@ function parseArticle(raw, relPath) {
         i++
       }
       blocks.push({ type: 'code', lang: tag, code: codeLines.join('\n') })
-      // i points at blank or past end; for-loop will i++
       continue
     }
     if (line.trim() === '') {
       flushPara()
+      continue
+    }
+    // Standalone heading line → own block
+    if (para.length === 0 && isHeadingLine(line) && !line.includes('\n')) {
+      flushPara()
+      blocks.push({ type: 'h', text: line.trim() })
       continue
     }
     para.push(line)
@@ -101,7 +148,7 @@ function parseArticle(raw, relPath) {
   flushPara()
 
   const bodyText = blocks
-    .map((b) => (b.type === 'p' ? b.text : b.code))
+    .map((b) => (b.type === 'code' ? b.code : b.text))
     .join('\n')
 
   return { path: relPath, title, blocks, bodyText }
@@ -130,6 +177,77 @@ function detectFields(bodyText) {
   return fields
 }
 
+function addAlias(set, raw) {
+  const a = raw.replace(/^[«"]|[»"]$/g, '').trim()
+  if (!a) return
+  if (a.length < 2) return
+  if (SKIP_ALIAS.has(a.toLowerCase())) return
+  // skip very short non-acronym cyrillic noise
+  if (a.length === 2 && !/^[A-ZА-ЯЁ0-9]{2}$/u.test(a)) return
+  set.add(a)
+}
+
+function parseGlossaryTerms(raw) {
+  const lines = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').split('\n')
+  const terms = []
+  const seenSlug = new Set()
+  const seenPrimary = new Set()
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('Заголовок:')) continue
+    if (trimmed.startsWith('💡') || trimmed.startsWith('Не нашли') || trimmed === 'Оглавление') {
+      continue
+    }
+    const m = trimmed.match(/^(.+?):\s+(.+)$/)
+    if (!m) continue
+    const left = m[1].trim()
+    const def = m[2].trim()
+    if (left.length > 80 || def.length < 20) continue
+    // Section titles like "Панель: что с чем связано" — short, no sentence.
+    if (def.length < 40 && !/[.!?…]/.test(def)) continue
+
+    const primaryKey = left.toLowerCase()
+    if (seenPrimary.has(primaryKey)) continue
+    seenPrimary.add(primaryKey)
+
+    const aliases = new Set()
+    addAlias(aliases, left)
+
+    // Name (alias1, alias2)
+    const paren = left.match(/^(.+?)\s*\((.+)\)\s*$/)
+    if (paren) {
+      addAlias(aliases, paren[1])
+      for (const part of paren[2].split(/[,;/]/)) {
+        addAlias(aliases, part.trim())
+      }
+    }
+
+    // A / B
+    if (left.includes(' / ')) {
+      for (const part of left.split(/\s*\/\s*/)) addAlias(aliases, part)
+    }
+
+    // Emphasize quoted nicknames «грязный»
+    for (const q of left.matchAll(/[«"]([^»"]+)[»"]/g)) {
+      addAlias(aliases, q[1])
+    }
+
+    let slug = slugify(paren ? paren[1] : left.split('/')[0])
+    if (!slug) slug = slugify(left)
+    if (seenSlug.has(slug)) slug = `${slug}-${terms.length}`
+    seenSlug.add(slug)
+
+    const aliasList = [...aliases].sort((a, b) => b.length - a.length)
+    terms.push({
+      id: slug,
+      label: left,
+      definition: def,
+      aliases: aliasList,
+    })
+  }
+  return terms
+}
+
 if (!fs.existsSync(kbSrc)) {
   console.error(`KB source not found: ${kbSrc}`)
   process.exit(1)
@@ -147,22 +265,31 @@ for (const sec of sections) {
       continue
     }
     const parsed = parseArticle(fs.readFileSync(full, 'utf8'), a.path)
-    // Prefer catalog title from index (same content, consistent nav)
     parsed.title = a.title
-    parsed.fields = detectFields(parsed.bodyText + '\n' + parsed.blocks.map((b) => (b.type === 'code' ? b.code : b.text)).join('\n'))
+    const allText =
+      parsed.bodyText +
+      '\n' +
+      parsed.blocks.map((b) => (b.type === 'code' ? b.code : b.text)).join('\n')
+    parsed.fields = detectFields(allText)
     articles[a.path] = parsed
   }
 }
+
+const glossaryPath = path.join(kbSrc, 'a/01-glossary.txt')
+const glossary = fs.existsSync(glossaryPath)
+  ? parseGlossaryTerms(fs.readFileSync(glossaryPath, 'utf8'))
+  : []
 
 const bundle = {
   generatedAt: new Date().toISOString(),
   source: kbSrc,
   sections,
   articles,
+  glossary,
 }
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true })
 fs.writeFileSync(outFile, JSON.stringify(bundle))
 console.log(
-  `KB bundle: ${Object.keys(articles).length} articles, ${sections.length} sections → ${path.relative(webRoot, outFile)}`,
+  `KB bundle: ${Object.keys(articles).length} articles, ${sections.length} sections, ${glossary.length} glossary terms → ${path.relative(webRoot, outFile)}`,
 )

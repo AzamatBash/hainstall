@@ -1,5 +1,6 @@
 export type KbBlock =
   | { type: 'p'; text: string }
+  | { type: 'h'; text: string }
   | { type: 'code'; lang: string; code: string }
 
 export interface KbArticle {
@@ -15,11 +16,19 @@ export interface KbSection {
   articles: { title: string; path: string }[]
 }
 
+export interface KbGlossaryTerm {
+  id: string
+  label: string
+  definition: string
+  aliases: string[]
+}
+
 export interface KbBundle {
   generatedAt: string
   source: string
   sections: KbSection[]
   articles: Record<string, KbArticle>
+  glossary?: KbGlossaryTerm[]
 }
 
 export function pathToSlug(p: string): string {

@@ -18,6 +18,7 @@ import {
 import { KbArticle, KbBundle, pathToSlug, slugToPath } from '../kb/types'
 
 const bundle = bundleJson as KbBundle
+const glossary = bundle.glossary || []
 
 function logout() {
   void api('/api/auth/logout', { method: 'POST' }).catch(() => {})
@@ -27,10 +28,21 @@ function logout() {
 
 function ArticleView({ article }: { article: KbArticle }) {
   const [values, setValues] = useState<KbValues>(() => loadKbValues())
+  const usedTermIds = useMemo(() => new Set<string>(), [article.path])
+  const isGlossary = article.path === 'a/01-glossary.txt'
 
   useEffect(() => {
     saveKbValues(values)
   }, [values])
+
+  useEffect(() => {
+    const hash = window.location.hash.replace(/^#/, '')
+    if (!hash || !isGlossary) return
+    const el = document.getElementById(hash)
+    if (el) {
+      window.setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 40)
+    }
+  }, [article.path, isGlossary])
 
   const fields = useMemo(() => {
     const ids = new Set(article.fields as KbFieldId[])
@@ -48,15 +60,18 @@ function ArticleView({ article }: { article: KbArticle }) {
 
   return (
     <article className="kb-article">
-      <div className="kb-article-head">
+      <header className="kb-article-head">
         <Link to="/kb" className="kb-back">
-          ← Каталог
+          ← К каталогу
         </Link>
         <h1 className="kb-title">{article.title}</h1>
-        <p className="muted kb-glossary-line">
-          <Link to="/kb/01-glossary">Словарь терминов</Link>
-        </p>
-      </div>
+        {!isGlossary && (
+          <p className="kb-lede">
+            Незнакомые слова ведут в{' '}
+            <Link to="/kb/01-glossary">словарь терминов</Link>.
+          </p>
+        )}
+      </header>
 
       {fields.length > 0 && (
         <form
@@ -64,10 +79,15 @@ function ArticleView({ article }: { article: KbArticle }) {
           onSubmit={(e: FormEvent) => e.preventDefault()}
         >
           <div className="kb-builder-head">
-            <strong>Сборщик конфигов</strong>
-            <span className="muted">
-              Подстановка только в этой вкладке браузера, на сервер не уходит.
-            </span>
+            <div>
+              <strong>Сборщик конфигов</strong>
+              <p className="muted kb-builder-hint">
+                Значения подставляются в блоки ниже. Хранятся только в браузере.
+              </p>
+            </div>
+            <button className="btn btn-sm" type="button" onClick={onReset}>
+              Сбросить
+            </button>
           </div>
           <div className="kb-builder-grid">
             {fields.map((f) => (
@@ -83,11 +103,6 @@ function ArticleView({ article }: { article: KbArticle }) {
               </label>
             ))}
           </div>
-          <div className="row">
-            <button className="btn btn-sm" type="button" onClick={onReset}>
-              Сбросить
-            </button>
-          </div>
         </form>
       )}
 
@@ -102,7 +117,22 @@ function ArticleView({ article }: { article: KbArticle }) {
               />
             )
           }
-          return <KbProse key={i} text={applyKbPlaceholders(b.text, values)} />
+          if (b.type === 'h') {
+            return (
+              <h2 key={i} className="kb-h2">
+                {applyKbPlaceholders(b.text, values)}
+              </h2>
+            )
+          }
+          return (
+            <KbProse
+              key={i}
+              text={applyKbPlaceholders(b.text, values)}
+              glossary={isGlossary ? [] : glossary}
+              usedTermIds={usedTermIds}
+              isGlossary={isGlossary}
+            />
+          )
         })}
       </div>
     </article>
@@ -146,6 +176,15 @@ export default function KnowledgePage() {
     setSectionOpen((prev) => ({ ...prev, ...next }))
   }, [q, filtered])
 
+  const activeSection = useMemo(() => {
+    if (!slug) return null
+    const path = slugToPath(slug)
+    return (
+      bundle.sections.find((sec) => sec.articles.some((a) => a.path === path))
+        ?.title ?? null
+    )
+  }, [slug])
+
   return (
     <div className="shell kb-shell">
       <header className="topbar">
@@ -158,7 +197,7 @@ export default function KnowledgePage() {
       </header>
 
       <div className="kb-layout">
-        <aside className="kb-nav panel">
+        <aside className="kb-nav">
           <div className="kb-nav-head">
             <h2 className="kb-nav-title">База знаний</h2>
             <input
@@ -166,7 +205,7 @@ export default function KnowledgePage() {
               type="search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Поиск по заголовку и тексту…"
+              placeholder="Поиск…"
               aria-label="Поиск по базе знаний"
             />
             <Link to="/kb/01-glossary" className="kb-glossary-nav">
@@ -175,7 +214,9 @@ export default function KnowledgePage() {
           </div>
           <nav className="kb-sections" aria-label="Разделы базы знаний">
             {filtered.map((sec) => {
-              const open = sectionOpen[sec.title] ?? true
+              const open =
+                sectionOpen[sec.title] ??
+                (!slug || sec.title === activeSection)
               return (
                 <div key={sec.title} className="kb-section">
                   <button
@@ -220,9 +261,9 @@ export default function KnowledgePage() {
           </nav>
         </aside>
 
-        <main className="kb-main panel">
+        <main className="kb-main">
           {slug && !article && (
-            <div>
+            <div className="kb-empty">
               <p className="error">Статья не найдена.</p>
               <button className="btn" type="button" onClick={() => navigate('/kb')}>
                 В каталог
@@ -233,19 +274,21 @@ export default function KnowledgePage() {
           {!slug && (
             <div className="kb-home">
               <h1 className="kb-title">База знаний</h1>
-              <p className="muted">
-                Технические заметки: сервер, Remnawave, протоколы, каскад, CDN,
-                балансировка, защита, клиенты. Выберите раздел слева или найдите
+              <p className="kb-lede">
+                Технические заметки по серверу, Remnawave, протоколам, каскаду,
+                CDN, балансировке и защите. Выберите раздел слева или найдите
                 статью поиском.
               </p>
               <p>
-                <Link to="/kb/01-glossary">Словарь терминов</Link>
+                <Link to="/kb/01-glossary" className="kb-wiki-link">
+                  Словарь терминов
+                </Link>
               </p>
               <ul className="kb-home-sections">
                 {bundle.sections.map((sec) => (
                   <li key={sec.title}>
                     <strong>{sec.title}</strong>
-                    <span className="muted"> — {sec.articles.length} статей</span>
+                    <span className="muted"> — {sec.articles.length}</span>
                   </li>
                 ))}
               </ul>
