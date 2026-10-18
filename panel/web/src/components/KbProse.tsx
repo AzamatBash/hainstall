@@ -72,6 +72,22 @@ function isDefLine(line: string): boolean {
   return m[1].length <= 80 && m[2].length >= 8
 }
 
+const EMOJI_BULLET = /^[⭐🟢🔵🟠🟧🔴🟡✅❌⚠⛔💡🔑]/u
+
+function isEmDashDef(line: string): boolean {
+  const m = line.match(/^(.{2,70}?)\s+[—–]\s+(.{8,})$/)
+  if (!m) return false
+  if (/[.!?]$/.test(m[1].trim())) return false
+  if (EMOJI_BULLET.test(m[1].trim())) return false
+  return true
+}
+
+function parseEmDashDef(line: string): { term: string; def: string } | null {
+  const m = line.match(/^(.{2,70}?)\s+[—–]\s+(.{8,})$/)
+  if (!m) return null
+  return { term: m[1].trim(), def: m[2].trim() }
+}
+
 export default function KbProse({
   text,
   glossary,
@@ -138,6 +154,46 @@ export default function KbProse({
     <div className="kb-prose">
       {paragraphs.map((p, i) => {
         const lines = p.split('\n').filter((l) => l.trim().length > 0)
+
+        // Em-dash definitions: "Ориджин — ваш сервер…"
+        const emDefs = lines.filter((l) => isEmDashDef(l.trim()))
+        if (
+          emDefs.length >= 2 &&
+          emDefs.length >= Math.floor(lines.length * 0.6)
+        ) {
+          return (
+            <dl key={i} className="kb-deflist kb-deflist-inline">
+              {emDefs.map((line, j) => {
+                const d = parseEmDashDef(line.trim())!
+                return (
+                  <Fragment key={j}>
+                    <dt>
+                      {linkifyLine(d.term, findMatches, usedTermIds, i * 1000 + j * 10)}
+                    </dt>
+                    <dd>
+                      {linkifyLine(d.def, findMatches, usedTermIds, i * 1000 + j * 10 + 5)}
+                    </dd>
+                  </Fragment>
+                )
+              })}
+            </dl>
+          )
+        }
+
+        const allEmoji =
+          lines.length > 0 && lines.every((l) => EMOJI_BULLET.test(l.trim()))
+        if (allEmoji) {
+          return (
+            <ul key={i} className="kb-list kb-list-emoji">
+              {lines.map((l, j) => (
+                <li key={j}>
+                  {linkifyLine(l.trim(), findMatches, usedTermIds, i * 1000 + j * 10)}
+                </li>
+              ))}
+            </ul>
+          )
+        }
+
         const allDashes = lines.length > 0 && lines.every((l) => /^[-•*]\s+/.test(l.trim()))
         if (allDashes) {
           return (
@@ -174,12 +230,16 @@ export default function KbProse({
         }
         // Mixed: intro line + list items → paragraph then list
         const listStart = lines.findIndex(
-          (l) => /^[-•*]\s+/.test(l.trim()) || /^\d+[.)]\s+/.test(l.trim()),
+          (l) =>
+            /^[-•*]\s+/.test(l.trim()) ||
+            /^\d+[.)]\s+/.test(l.trim()) ||
+            EMOJI_BULLET.test(l.trim()),
         )
         if (listStart > 0) {
           const head = lines.slice(0, listStart)
           const tail = lines.slice(listStart)
           const numbered = tail.every((l) => /^\d+[.)]\s+/.test(l.trim()))
+          const emoji = !numbered && tail.every((l) => EMOJI_BULLET.test(l.trim()))
           const ListTag = numbered ? 'ol' : 'ul'
           return (
             <div key={i} className="kb-prose-chunk">
@@ -191,11 +251,15 @@ export default function KbProse({
                   </Fragment>
                 ))}
               </p>
-              <ListTag className={`kb-list${numbered ? ' kb-list-num' : ''}`}>
+              <ListTag
+                className={`kb-list${numbered ? ' kb-list-num' : ''}${emoji ? ' kb-list-emoji' : ''}`}
+              >
                 {tail.map((l, j) => (
                   <li key={j}>
                     {linkifyLine(
-                      l.trim().replace(/^([-•*]|\d+[.)])\s+/, ''),
+                      emoji
+                        ? l.trim()
+                        : l.trim().replace(/^([-•*]|\d+[.)])\s+/, ''),
                       findMatches,
                       usedTermIds,
                       i * 2000 + j * 10,

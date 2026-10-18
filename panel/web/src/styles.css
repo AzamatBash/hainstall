@@ -3635,6 +3635,74 @@ button.task-image-open {
   list-style: decimal;
 }
 
+.kb-list-emoji {
+  list-style: none;
+  padding-left: 0;
+}
+
+.kb-list-emoji li {
+  padding-left: 0;
+  margin: 0.55rem 0;
+}
+
+.kb-table-wrap {
+  margin: 0 0 1.4rem;
+  max-width: 56rem;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, #000);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 92%, #000);
+}
+
+.kb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.kb-table th,
+.kb-table td {
+  padding: 0.65rem 0.85rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.kb-table th {
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-soft) 70%, #000);
+  white-space: nowrap;
+}
+
+.kb-table td {
+  font-family: var(--kb-serif);
+  color: color-mix(in srgb, var(--text) 92%, #fff);
+}
+
+.kb-table td:first-child {
+  font-family: var(--font);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kb-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.kb-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.kb-deflist-inline {
+  margin-top: 0.25rem;
+}
+
 .kb-prose-chunk {
   margin: 0 0 0.25rem;
 }

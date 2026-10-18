@@ -2,6 +2,7 @@ export type KbBlock =
   | { type: 'p'; text: string }
   | { type: 'h'; text: string }
   | { type: 'code'; lang: string; code: string }
+  | { type: 'table'; header: string[] | null; rows: string[][] }
 
 export interface KbArticle {
   path: string

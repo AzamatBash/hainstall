@@ -148,7 +148,8 @@ function tokenize(src, opts = {}) {
       i = j
       continue
     }
-    if (ch === '/' && src[i + 1] === '/') {
+    // // comments, but not URL schemes (http://, https://)
+    if (ch === '/' && src[i + 1] === '/' && !(i > 0 && src[i - 1] === ':')) {
       let j = i + 2
       while (j < src.length && src[j] !== '\n') j++
       tokens.push({ type: 'cmt', value: src.slice(i, j) })
@@ -188,7 +189,11 @@ function tokenize(src, opts = {}) {
       src[j] !== '"' &&
       src[j] !== "'" &&
       src[j] !== '#' &&
-      !(src[j] === '/' && src[j + 1] === '/') &&
+      !(
+        src[j] === '/' &&
+        src[j + 1] === '/' &&
+        !(j > 0 && src[j - 1] === ':')
+      ) &&
       !stop.includes(src[j])
     ) {
       j++
@@ -220,6 +225,20 @@ export function normalizeProse(text) {
   t = t.replace(/:\s*(?=[а-яa-z]\)\s)/gi, ':\n')
   t = t.replace(/([^\n])\s+([а-яa-z]\)\s+)/gi, '$1\n$2')
 
+  // Provider bullets jammed: "... . ⭐ Yandex CDN: ..."
+  // Require whitespace before emoji so inline (что/✅/❌) stays intact.
+  // Use /u so surrogate-pair emoji aren't shredded.
+  t = t.replace(
+    /([^\n\s])\s+(?=[⭐🟢🔵🟠🟧🔴🟡✅❌⛔💡📖🔑⚠])/gu,
+    '$1\n',
+  )
+
+  // "Term — def. Other — def2" jammed (em dash / en dash)
+  t = t.replace(
+    /([.!?…»"')\]])\s+(?=[А-ЯA-Z«"][^.\n]{1,50}?\s+[—–]\s+)/g,
+    '$1\n',
+  )
+
   t = t
     .split('\n')
     .map((line) => breakLongSentences(line))
@@ -236,7 +255,9 @@ export function normalizeProse(text) {
 
 function breakLongSentences(line) {
   if (line.length < 160) return line
-  if (/^[-•*\d]/.test(line.trim())) return line
+  const t = line.trim()
+  if (/^[-•*\d]/.test(t)) return line
+  if (/^[⭐🟢🔵🟠🟧🔴🟡✅❌⛔💡📖🔑⚠]/u.test(t)) return line
   if (/https?:\/\//.test(line) && line.length < 220) return line
   return line.replace(/([.!?…])\s+(?=[A-ZА-ЯЁ«"0-9])/g, '$1\n\n')
 }

@@ -124,6 +124,36 @@ function ArticleView({ article }: { article: KbArticle }) {
               </h2>
             )
           }
+          if (b.type === 'table') {
+            const header = b.header?.map((c) => applyKbPlaceholders(c, values)) ?? null
+            const rows = b.rows.map((row) =>
+              row.map((c) => applyKbPlaceholders(c, values)),
+            )
+            return (
+              <div key={i} className="kb-table-wrap">
+                <table className="kb-table">
+                  {header ? (
+                    <thead>
+                      <tr>
+                        {header.map((c, j) => (
+                          <th key={j}>{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                  ) : null}
+                  <tbody>
+                    {rows.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((c, ci) => (
+                          <td key={ci}>{c}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          }
           return (
             <KbProse
               key={i}

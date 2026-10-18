@@ -80,24 +80,154 @@ function parseIndex(raw) {
   return sections.filter((s) => s.articles.length > 0)
 }
 
+function isCodeyLine(line) {
+  const t = line.trim()
+  if (!t) return false
+  if (/^[{}\[\]];?$/.test(t)) return true
+  if (/^(server|location|upstream|http|events|map|types)\b/i.test(t)) return true
+  if (/^(listen|server_name|proxy_|ssl_|root |try_files|return |rewrite )\b/i.test(t)) {
+    return true
+  }
+  if (/^"(tag|listen|port|protocol|settings|streamSettings|inbounds|outbounds)\b/.test(t)) {
+    return true
+  }
+  if (/^(apt |yum |dnf |docker |curl |wget |ufw |systemctl |nginx |certbot |mkdir |ln |chmod |chown |echo |cat |tee |export |source )/i.test(t)) {
+    return true
+  }
+  if (/^\$[A-Z_]|^[A-Z_][A-Z0-9_]*=/.test(t)) return true
+  return false
+}
+
 function isHeadingLine(line) {
   const t = line.trim()
   if (!t || t.length > 90) return false
   if (/^оглавление$/i.test(t)) return false
+  if (isCodeyLine(t)) return false
+  if (/\t/.test(t)) return false // table row
   if (/^(Шаг|Вариант|Этап)\s+/i.test(t)) return true
-  if (/^\d+[.)]\s+\S/.test(t) && t.length < 70) return true
-  // Section-like single line without sentence end
   if (
+    /^(Если не получилось|Чего .+ не даёт|Разбор по|Итог:|База:|Грабли|Предусловия|Проверка)/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  // ALL-CAPS labels (ПЕРВЫЙ ШАГ, ОСНОВНОЙ, …)
+  if (/^[А-ЯЁA-Z0-9][А-ЯЁA-Z0-9\s«»"'/-]{2,40}$/.test(t) && /[А-ЯЁA-Z]{3,}/.test(t)) {
+    return true
+  }
+  // Body lines like "Hysteria2 на UDP — выручает…" are not headings
+  if (/\s[—–]\s/.test(t) && t.length > 35) return false
+  // Section-like: starts with capital, no sentence end
+  if (
+    /^[А-ЯЁA-Z«"]/.test(t) &&
     !t.includes(':') &&
     !/[.!?…]$/.test(t) &&
     t.length >= 8 &&
     t.length <= 60 &&
-    !/^[-•*]/.test(t) &&
-    !/^(https?:|curl |sudo |docker |npm |apt )/i.test(t)
+    !/^[-•*⭐🟢🔵🟠🟧🔴✅❌⚠⛔💡📖🔑]/.test(t) &&
+    !/^(https?:|curl |sudo |docker |npm |apt )/i.test(t) &&
+    !/[→←⟶|{}[\]();=]/.test(t) &&
+    !/\d+\.\d+\.\d+\.\d+/.test(t) &&
+    /[А-ЯЁа-яё]{3,}/.test(t)
   ) {
     return true
   }
   return false
+}
+
+function braceDelta(line) {
+  // crude: count braces outside strings
+  let d = 0
+  let inStr = false
+  let q = ''
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inStr) {
+      if (ch === '\\') {
+        i++
+        continue
+      }
+      if (ch === q) inStr = false
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      inStr = true
+      q = ch
+      continue
+    }
+    if (ch === '{' || ch === '[') d++
+    if (ch === '}' || ch === ']') d--
+  }
+  return d
+}
+
+function isTableHeader(line) {
+  const parts = line.split('\t')
+  return parts.length >= 3 && parts.every((p) => p.trim().length > 0 && p.trim().length < 40)
+}
+
+function isTableRow(line) {
+  return (line.match(/\t/g) || []).length >= 2
+}
+
+function collectCode(lines, startIdx) {
+  const codeLines = []
+  let i = startIdx
+  let depth = 0
+  let sawOpen = false
+  while (i < lines.length) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    // End of code: blank line
+    if (trimmed === '') {
+      // Finished a braced block → blank always ends the fence
+      if (sawOpen && depth <= 0) break
+      if (depth <= 0) {
+        let j = i + 1
+        while (j < lines.length && lines[j].trim() === '') j++
+        if (j >= lines.length) break
+        const next = lines[j].trim()
+        if (
+          LANGS.has(next) ||
+          isHeadingLine(next) ||
+          (!isCodeyLine(next) && /[А-ЯЁа-яё]/.test(next))
+        ) {
+          break
+        }
+      }
+      codeLines.push(line)
+      i++
+      continue
+    }
+    // Another language marker ends this block if depth is 0
+    if (LANGS.has(trimmed) && depth <= 0 && codeLines.some((l) => l.trim())) break
+
+    depth += braceDelta(line)
+    if (depth > 0) sawOpen = true
+    if (depth < 0) depth = 0
+    codeLines.push(line)
+    i++
+    // closed all braces → stop unless next line continues the config
+    if (sawOpen && depth === 0) {
+      let j = i
+      while (j < lines.length && lines[j].trim() === '') j++
+      if (j >= lines.length) break
+      const next = lines[j].trim()
+      if (
+        LANGS.has(next) ||
+        isHeadingLine(next) ||
+        !isCodeyLine(next)
+      ) {
+        break
+      }
+    }
+  }
+  // trim trailing blank lines inside code
+  while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
+    codeLines.pop()
+  }
+  return { codeLines, nextIdx: i }
 }
 
 function parseArticle(raw, relPath) {
@@ -120,40 +250,68 @@ function parseArticle(raw, relPath) {
     para = []
   }
 
-  for (let i = start; i < lines.length; i++) {
+  for (let i = start; i < lines.length; ) {
     const line = lines[i]
     const tag = line.trim()
+
     if (LANGS.has(tag)) {
       flushPara()
-      i++
-      const codeLines = []
-      while (i < lines.length && lines[i].trim() !== '') {
-        codeLines.push(lines[i])
-        i++
-      }
+      const { codeLines, nextIdx } = collectCode(lines, i + 1)
       blocks.push({
         type: 'code',
         lang: tag,
         code: prettyCode(codeLines.join('\n'), tag),
       })
+      i = nextIdx
       continue
     }
-    if (line.trim() === '') {
+
+    // Tab-separated troubleshooting / comparison tables
+    if (isTableHeader(line) || (isTableRow(line) && para.length === 0)) {
       flushPara()
+      const rows = []
+      let header = null
+      if (isTableHeader(line)) {
+        header = line.split('\t').map((c) => c.trim())
+        i++
+      }
+      while (i < lines.length && isTableRow(lines[i])) {
+        rows.push(lines[i].split('\t').map((c) => c.trim()))
+        i++
+      }
+      if (rows.length) {
+        blocks.push({ type: 'table', header, rows })
+      }
       continue
     }
-    // Standalone heading line → own block
-    if (para.length === 0 && isHeadingLine(line) && !line.includes('\n')) {
+
+    if (tag === '') {
       flushPara()
-      blocks.push({ type: 'h', text: line.trim() })
+      i++
       continue
     }
+
+    // Mid-paragraph section title (e.g. after emoji list without blank line)
+    if (isHeadingLine(line)) {
+      flushPara()
+      blocks.push({ type: 'h', text: tag })
+      i++
+      continue
+    }
+
     para.push(line)
+    i++
   }
   flushPara()
 
   const bodyText = blocks
-    .map((b) => (b.type === 'code' ? b.code : b.text))
+    .map((b) => {
+      if (b.type === 'code') return b.code
+      if (b.type === 'table') {
+        return [...(b.header || []), ...b.rows.map((r) => r.join(' '))].join('\n')
+      }
+      return b.text || ''
+    })
     .join('\n')
 
   return { path: relPath, title, blocks, bodyText }
@@ -274,7 +432,15 @@ for (const sec of sections) {
     const allText =
       parsed.bodyText +
       '\n' +
-      parsed.blocks.map((b) => (b.type === 'code' ? b.code : b.text)).join('\n')
+      parsed.blocks
+        .map((b) => {
+          if (b.type === 'code') return b.code
+          if (b.type === 'table') {
+            return [...(b.header || []), ...b.rows.map((r) => r.join(' '))].join('\n')
+          }
+          return b.text || ''
+        })
+        .join('\n')
     parsed.fields = detectFields(allText)
     articles[a.path] = parsed
   }
