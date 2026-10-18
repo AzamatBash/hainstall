@@ -286,8 +286,8 @@ function parseArticle(raw, relPath) {
       continue
     }
 
-    // Drop interactive-builder UI leftovers from the .txt dump
-    if (isBuilderChrome(tag)) {
+    // Drop interactive-builder UI leftovers and wiki TOC stubs
+    if (isBuilderChrome(tag) || /^оглавление$/i.test(tag)) {
       flushPara()
       i++
       continue

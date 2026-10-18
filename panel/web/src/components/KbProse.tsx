@@ -74,18 +74,34 @@ function isDefLine(line: string): boolean {
 
 const EMOJI_BULLET = /^[⭐🟢🔵🟠🟧🔴🟡✅❌⚠⛔💡🔑]/u
 
-function isEmDashDef(line: string): boolean {
-  const m = line.match(/^(.{2,70}?)\s+[—–]\s+(.{8,})$/)
+/** Short glossary-style "Term — definition" (Ориджин — …), not advice tips. */
+function isGlossaryEmDash(line: string): boolean {
+  const m = line.match(/^(.{2,40}?)\s+[—–]\s+(.{8,})$/)
   if (!m) return false
-  if (/[.!?]$/.test(m[1].trim())) return false
-  if (EMOJI_BULLET.test(m[1].trim())) return false
+  const term = m[1].trim()
+  if (/[.!?]/.test(term)) return false
+  if (EMOJI_BULLET.test(term)) return false
+  // Imperative / tip lead-ins are bullets, not a definition grid
+  if (
+    /^(Удаляйте|Разделяйте|Следите|Делайте|Не |Пароли|Бэкапы|Держите|Меняйте|Ставьте|Открывайте)/i.test(
+      term,
+    )
+  ) {
+    return false
+  }
   return true
 }
 
-function parseEmDashDef(line: string): { term: string; def: string } | null {
-  const m = line.match(/^(.{2,70}?)\s+[—–]\s+(.{8,})$/)
+function parseEmDash(line: string): { term: string; def: string } | null {
+  const m = line.match(/^(.{2,120}?)\s+[—–]\s+(.{5,})$/)
   if (!m) return null
   return { term: m[1].trim(), def: m[2].trim() }
+}
+
+function isTipEmDash(line: string): boolean {
+  const d = parseEmDash(line.trim())
+  if (!d) return false
+  return !isGlossaryEmDash(line.trim())
 }
 
 export default function KbProse({
@@ -155,16 +171,16 @@ export default function KbProse({
       {paragraphs.map((p, i) => {
         const lines = p.split('\n').filter((l) => l.trim().length > 0)
 
-        // Em-dash definitions: "Ориджин — ваш сервер…"
-        const emDefs = lines.filter((l) => isEmDashDef(l.trim()))
+        // Short glossary defs: "Ориджин — ваш сервер…"
+        const glossaryDefs = lines.filter((l) => isGlossaryEmDash(l.trim()))
         if (
-          emDefs.length >= 2 &&
-          emDefs.length >= Math.floor(lines.length * 0.6)
+          glossaryDefs.length >= 2 &&
+          glossaryDefs.length >= Math.floor(lines.length * 0.6)
         ) {
           return (
             <dl key={i} className="kb-deflist kb-deflist-inline">
-              {emDefs.map((line, j) => {
-                const d = parseEmDashDef(line.trim())!
+              {glossaryDefs.map((line, j) => {
+                const d = parseEmDash(line.trim())!
                 return (
                   <Fragment key={j}>
                     <dt>
@@ -177,6 +193,34 @@ export default function KbProse({
                 )
               })}
             </dl>
+          )
+        }
+
+        // Advice tips with em dash → bullet list (keep sibling lines without — too)
+        const tipDash = lines.filter((l) => isTipEmDash(l.trim()))
+        if (tipDash.length >= 2 && tipDash.length >= Math.floor(lines.length * 0.5)) {
+          return (
+            <ul key={i} className="kb-list">
+              {lines.map((line, j) => {
+                const d = parseEmDash(line.trim())
+                if (d && isTipEmDash(line.trim())) {
+                  return (
+                    <li key={j}>
+                      <strong className="kb-tip-lead">
+                        {linkifyLine(d.term, findMatches, usedTermIds, i * 1000 + j * 10)}
+                      </strong>
+                      {' — '}
+                      {linkifyLine(d.def, findMatches, usedTermIds, i * 1000 + j * 10 + 5)}
+                    </li>
+                  )
+                }
+                return (
+                  <li key={j}>
+                    {linkifyLine(line.trim(), findMatches, usedTermIds, i * 1000 + j * 10)}
+                  </li>
+                )
+              })}
+            </ul>
           )
         }
 
