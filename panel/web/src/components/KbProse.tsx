@@ -73,6 +73,7 @@ function isDefLine(line: string): boolean {
 }
 
 const EMOJI_BULLET = /^[⭐🟢🔵🟠🟧🔴🟡✅❌⚠⛔💡🔑]/u
+const CHECK_ITEM = /^(?:-\s*)?\[([ xX])\]\s+(.*)$/
 
 /** Short glossary-style "Term — definition" (Ориджин — …), not advice tips. */
 function isGlossaryEmDash(line: string): boolean {
@@ -224,6 +225,34 @@ export default function KbProse({
           )
         }
 
+        // Markdown checklists → numbered checklist (not literal "[ ]")
+        const checkLines = lines.filter((l) => CHECK_ITEM.test(l.trim()))
+        if (
+          checkLines.length >= 1 &&
+          checkLines.length >= Math.ceil(lines.length / 2)
+        ) {
+          return (
+            <ol key={i} className="kb-checklist">
+              {lines.map((line, j) => {
+                const m = line.trim().match(CHECK_ITEM)
+                if (!m) {
+                  return (
+                    <li key={j} className="kb-checklist-note">
+                      {linkifyLine(line.trim(), findMatches, usedTermIds, i * 1000 + j * 10)}
+                    </li>
+                  )
+                }
+                const done = m[1].toLowerCase() === 'x'
+                return (
+                  <li key={j} className={done ? 'done' : undefined}>
+                    {linkifyLine(m[2], findMatches, usedTermIds, i * 1000 + j * 10)}
+                  </li>
+                )
+              })}
+            </ol>
+          )
+        }
+
         const allEmoji =
           lines.length > 0 && lines.every((l) => EMOJI_BULLET.test(l.trim()))
         if (allEmoji) {
@@ -272,18 +301,45 @@ export default function KbProse({
             </ol>
           )
         }
-        // Mixed: intro line + list items → paragraph then list
+        // Mixed: intro line + list / checklist items
         const listStart = lines.findIndex(
           (l) =>
             /^[-•*]\s+/.test(l.trim()) ||
             /^\d+[.)]\s+/.test(l.trim()) ||
+            CHECK_ITEM.test(l.trim()) ||
             EMOJI_BULLET.test(l.trim()),
         )
         if (listStart > 0) {
           const head = lines.slice(0, listStart)
           const tail = lines.slice(listStart)
-          const numbered = tail.every((l) => /^\d+[.)]\s+/.test(l.trim()))
-          const emoji = !numbered && tail.every((l) => EMOJI_BULLET.test(l.trim()))
+          const checklist = tail.every((l) => CHECK_ITEM.test(l.trim()))
+          const numbered = !checklist && tail.every((l) => /^\d+[.)]\s+/.test(l.trim()))
+          const emoji =
+            !checklist && !numbered && tail.every((l) => EMOJI_BULLET.test(l.trim()))
+          if (checklist) {
+            return (
+              <div key={i} className="kb-prose-chunk">
+                <p>
+                  {linkifyLine(
+                    head.map((l) => l.trim()).filter(Boolean).join(' '),
+                    findMatches,
+                    usedTermIds,
+                    i * 1000,
+                  )}
+                </p>
+                <ol className="kb-checklist">
+                  {tail.map((l, j) => {
+                    const m = l.trim().match(CHECK_ITEM)!
+                    return (
+                      <li key={j}>
+                        {linkifyLine(m[2], findMatches, usedTermIds, i * 2000 + j * 10)}
+                      </li>
+                    )
+                  })}
+                </ol>
+              </div>
+            )
+          }
           const ListTag = numbered ? 'ol' : 'ul'
           return (
             <div key={i} className="kb-prose-chunk">

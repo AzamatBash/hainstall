@@ -3646,6 +3646,69 @@ button.task-image-open {
   color: var(--text);
 }
 
+.kb-checklist {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  max-width: var(--kb-measure);
+  list-style: none;
+  counter-reset: kb-check;
+  font-family: var(--kb-serif);
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.kb-checklist > li {
+  position: relative;
+  counter-increment: kb-check;
+  margin: 0.45rem 0;
+  padding: 0.55rem 0.75rem 0.55rem 3.1rem;
+  border: 1px solid #5a6d82;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 80%, #000);
+}
+
+.kb-checklist > li::before {
+  content: counter(kb-check);
+  position: absolute;
+  left: 0.65rem;
+  top: 0.55rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #6b7f96;
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--bg) 50%, var(--bg-soft));
+}
+
+.kb-checklist > li.done {
+  opacity: 0.72;
+}
+
+.kb-checklist > li.done::before {
+  content: "✓";
+  color: var(--ok, #3dd68c);
+}
+
+.kb-checklist-note {
+  list-style: none;
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.kb-checklist-note::before {
+  display: none !important;
+}
+
 .kb-list-emoji li {
   padding-left: 0;
   margin: 0.55rem 0;

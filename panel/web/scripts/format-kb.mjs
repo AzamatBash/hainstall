@@ -211,14 +211,19 @@ function tokenize(src, opts = {}) {
 export function normalizeProse(text) {
   let t = text.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n')
 
-  // "…: 1. aaa 2. bbb 3. ccc" — but never split shell comments "# 1. …"
-  t = t.replace(/:\s*(?=\d+\.\s+\S)/g, ':\n')
-  t = t.replace(/([^\n#])\s+(\d+\.\s+)(?=\S)/g, '$1\n$2')
+  // "…: 1. aaa 2. bbb" — only 1–2 digit markers (never years like 2026.)
+  // and never split shell comments "# 1. …"
+  t = t.replace(/:\s*(?=\d{1,2}\.\s+\S)/g, ':\n')
+  t = t.replace(/([^\n#])\s+(\d{1,2}\.\s+)(?=\S)/g, '$1\n$2')
 
-  // "…: - aaa" / "; - bbb" (bullet lists only)
-  t = t.replace(/:\s*(?=-\s+\S)/g, ':\n')
-  t = t.replace(/;\s*(?=-\s+\S)/g, '\n')
-  t = t.replace(/([.;:])\s+-\s+(?=\S)/g, '$1\n- ')
+  // Checklist markers jammed on one line / after a sentence
+  t = t.replace(/([^\n])\s+(\[(?: |x|X)\]\s+)/g, '$1\n$2')
+  t = t.replace(/([.!?…])\s+-\s+(\[(?: |x|X)\])/g, '$1\n$2')
+
+  // "…: - aaa" / "; - bbb" (bullet lists only, not "- [ ]")
+  t = t.replace(/:\s*(?=-\s+(?!\[[ xX]?\])\S)/g, ':\n')
+  t = t.replace(/;\s*(?=-\s+(?!\[[ xX]?\])\S)/g, '\n')
+  t = t.replace(/([.;:])\s+-\s+(?!\[[ xX]?\])(?=\S)/g, '$1\n- ')
 
   // "а) … б) …"
   t = t.replace(/:\s*(?=[а-яa-z]\)\s)/gi, ':\n')
@@ -229,6 +234,9 @@ export function normalizeProse(text) {
     /([^\n\s])\s+(?=[⭐🟢🔵🟠🟧🔴🟡✅❌⛔💡📖🔑⚠])/gu,
     '$1\n',
   )
+
+  // Normalize "- [ ]" → "[ ]"
+  t = t.replace(/^-\s+(\[(?: |x|X)\])/gm, '$1')
 
   t = t.replace(/\n{3,}/g, '\n\n')
   return t.trimEnd()
