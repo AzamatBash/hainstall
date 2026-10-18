@@ -118,36 +118,46 @@ export default function KbProse({
 }) {
   const findMatches = useMemo(() => buildGlossaryMatcher(glossary), [glossary])
 
-  // Glossary page: definition list
+  // Glossary leftovers (prefer build-time tables; keep table fallback)
   if (isGlossary) {
     const lines = text.split('\n').map((l) => l.trimEnd())
     const defs = lines.filter((l) => l.trim() && isDefLine(l.trim()))
     if (defs.length >= 2 && defs.length >= Math.floor(lines.filter((l) => l.trim()).length * 0.6)) {
       return (
-        <dl className="kb-deflist">
-          {defs.map((line, i) => {
-            const m = line.trim().match(/^(.+?):\s+(.+)$/)!
-            const label = m[1].trim()
-            const term = glossary.find(
-              (t) => t.label === label || t.aliases.some((a) => a === label),
-            )
-            const id = term?.id
-            return (
-              <Fragment key={i}>
-                <dt id={id}>
-                  {id ? (
-                    <a href={`#${id}`} className="kb-dt-anchor">
-                      {label}
-                    </a>
-                  ) : (
-                    label
-                  )}
-                </dt>
-                <dd>{m[2].trim()}</dd>
-              </Fragment>
-            )
-          })}
-        </dl>
+        <div className="kb-table-wrap">
+          <table className="kb-table kb-table-glossary">
+            <thead>
+              <tr>
+                <th>Термин</th>
+                <th>Определение</th>
+              </tr>
+            </thead>
+            <tbody>
+              {defs.map((line, i) => {
+                const m = line.trim().match(/^(.+?):\s+(.+)$/)!
+                const label = m[1].trim()
+                const term = glossary.find(
+                  (t) => t.label === label || t.aliases.some((a) => a === label),
+                )
+                const id = term?.id
+                return (
+                  <tr key={i}>
+                    <td id={id} className="kb-term-cell">
+                      {id ? (
+                        <a href={`#${id}`} className="kb-dt-anchor">
+                          {label}
+                        </a>
+                      ) : (
+                        label
+                      )}
+                    </td>
+                    <td>{m[2].trim()}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )
     }
   }

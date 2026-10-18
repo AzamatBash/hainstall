@@ -3763,6 +3763,30 @@ button.task-image-open {
   max-width: 14rem;
 }
 
+.kb-table-glossary {
+  max-width: none;
+}
+
+.kb-table-glossary td:first-child,
+.kb-table-glossary .kb-term-cell {
+  width: 28%;
+  min-width: 10rem;
+  max-width: 18rem;
+  white-space: normal;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
+.kb-table-glossary td:last-child {
+  width: 72%;
+  font-family: var(--kb-serif);
+}
+
+.kb-table-glossary .kb-term-cell:target,
+.kb-table-glossary tr:has(.kb-term-cell:target) td {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-soft));
+}
+
 .kb-table tbody tr:hover td {
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-soft));
 }

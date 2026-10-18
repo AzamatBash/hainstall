@@ -132,6 +132,20 @@ function isHeadingLine(line) {
   ) {
     return true
   }
+  // Glossary section titles with colon: "Панель: что с чем связано"
+  {
+    const colon = t.match(/^(.+?):\s+(.+)$/)
+    if (
+      colon &&
+      colon[1].length <= 50 &&
+      colon[2].length <= 45 &&
+      !/[.!?…]/.test(colon[2]) &&
+      !/^(http|https)\b/i.test(colon[2]) &&
+      /[А-ЯЁа-яё]{3,}/.test(colon[1])
+    ) {
+      return true
+    }
+  }
   // ALL-CAPS labels (ПЕРВЫЙ ШАГ, ОСНОВНОЙ, …) — not builder chrome
   if (/^[А-ЯЁA-Z0-9][А-ЯЁA-Z0-9\s«»"'/-]{2,40}$/.test(t) && /[А-ЯЁA-Z]{3,}/.test(t)) {
     return true
@@ -263,11 +277,52 @@ function parseArticle(raw, relPath) {
 
   const blocks = []
   let para = []
+
+  const isGlossaryDefLine = (line) => {
+    const m = line.trim().match(/^(.+?):\s+(.+)$/)
+    if (!m) return false
+    const term = m[1].trim()
+    const def = m[2].trim()
+    if (term.length < 2 || term.length > 80) return false
+    if (def.length < 12) return false
+    if (/^(http|https|Шаг|Вариант)/i.test(term)) return false
+    // section titles like "Панель: что с чем связано" are headings, not defs
+    if (def.length < 40 && !/[.!?…]/.test(def) && !/[«"]/.test(def)) return false
+    return true
+  }
+
   const flushPara = () => {
     while (para.length && para[para.length - 1] === '') para.pop()
-    const t = normalizeProse(para.join('\n').trimEnd())
-    if (t.trim()) blocks.push({ type: 'p', text: t })
+    const raw = para.join('\n').trimEnd()
     para = []
+    if (!raw.trim()) return
+
+    // "Term: definition" blocks → real table (glossary and similar lists)
+    const lines = normalizeProse(raw)
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim())
+    const defs = lines.filter(isGlossaryDefLine)
+    if (defs.length >= 2 && defs.length >= Math.ceil(lines.length * 0.7)) {
+      const rows = defs.map((line) => {
+        const m = line.trim().match(/^(.+?):\s+(.+)$/)
+        return [m[1].trim(), m[2].trim()]
+      })
+      blocks.push({
+        type: 'table',
+        header: ['Термин', 'Определение'],
+        rows,
+      })
+      // keep any non-def lines as prose under the table
+      const rest = lines.filter((l) => !isGlossaryDefLine(l))
+      if (rest.length) {
+        blocks.push({ type: 'p', text: rest.join('\n') })
+      }
+      return
+    }
+
+    const t = normalizeProse(raw)
+    if (t.trim()) blocks.push({ type: 'p', text: t })
   }
 
   for (let i = start; i < lines.length; ) {

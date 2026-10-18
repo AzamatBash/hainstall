@@ -129,9 +129,14 @@ function ArticleView({ article }: { article: KbArticle }) {
             const rows = b.rows.map((row) =>
               row.map((c) => applyKbPlaceholders(c, values)),
             )
+            const glossaryTable =
+              isGlossary ||
+              (header?.[0] === 'Термин' && header?.[1] === 'Определение')
             return (
               <div key={i} className="kb-table-wrap">
-                <table className="kb-table">
+                <table
+                  className={`kb-table${glossaryTable ? ' kb-table-glossary' : ''}`}
+                >
                   {header ? (
                     <thead>
                       <tr>
@@ -144,9 +149,26 @@ function ArticleView({ article }: { article: KbArticle }) {
                   <tbody>
                     {rows.map((row, ri) => (
                       <tr key={ri}>
-                        {row.map((c, ci) => (
-                          <td key={ci}>{c}</td>
-                        ))}
+                        {row.map((c, ci) => {
+                          if (ci === 0 && glossaryTable) {
+                            const term = glossary.find(
+                              (t) => t.label === c || t.aliases.some((a) => a === c),
+                            )
+                            const id = term?.id
+                            return (
+                              <td key={ci} id={id} className="kb-term-cell">
+                                {id ? (
+                                  <a href={`#${id}`} className="kb-dt-anchor">
+                                    {c}
+                                  </a>
+                                ) : (
+                                  c
+                                )}
+                              </td>
+                            )
+                          }
+                          return <td key={ci}>{c}</td>
+                        })}
                       </tr>
                     ))}
                   </tbody>
