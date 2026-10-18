@@ -6,8 +6,10 @@
 /** Pretty-indent brace languages; preserve // and # comments and strings. */
 export function prettyCode(code, lang) {
   const L = (lang || '').toLowerCase()
-  if (L === 'text') return code.replace(/[ \t]+$/gm, '').trimEnd()
-  if (L === 'bash' || L === 'sh') return prettyShell(code)
+  if (L === 'text' || L === 'python' || L === 'py') {
+    return code.replace(/[ \t]+$/gm, '').trimEnd()
+  }
+  if (L === 'bash' || L === 'sh' || L === 'caddy') return prettyShell(code)
   if (L === 'yaml' || L === 'env' || L === 'ini' || L === 'toml') {
     return prettySoftIndent(code, 2)
   }

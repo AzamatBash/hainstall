@@ -6,6 +6,7 @@ const LANG_LABEL: Record<string, string> = {
   bash: 'Bash',
   sh: 'Shell',
   nginx: 'Nginx',
+  caddy: 'Caddy',
   js: 'JSON',
   json: 'JSON',
   yaml: 'YAML',
@@ -14,11 +15,13 @@ const LANG_LABEL: Record<string, string> = {
   ini: 'INI',
   toml: 'TOML',
   python: 'Python',
+  py: 'Python',
   sql: 'SQL',
   xml: 'XML',
   html: 'HTML',
   css: 'CSS',
   unit: 'Unit',
+  go: 'Go',
 }
 
 export default function KbCodeBlock({

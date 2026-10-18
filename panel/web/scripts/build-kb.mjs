@@ -17,6 +17,7 @@ const outFile = path.join(webRoot, 'src/kb/bundle.json')
 const LANGS = new Set([
   'bash',
   'nginx',
+  'caddy',
   'js',
   'yaml',
   'json',
@@ -25,12 +26,14 @@ const LANGS = new Set([
   'toml',
   'sh',
   'python',
+  'py',
   'sql',
   'xml',
   'html',
   'css',
   'env',
   'unit',
+  'go',
 ])
 
 const SKIP_ALIAS = new Set([
@@ -83,23 +86,35 @@ function parseIndex(raw) {
 function isCodeyLine(line) {
   const t = line.trim()
   if (!t) return false
-  if (/^#/.test(t)) return true // shell / nginx comments
+  if (/^#/.test(t)) return true // shell / nginx / python comments
   if (/^[{}\[\]];?$/.test(t)) return true
-  if (/^(server|location|upstream|http|events|map|types)\b/i.test(t)) return true
-  if (/^(listen|server_name|proxy_|ssl_|root |try_files|return |rewrite )\b/i.test(t)) {
+  if (/^(server|location|upstream|http|events|map|types|basicauth|handle |reverse_proxy|respond |remote_ip)\b/i.test(t)) {
+    return true
+  }
+  if (/^(listen|server_name|proxy_|ssl_|root |try_files|return |rewrite |allow |deny |auth_basic)/i.test(t)) {
     return true
   }
   if (/^"(tag|listen|port|protocol|settings|streamSettings|inbounds|outbounds)\b/.test(t)) {
     return true
   }
   if (
-    /^(apt |yum |dnf |docker |curl |wget |ufw |systemctl |nginx |certbot |mkdir |ln |chmod |chown |echo |cat |tee |export |source |printf |ssh |scp |sed |sysctl |sshd |fail2ban)/i.test(
+    /^(apt |yum |dnf |docker |curl |wget |ufw |systemctl |nginx |certbot |mkdir |ln |chmod |chown |echo |cat |tee |export |source |printf |ssh |scp |sed |sysctl |sshd |fail2ban|python3? |pip )/i.test(
       t,
     )
   ) {
     return true
   }
+  // Python / JS statements (incl. lines with Cyrillic inside strings)
+  if (
+    /^(raise |return |def |class |import |from |print\(|log\(|self\.|try:|except|elif |else:|with |async |await |for |while |if |\w+\s*=\s*|@[a-z])/.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/^[a-zA-Z_][\w.]*\(/.test(t)) return true // foo( or self.bar(
   if (/^\$[A-Z_]|^[A-Z_][A-Z0-9_]*=/.test(t)) return true
+  if (/^[a-z0-9.-]+\s*\{/.test(t)) return true // a7f3.your.domain {
   return false
 }
 
@@ -137,10 +152,13 @@ function isHeadingLine(line) {
     const colon = t.match(/^(.+?):\s+(.+)$/)
     if (
       colon &&
+      /^[А-ЯЁA-Z«"]/.test(colon[1]) &&
       colon[1].length <= 50 &&
       colon[2].length <= 45 &&
+      !/[.!?…;]$/.test(colon[2]) &&
       !/[.!?…]/.test(colon[2]) &&
       !/^(http|https)\b/i.test(colon[2]) &&
+      !/[{}()=]|`/.test(t) &&
       /[А-ЯЁа-яё]{3,}/.test(colon[1])
     ) {
       return true
@@ -198,34 +216,66 @@ function braceDelta(line) {
 
 function isTableHeader(line) {
   const parts = line.split('\t')
-  return parts.length >= 3 && parts.every((p) => p.trim().length > 0 && p.trim().length < 40)
+  if (parts.length < 2) return false
+  // Comparison matrices often start with an empty corner cell: "\tA\tB\tC"
+  const body = parts[0].trim() === '' ? parts.slice(1) : parts
+  if (body.length < 2) return false
+  return body.every((p) => p.trim().length > 0 && p.trim().length < 55)
 }
 
 function isTableRow(line) {
-  return (line.match(/\t/g) || []).length >= 2
+  return (line.match(/\t/g) || []).length >= 1 && line.includes('\t')
 }
 
-function collectCode(lines, startIdx) {
+function collectCode(lines, startIdx, lang = '') {
   const codeLines = []
   let i = startIdx
   let depth = 0
   let sawOpen = false
+  let triple = null // '"""' | "'''" inside python docstrings / strings
+  const isPy = lang === 'python' || lang === 'py'
+
+  const toggleTriple = (line) => {
+    if (!isPy) return
+    // crude: count odd occurrences of """ or ''' outside the other
+    for (const q of ['"""', "'''"]) {
+      let from = 0
+      while (from < line.length) {
+        const at = line.indexOf(q, from)
+        if (at < 0) break
+        if (triple === q) triple = null
+        else if (!triple) triple = q
+        from = at + q.length
+      }
+    }
+  }
+
   while (i < lines.length) {
     const line = lines[i]
     const trimmed = line.trim()
+
     // End of code: blank line
     if (trimmed === '') {
+      if (triple) {
+        codeLines.push(line)
+        i++
+        continue
+      }
       // Finished a braced block → blank always ends the fence
-      if (sawOpen && depth <= 0) break
+      if (sawOpen && depth <= 0 && !isPy) break
       if (depth <= 0) {
         let j = i + 1
         while (j < lines.length && lines[j].trim() === '') j++
         if (j >= lines.length) break
         const next = lines[j].trim()
+        if (LANGS.has(next) || isHeadingLine(next)) break
+        // Cyrillic prose ends the fence, but not inside python (docstrings / comments)
+        if (!isPy && !isCodeyLine(next) && /^[А-ЯЁа-яё⭐🟢⚠⛔📖💡]/.test(next)) break
+        // python: stop only on clear article prose after the script
         if (
-          LANGS.has(next) ||
-          isHeadingLine(next) ||
-          (!isCodeyLine(next) && /[А-ЯЁа-яё]/.test(next))
+          isPy &&
+          !isCodeyLine(next) &&
+          /^(Проверено|Если не получилось|Шаг\s+\d|Смежное:|⚠️|⛔|📖)/i.test(next)
         ) {
           break
         }
@@ -235,24 +285,21 @@ function collectCode(lines, startIdx) {
       continue
     }
     // Another language marker ends this block if depth is 0
-    if (LANGS.has(trimmed) && depth <= 0 && codeLines.some((l) => l.trim())) break
+    if (LANGS.has(trimmed) && depth <= 0 && !triple && codeLines.some((l) => l.trim())) break
 
+    toggleTriple(line)
     depth += braceDelta(line)
     if (depth > 0) sawOpen = true
     if (depth < 0) depth = 0
     codeLines.push(line)
     i++
     // closed all braces → stop unless next line continues the config
-    if (sawOpen && depth === 0) {
+    if (sawOpen && depth === 0 && !triple && !isPy) {
       let j = i
       while (j < lines.length && lines[j].trim() === '') j++
       if (j >= lines.length) break
       const next = lines[j].trim()
-      if (
-        LANGS.has(next) ||
-        isHeadingLine(next) ||
-        !isCodeyLine(next)
-      ) {
+      if (LANGS.has(next) || isHeadingLine(next) || !isCodeyLine(next)) {
         break
       }
     }
@@ -297,28 +344,29 @@ function parseArticle(raw, relPath) {
     para = []
     if (!raw.trim()) return
 
-    // "Term: definition" blocks → real table (glossary and similar lists)
-    const lines = normalizeProse(raw)
-      .split('\n')
-      .map((l) => l.trimEnd())
-      .filter((l) => l.trim())
-    const defs = lines.filter(isGlossaryDefLine)
-    if (defs.length >= 2 && defs.length >= Math.ceil(lines.length * 0.7)) {
-      const rows = defs.map((line) => {
-        const m = line.trim().match(/^(.+?):\s+(.+)$/)
-        return [m[1].trim(), m[2].trim()]
-      })
-      blocks.push({
-        type: 'table',
-        header: ['Термин', 'Определение'],
-        rows,
-      })
-      // keep any non-def lines as prose under the table
-      const rest = lines.filter((l) => !isGlossaryDefLine(l))
-      if (rest.length) {
-        blocks.push({ type: 'p', text: rest.join('\n') })
+    // Glossary only: "Term: definition" → table (don't invent tables in other articles)
+    if (relPath === 'a/01-glossary.txt') {
+      const glines = normalizeProse(raw)
+        .split('\n')
+        .map((l) => l.trimEnd())
+        .filter((l) => l.trim())
+      const defs = glines.filter(isGlossaryDefLine)
+      if (defs.length >= 2 && defs.length >= Math.ceil(glines.length * 0.7)) {
+        const rows = defs.map((line) => {
+          const m = line.trim().match(/^(.+?):\s+(.+)$/)
+          return [m[1].trim(), m[2].trim()]
+        })
+        blocks.push({
+          type: 'table',
+          header: ['Термин', 'Определение'],
+          rows,
+        })
+        const rest = glines.filter((l) => !isGlossaryDefLine(l))
+        if (rest.length) {
+          blocks.push({ type: 'p', text: rest.join('\n') })
+        }
+        return
       }
-      return
     }
 
     const t = normalizeProse(raw)
@@ -331,11 +379,12 @@ function parseArticle(raw, relPath) {
 
     if (LANGS.has(tag)) {
       flushPara()
-      const { codeLines, nextIdx } = collectCode(lines, i + 1)
+      const lang = tag === 'py' ? 'python' : tag
+      const { codeLines, nextIdx } = collectCode(lines, i + 1, lang)
       blocks.push({
         type: 'code',
-        lang: tag,
-        code: prettyCode(codeLines.join('\n'), tag),
+        lang,
+        code: prettyCode(codeLines.join('\n'), lang),
       })
       i = nextIdx
       continue
@@ -351,7 +400,7 @@ function parseArticle(raw, relPath) {
     // Shell script without a language fence: "# 1. …" / "# проверка: …"
     if (isBareShellScriptStart(line)) {
       flushPara()
-      const { codeLines, nextIdx } = collectCode(lines, i)
+      const { codeLines, nextIdx } = collectCode(lines, i, 'bash')
       if (codeLines.length) {
         blocks.push({
           type: 'code',
@@ -377,6 +426,16 @@ function parseArticle(raw, relPath) {
         i++
       }
       if (rows.length) {
+        // Row-label column: header has N cells, body has N+1
+        if (header && rows[0] && rows[0].length === header.length + 1) {
+          header = ['', ...header]
+        }
+        const cols = Math.max(
+          header ? header.length : 0,
+          ...rows.map((r) => r.length),
+        )
+        if (header) while (header.length < cols) header.push('')
+        for (const r of rows) while (r.length < cols) r.push('')
         blocks.push({ type: 'table', header, rows })
       }
       continue
