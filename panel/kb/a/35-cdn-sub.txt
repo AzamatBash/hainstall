@@ -1,0 +1,244 @@
+Заголовок: Рабочая sub при БС
+
+БС = блокировки. Замедления, бан по IP, ТСПУ-фильтрация: всё, из-за чего прямой доступ к серверу подписки из РФ начинает «моргать». А страница подписки (sub) это единая точка входа всех клиентов: панель выдаёт ссылки вида https://sub.вашдомен/<id>, и приложения (Happ, v2rayNG, Streisand…) ходят туда за свежим конфигом. Заблокировали/задушили её IP, и разом у всех перестают приходить обновления узлов. Каскады и Hysteria подняли трафик, а конфиг до клиента не доехал → «VPN не работает».
+
+📖 Незнакомые слова? Все термины простыми словами есть в Словаре терминов.
+
+Решение: спрятать саму sub за CDN. Ниже полный рецепт из реального переноса: 7 этапов, проверка «как настоящий клиент» и чек-лист граблей, на которые легко наступить.
+
+Что получаем
+Код
+клиент → Yandex CDN (РФ-эджи, TLS на эдже)
+ → ваш origin-сервер (sub-page по HTTP)
+ → панель Remnawave (API)
+
+✅ РФ-дружелюбный вход. Сеть Яндекса «своя» для ТСПУ: трафик к ней не режут (та же логика, что в Yandex CDN для ноды).
+✅ Реальный IP origin скрыт (origin, ваш сервер-источник за CDN): блок по IP бесполезен, душить нечего.
+✅ Выданные ссылки не меняются. Домен sub остаётся тем же, что в панели → старые подписки продолжают работать.
+✅ Origin можно менять «под капотом» (переезд, ротация), клиенты ничего не замечают.
+✅ TLS терминируется на эдже: сертификат живёт на CDN, origin отдаёт простой HTTP.
+Чем это отличается от «ноды за CDN»
+
+Статьи 35-cdn* прячут ноду, а там внутри XHTTP-поток, и приходится плясать с GET-only / POST-405 (см. Yandex CDN).
+
+Здесь мы прячем страницу подписки, а это обычный HTTP-GET небольшого JSON/YAML. Никаких потоковых сессий, никаких POST. Поэтому рецепт проще и стабильнее: CDN просто кэш-проксирует GET (а кэш мы вообще выключим, см. ниже).
+
+Где разворачивать sub-page: на сервере панели или отдельно
+
+Страница подписки это самостоятельный сервис: с панелью она общается только по API (REMNAWAVE_PANEL_URL + REMNAWAVE_API_TOKEN; токен берётся в Dashboard → Settings → API Tokens). Поэтому жить она может где угодно, это штатно поддерживается Remnawave (см..env.sample проекта remnawave/subscription-page), и меняется по сути одна строка:
+
+Вариант А: на сервере панели (проще всего). Контейнер sub-page кладётся в ту же docker-сеть remnawave-network и ходит в панель по внутреннему имени контейнера:
+
+Код
+REMNAWAVE_PANEL_URL=http://remnawave:3000
+
+Отдельная VM не нужна; CDN фронтит sub-домен прямо на сервере панели.
+
+Вариант Б: на отдельном сервере (наш случай, обычно лучший под БС). Sub-page живёт на своей VM (удобно взять РФ), а в панель ходит по её публичному API:
+
+Код
+REMNAWAVE_PANEL_URL=https://panel.example.com
+
+Плюсы: панель можно держать за рубежом (где ей спокойнее), а sub-вход отдельным РФ-origin под CDN; нагрузка и инциденты sub-page изолированы от панели; реальный сервер панели не светится в sub-домене.
+
+⭐ Для самого CDN это не важно, рецепт ниже одинаков для обоих вариантов. CDN фронтит тот хост, который отдаёт sub-домен; что за ним (отдельная VM или сервер панели) это деталь. Различается лишь REMNAWAVE_PANEL_URL (внутренний алиас vs публичный URL) и наличие общей docker-сети с панелью.
+
+Что понадобится
+сервер, отдающий sub-page: отдельная VM (лучше РФ) или сам сервер панели (см. раздел выше); на нём поднята remnawave-subscription-page, см. Страница подписки.
+домен, чей DNS вы контролируете (например, Cloudflare).
+Yandex Cloud: CDN + Certificate Manager + yc CLI (yc init под ваш аккаунт).
+
+Дальше в командах: sub.example.com = ваш домен подписки (ровно тот, что в панели), ORIGIN_IP = IP origin-сервера, https://panel.example.com = ваша панель.
+
+Этап 1. Origin: sub-page за reverse-proxy на:80
+
+TLS будет на эдже CDN, поэтому origin отдаёт простой HTTP на:80. Reverse-proxy (Caddy) нужен, чтобы принудительно проставить правильный Host и X-Forwarded-Proto https, иначе sub-page соберёт ссылки с чужим хостом или по http.
+
+docker-compose.yml (сама sub-page):
+
+yaml
+services:
+  remnawave-subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    restart: always
+    env_file: [.env]
+    ports: ["127.0.0.1:3010:3010"]
+    networks: [remnawave-network]
+    networks:
+      remnawave-network: { external: true, name: remnawave-network }
+
+.env:
+
+Код
+APP_PORT=3010
+# на сервере панели: REMNAWAVE_PANEL_URL=http://remnawave:3000
+# на отдельном сервере (тут):
+REMNAWAVE_PANEL_URL=https://panel.example.com
+REMNAWAVE_API_TOKEN=ВАШ_API_ТОКЕН_ПАНЕЛИ # Dashboard → Settings → API Tokens
+TRUST_PROXY=1 # мы за reverse-proxy + CDN
+CUSTOM_SUB_PREFIX=
+
+Caddyfile (фронт на:80, TLS не нужен, его делает CDN):
+
+Код
+{
+ auto_https off
+ servers { trusted_proxies static 0.0.0.0/0 }
+}
+
+:80 {
+ reverse_proxy http://remnawave-subscription-page:3010 {
+ header_up Host sub.example.com
+ header_up X-Forwarded-Proto https
+ header_up X-Forwarded-Host sub.example.com
+ header_up X-Forwarded-For {remote_host}
+ }
+}
+
+Поднимаем и сразу проверяем паритет: origin должен отдавать клиентам ровно то же, что отдавал старый сервер. Бьём по реальному пути подписки разными User-Agent:
+
+bash
+ID=реальный_shortUuid_из_панели
+for ua in "v2rayNG/1.8.5" "Happ/1.0" "clash-verge/1.0"; do
+ curl -s -o /dev/null -w "$ua -> %{http_code} %{content_type} %{size_download}b\n" \
+ -A "$ua" -H "Host: sub.example.com" "http://127.0.0.1/$ID"
+done
+
+Ждём 200 + application/json (v2rayNG/Happ) и text/yaml (clash), у каждого UA свой формат, и размеры должны совпасть с тем, что отдаёт старый сервер.
+
+⚠️ Браузерный UA (Mozilla/...) на корне / может отдавать 502, это нормально (лендинг sub-page), на прямом сервере было так же. Реальные VPN-клиенты ходят с своими UA и получают 200.
+
+Этап 2. Origin-группа CDN
+
+Говорим CDN, куда ходить за контентом, на наш origin по IP:
+
+bash
+yc cdn origin-group create \
+ --name sub-origin \
+ --origin source=ORIGIN_IP,enabled=true
+
+Запоминаем id группы (вернётся в выводе).
+
+Этап 3. CDN-ресурс
+
+Создаём сам ресурс под домен подписки. Два ключевых параметра:
+
+--origin-protocol http: CDN ходит на origin по:80 (мы там HTTP).
+--disable-cache: обязательно! Подписка персональна: у каждого клиента свой путь и свой контент, который меняется при правке его узлов. Кэш на эдже отдаст соседу чужой/устаревший конфиг. Кэш выключаем.
+bash
+yc cdn resource create \
+ --cname sub.example.com \
+ --origin-group-id ID_ГРУППЫ_ИЗ_ЭТАПА_2 \
+ --origin-protocol http \
+ --disable-cache
+
+🔑 Грабля: привязать сертификат прямо тут не получится, пока он не выпущен, ресурс падает с internal error. Поэтому создаём ресурс без сертификата, а привяжем на этапе 5.
+
+Из вывода забираем provider_cname (вида xxxxxxxx.topology.gslb.yccdn.ru): это цель для переключения DNS на этапе 6.
+
+Этап 4. TLS-сертификат (Certificate Manager)
+
+Заказываем managed-сертификат Let's Encrypt на домен подписки:
+
+bash
+yc certificate-manager certificate request --name sub-cert --domains sub.example.com
+
+Сертификат уходит в VALIDATING. Достаём DNS-challenge (CLI его прячет, берём через REST с view=FULL):
+
+bash
+IAM=$(yc iam create-token)
+curl -s -H "Authorization: Bearer $IAM" \
+ "https://certificate-manager.api.cloud.yandex.net/certificate-manager/v1/certificates/ID_СЕРТА?view=FULL" \
+ | jq '.challenges'
+
+Получаем CNAME-челлендж, добавляем его в DNS (Cloudflare → DNS → Add record):
+
+Type: CNAME
+Name: _acme-challenge.sub
+Target: ID_СЕРТА.cm.yandexcloud.net
+Proxy: DNS only (серое облако)
+
+🔒 Эту запись НЕ удаляйте никогда: через неё Yandex автоматически продлевает сертификат. Снесёте, следующее продление отвалится.
+
+Этап 5. Ждём выпуск + пропагацию, привязываем серт
+
+Поллим статус, пока не станет ISSUED:
+
+bash
+yc certificate-manager certificate get ID_СЕРТА --format json | jq -r '.status'
+
+Как станет ISSUED, привязываем серт к ресурсу:
+
+bash
+yc cdn resource update ID_РЕСУРСА --cert-manager-ssl-cert-id ID_СЕРТА
+
+Дальше самое важное перед переключением: дождаться пропагации серта на ВСЕ эджи. Новый ресурс+серт доезжают до PoP не мгновенно (в реале было ~20 минут). Пока DNS не переключён, клиенты ещё на старом сервере, так что ждать ничего не стоит. Проверяем пул эджей: каждый должен отдавать наш серт CN=sub.example.com, а не дефолтный *.yccdn.cloud.yandex.net:
+
+bash
+# IP эджей — резолвим provider_cname несколько раз
+for E in $(for i in $(seq 20); do dig +short ВАШ_PROVIDER_CNAME @1.1.1.1; done | grep -E '^[0-9]' | sort -u); do
+ CN=$(echo | openssl s_client -connect $E:443 -servername sub.example.com 2>/dev/null \
+ | openssl x509 -noout -subject 2>/dev/null)
+ CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve sub.example.com:443:$E \
+ -A "Happ/1.0" "https://sub.example.com/$ID")
+ echo "$E code=$CODE cn=$CN"
+done
+
+Переключаемся, только когда ВСЕ эджи дают code=200 и CN=sub.example.com. Иначе часть клиентов попадёт на PoP с чужим сертом → TLS-ошибка.
+
+Этап 6. Переключение DNS (cutover)
+
+Теперь переводим сам домен sub на CDN. В Cloudflare у записи sub:
+
+Type: меняем A → CNAME
+Target: ВАШ_PROVIDER_CNAME (из этапа 3)
+Proxy: DNS only (серое!), не оранжевое. Yandex CDN уже всё проксирует; оранжевый = двойной прокси через Cloudflare, который вдобавок режется из РФ.
+
+⚠️ CNAME не уживается с A того же имени. Если Cloudflare не даёт сменить тип на месте, удалите A-запись sub и сразу добавьте CNAME sub. Окно недоступности: секунды.
+
+⚠️ Имя записи ровно sub (тот хост, что выдаёт панель). Не subscription, не что-то ещё, иначе на CDN прилетит чужой Host и эдж вернёт 404.
+
+Лучший вариант без простоя: Edit существующей записи и смена типа A→CNAME прямо в диалоге (Cloudflare заменит атомарно).
+
+Этап 7. Проверка e2e «как настоящий клиент»
+
+Через реальный публичный DNS (без --resolve), по всем форматам:
+
+bash
+echo | openssl s_client -connect sub.example.com:443 -servername sub.example.com 2>/dev/null \
+ | openssl x509 -noout -subject -issuer -enddate # CN=sub.example.com, Let's Encrypt
+
+for ua in "v2rayNG/1.8.5" "Happ/1.0" "clash-verge/1.0" "Streisand"; do
+ curl -s -o /dev/null -w "$ua -> %{http_code} %{content_type} %{size_download}b via %{remote_ip}\n" \
+ -A "$ua" "https://sub.example.com/$ID"
+done
+
+Финальный контроль фиделити: md5 тела через CDN должен совпасть с тем, что отдаёт старый origin напрямую:
+
+bash
+NEW=$(curl -s -A "Happ/1.0" "https://sub.example.com/$ID" | md5sum)
+OLD=$(curl -s --resolve sub.example.com:443:СТАРЫЙ_IP -A "Happ/1.0" "https://sub.example.com/$ID" | md5sum)
+[ "${NEW%% *}" = "${OLD%% *}" ] && echo MATCH || echo DIFF
+
+MATCH = клиенты получают идентичный конфиг, переезд прозрачный.
+
+Грабли (чек-лист)
+🔴 Кэш на ресурсе: OFF. Подписка персональна; включённый кэш раздаст чужой/старый конфиг. Это ошибка №1.
+🔴 DNS only (серое), не Proxied (оранжевое). Оранжевый Cloudflare-прокси из РФ режется и убивает весь смысл РФ-CDN.
+🔴 _acme-challenge.sub не удалять, иначе серт не продлится.
+🟡 Имя записи: sub (как в панели). Другой хост → 404 на эдже.
+🟡 Серт привязывать ПОСЛЕ ISSUED (на невыпущенном ресурс падает internal error).
+🟡 Origin-протокол должен совпасть. У нас origin HTTP → --origin-protocol http. Поставите https, а origin без TLS: CDN получит ошибку от origin.
+🟡 Пропагация ~20 мин. Переключайте DNS только когда ВЕСЬ пул эджей отдаёт ваш серт.
+🟡 Не трогайте чужие CDN-ресурсы в том же аккаунте (у каждого свой origin и серт; provider_cname общий: маршрутизация по Host/SNI).
+⚪ Браузерный 502 на /: не регресс, лендинг sub-page; клиенты работают.
+Откат
+
+Мгновенный: в Cloudflare вернуть запись sub обратно на A → СТАРЫЙ_IP. Поэтому старый сервер не гасите сразу: подержите 2–3 дня как страховку, потом выводите.
+
+Итог: страница подписки спрятана за Yandex CDN. Бан по IP бесполезен, ТСПУ к сети Яндекса лоялен, TLS на эдже, origin скрыт и заменяем, а выданные клиентам ссылки не изменились. При следующей БС конфиги продолжают доезжать.
+
+Смежное: Yandex CDN для ноды · Обзор CDN-фронтинга · Страница подписки · Заблокировали IP?
+
+Оглавление

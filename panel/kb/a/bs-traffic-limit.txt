@@ -1,0 +1,669 @@
+Заголовок: Отдельный лимит на БС-трафик: скрипт, который снимает со сквада
+
+Трафик через вход с белым IP стоит дороже обычного: адреса дефицитные, их арендуют или покупают. Продавать его по той же цене, что заграничные ноды, — прямой убыток. А панель считает трафик одной кучей: сколько человек прокачал через дорогой вход, а сколько через обычную ноду, в интерфейсе не видно.
+
+Здесь — рабочая схема с двумя сквадами и скрипт, который ведёт отдельный счёт по БС-нодам и отключает доступ к ним, когда лимит выбран. Обычные ноды при этом остаются: человек не теряет связь, он теряет только белый вход.
+
+📖 Незнакомые слова смотрите в Словаре терминов.
+
+Как это устроено
+Клиент с доступом
+оплатил БС
+Сквад БС
+входы с белым IP, лимит 100 ГБ
+Обычный сквад
+заграничные ноды, свой лимит
+Скрипт
+раз в сутки считает
+лимит выбран
+Скрипт убирает человека только из сквада БС. Обычные ноды остаются, связь не пропадает.
+
+Тот, кто оплатил доступ к БС, состоит в двух сквадах сразу. Скрипт раз в сутки берёт каждого такого человека, спрашивает у панели его трафик с разбивкой по нодам, складывает только то, что прошло через БС-ноды, и сравнивает с лимитом. Перебрал — убираем из сквада БС. Начался новый период — возвращаем обратно.
+
+Лимит на обычные ноды при этом живёт своей жизнью: его считает сама панель, скрипт в это не вмешивается.
+
+Что понадобится
+Remnawave 3.x. На версиях 2.x скрипт пробует другие пути API, но проверялся он на третьей.
+API-токен панели. Создаётся в самой панели: Настройки → API-токены. Ключ из браузерной сессии не подойдёт, панель его отвергает.
+Сервер, где будет крутиться скрипт. Годится тот же, где стоит панель. Из зависимостей — только Python 3.8 или новее, никаких библиотек ставить не нужно.
+Шаг 1. Два сквада
+
+В панели откройте Внутренние сквады и убедитесь, что их два:
+
+обычный — с заграничными нодами;
+БС — только с нодами, у которых белый IP.
+
+Инбаунды БС-нод должны быть только во втором скваде. Если один и тот же инбаунд лежит в обоих, отключение работать не будет: человек продолжит видеть белый вход через обычный сквад.
+
+Тому, кто оплатил БС, выдаются оба сквада. Тому, кто не оплачивал, — только обычный.
+
+Шаг 2. Как скрипт узнает БС-ноды
+
+Скрипт умеет отличать их тремя способами, и любой можно комбинировать:
+
+Способ	Когда удобен	Как задаётся
+По началу имени	у вас все белые входы названы единообразно	"by_name_prefix": ["BS-", "WL-"]
+По коду страны	БС-ноды единственные российские в панели	"by_country": ["RU"]
+По списку uuid	имена вразнобой, стран много	"by_uuid": ["...", "..."]
+
+Самый надёжный — по списку uuid: он не зависит от того, как вы завтра переименуете ноду. Самый удобный в работе — по префиксу имени: добавили новый вход с нужным префиксом, и он сразу попал в учёт.
+
+Шаг 3. Поставьте скрипт
+
+Сохраните код из конца статьи в файл и сделайте его исполняемым:
+
+bash
+mkdir -p /opt/bstraffic && cd /opt/bstraffic
+nano bstraffic.py # вставьте код из статьи
+chmod +x bstraffic.py && python3 bstraffic.py --version
+
+Последняя команда должна напечатать номер версии. Если вместо этого ругается на синтаксис, значит код скопировался не целиком.
+
+Шаг 4. Настройка
+
+Скрипт сам создаст файл настроек:
+
+bash
+python3 /opt/bstraffic/bstraffic.py --init-config /etc/bstraffic.json
+
+Откройте его и заполните:
+
+json
+{
+ "panel_url": "https://panel.example.com",
+ "token": "ваш API-токен из панели",
+ "bs_squad": "BS-squad",
+ "bs_nodes": { "by_name_prefix": ["BS-"], "by_country": [], "by_uuid": [] },
+ "limit_gb": 100,
+ "period": "month",
+ "restore_on_new_period": true,
+ "state_file": "/var/lib/bstraffic/state.json",
+ "log_file": "/var/log/bstraffic.log"
+}
+
+Что здесь важно:
+
+bs_squad — имя сквада ровно как в панели, либо его uuid. Ошибётесь в имени — скрипт покажет список существующих сквадов и остановится.
+limit_gb — сколько гигабайт БС-трафика входит в тариф.
+period — month считает с первого числа месяца, days30 берёт последние тридцать дней скользящим окном.
+restore_on_new_period — возвращать ли снятых в сквад, когда начался новый период. Оставьте true, иначе людей придётся возвращать руками.
+
+Файл с токеном стоит закрыть от посторонних: chmod 600 /etc/bstraffic.json.
+
+Шаг 5. Сухой прогон
+
+Без флага --apply скрипт ничего не меняет, только показывает, что сделал бы:
+
+bash
+python3 /opt/bstraffic/bstraffic.py -c /etc/bstraffic.json
+
+Вывод выглядит так:
+
+text
+Сквад БС: BS-squad (604f656b-9c2e-406a-b44d-35fdd8dc6e3e)
+БС-ноды: 1 из 2
+Период: 2026-09-01 … 2026-09-22, лимит 10.00 ГБ
+Режим: сухой прогон, ничего не меняю
+
+testclient3 50.00 ГБ из 10.00 ГБ — ЛИМИТ ВЫБРАН, снимаю со сквада БС (остаётся сквадов: 1)
+testclient2 5.00 ГБ из 10.00 ГБ
+testclient1 12.00 ГБ из 10.00 ГБ — ЛИМИТ ВЫБРАН, снимаю со сквада БС (остаётся сквадов: 1)
+
+Проверено: 3 · превысили: 2 · снято: 0 · возвращено: 0
+Это был сухой прогон. Чтобы применить, добавьте --apply
+
+Первым делом сверьте строку «БС-ноды: N из M». Если N равно нулю, правила из bs_nodes не совпали ни с одной нодой, и считать будет нечего — скрипт тут же покажет список ваших нод с их странами.
+
+Отдельного человека можно проверить так:
+
+bash
+python3 /opt/bstraffic/bstraffic.py -c /etc/bstraffic.json --user ivan
+
+Шаг 6. Боевой запуск и расписание
+
+Убедившись, что цифры верные, запустите с --apply:
+
+bash
+python3 /opt/bstraffic/bstraffic.py -c /etc/bstraffic.json --apply
+
+Дальше поставьте на расписание. Раз в час — разумная частота: человек не успеет прокачать лишнего, а панель не завалена запросами.
+
+bash
+cat >/etc/systemd/system/bstraffic.service <<'UNIT'
+[Unit]
+Description=Учёт трафика БС-нод
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/bstraffic/bstraffic.py -c /etc/bstraffic.json --apply --quiet
+UNIT
+cat >/etc/systemd/system/bstraffic.timer <<'UNIT'
+[Unit]
+Description=Учёт трафика БС-нод раз в час
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload && systemctl enable --now bstraffic.timer && systemctl list-timers bstraffic --no-pager
+
+В выводе последней команды должна появиться строка с ближайшим запуском. Что происходило, смотрите в журнале:
+
+bash
+tail -30 /var/log/bstraffic.log
+
+Если не получилось
+Симптом	Что проверить	Что сделать
+«панель не приняла токен (401)»	какой токен вписан	Нужен токен из раздела API-токенов панели. Ключ из браузера не подходит
+«панель отклонила запрос (403)»	там же	Та же причина: панель принимает только собственные API-токены
+«Сквад … не найден»	имя в bs_squad	Скрипт печатает список существующих сквадов — скопируйте имя оттуда или возьмите uuid
+«БС-ноды: 0 из N»	правила в bs_nodes	Ни одна нода не подошла. Скрипт покажет ваши ноды со странами: поправьте префикс, страну или впишите uuid
+«не нашёл путь со статистикой по нодам»	версию панели	Скрипт проверялся на 3.x. На более старых путь статистики другой, и его придётся дописать
+Трафик считается, но людей не снимает	запускали ли с --apply	Без этого флага скрипт работает вхолостую. Так и задумано
+Сняло человека, который не должен был попасть	его сквады в панели	Скрипт трогает только тех, кто состоит в скваде БС. Если человек там лишний, дело в выдаче доступа, а не в скрипте
+Людей сняло, а в новом месяце не вернуло	restore_on_new_period и файл состояния	Возврат опирается на файл состояния. Удалили его — скрипт забыл, кого снимал
+У человека кончился БС-трафик, но он всё ещё видит белый вход	в каких сквадах лежит инбаунд БС-ноды	Инбаунд белого входа должен быть только в скваде БС. Иначе он достаётся человеку через обычный сквад
+Чего скрипт не делает
+Не считает трафик сам. Он берёт цифры у панели, и точность целиком зависит от неё.
+Не режет скорость и не блокирует на лету. Между исчерпанием лимита и снятием пройдёт до часа: столько, сколько вы поставили в расписании.
+Не продаёт дополнительный трафик. Чтобы человек докупил пакет БС, нужен ваш бот или ручное возвращение в сквад.
+Не следит за деньгами. Оплата, продление и возвраты остаются на вашей стороне.
+Не заменяет лимит в панели. Общий лимит трафика клиента продолжает работать отдельно.
+Сам скрипт
+
+Сохраните в /opt/bstraffic/bstraffic.py. Зависимостей нет, нужен только Python 3.8 или новее.
+
+python
+#!/usr/bin/env python3
+"""
+bstraffic — учёт трафика БС-нод в Remnawave и снятие со сквада при исчерпании лимита.
+
+Задача. У клиента два внутренних сквада: обычные ноды и ноды с белым IP («БС»).
+Тот, кто оплатил доступ к БС, состоит в обоих. Трафик через БС дороже, поэтому у него
+отдельный лимит. Скрипт считает трафик КАЖДОГО человека ТОЛЬКО по БС-нодам и, когда
+лимит выбран, убирает его из БС-сквада. Обычные ноды остаются — человек не теряет связь.
+
+Что важно знать до запуска:
+ * скрипт ничего не меняет, пока вы не передали --apply (по умолчанию сухой прогон);
+ * он не трогает другие сквады пользователя и не меняет его лимит трафика в панели;
+ * повторный запуск безопасен: снятого второй раз не снимает, лишних запросов не делает.
+
+Python 3.8+, только стандартная библиотека.
+"""
+
+from __future__ import annotations
+
+import argparse
+import calendar
+import datetime as dt
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+VERSION = "1.0.0"
+UA = "bstraffic/" + VERSION
+
+GB = 1024 ** 3
+
+# ─────────────────────────── настройки ───────────────────────────
+
+DEFAULT_CONFIG = {
+ "panel_url": "https://panel.example.com",
+ "token": "",
+ "bs_squad": "BS-squad",
+ "bs_nodes": {"by_name_prefix": ["BS-"], "by_country": [], "by_uuid": []},
+ "limit_gb": 100,
+ "period": "month",
+ "restore_on_new_period": True,
+ "state_file": "/var/lib/bstraffic/state.json",
+ "log_file": "/var/log/bstraffic.log",
+ "request_timeout": 25,
+ "insecure_tls": False,
+}
+
+CONFIG_HELP = """\
+panel_url адрес панели, как вы открываете её в браузере
+token API-токен из панели: Настройки → API-токены → создать
+bs_squad внутренний сквад с БС-нодами: имя или uuid
+bs_nodes как опознать БС-ноды. Любой из трёх способов, можно сочетать:
+ by_name_prefix — начало имени ноды, например ["BS-", "WL-"]
+ by_country — коды стран, например ["RU"]
+ by_uuid — точные uuid нод
+limit_gb сколько гигабайт БС-трафика даётся на период
+period month — календарный месяц (сброс 1-го числа)
+ days30 — последние 30 дней, скользящее окно
+restore_on_new_period вернуть снятых в сквад, когда начался новый период
+"""
+
+def load_config(path: str) -> dict:
+ """Читает JSON-конфиг и дополняет значениями по умолчанию."""
+ if not os.path.exists(path):
+ raise SystemExit(
+ "Нет файла настроек: %s\n"
+ "Создайте его командой: %s --init-config %s" % (path, sys.argv[0], path)
+ )
+ with open(path, encoding="utf-8") as f:
+ raw = f.read
+ try:
+ user = json.loads(raw)
+ except json.JSONDecodeError as e:
+ raise SystemExit("Файл настроек %s — не JSON: %s" % (path, e))
+
+cfg = dict(DEFAULT_CONFIG)
+ cfg.update(user)
+ cfg["bs_nodes"] = {**DEFAULT_CONFIG["bs_nodes"], **(user.get("bs_nodes") or {})}
+
+if not cfg["token"]:
+ raise SystemExit("В настройках пустой token. Создайте API-токен в панели и впишите его.")
+ try:
+ str(cfg["token"]).encode("ascii")
+ except UnicodeEncodeError:
+ raise SystemExit(
+ "В token попали русские буквы или другие не-ASCII символы. "
+ "Токен панели состоит из латиницы, цифр, точек и дефисов — скопируйте его заново."
+ )
+ if not str(cfg["panel_url"]).startswith(("http://", "https://")):
+ raise SystemExit("panel_url должен начинаться с http:// или https://")
+ if cfg["period"] not in ("month", "days30"):
+ raise SystemExit('period может быть только "month" или "days30"')
+ if float(cfg["limit_gb"]) <= 0:
+ raise SystemExit("limit_gb должен быть больше нуля")
+ sel = cfg["bs_nodes"]
+ if not (sel["by_name_prefix"] or sel["by_country"] or sel["by_uuid"]):
+ raise SystemExit(
+ "Не задано, какие ноды считать БС. Заполните хотя бы один из списков "
+ "bs_nodes.by_name_prefix / by_country / by_uuid"
+ )
+ return cfg
+
+def write_default_config(path: str) -> None:
+ os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+ with open(path, "w", encoding="utf-8") as f:
+ json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
+ os.chmod(path, 0o600)
+ print("Создан файл настроек:", path)
+ print("Заполните panel_url, token и bs_squad, затем запустите скрипт без --apply.")
+ print
+ print(CONFIG_HELP)
+
+# ─────────────────────────── журнал ───────────────────────────
+
+class Log:
+ def __init__(self, path: str, quiet: bool = False):
+ self.path = path
+ self.quiet = quiet
+ self.fh = None
+ if path:
+ try:
+ os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+ self.fh = open(path, "a", encoding="utf-8")
+ except OSError as e:
+ print("Не смог открыть журнал %s: %s" % (path, e), file=sys.stderr)
+
+def __call__(self, msg: str) -> None:
+ line = "%s %s" % (dt.datetime.now.strftime("%Y-%m-%d %H:%M:%S"), msg)
+ if not self.quiet:
+ print(msg)
+ if self.fh:
+ self.fh.write(line + "\n")
+ self.fh.flush
+
+# ─────────────────────────── работа с панелью ───────────────────────────
+
+class PanelError(Exception):
+ pass
+
+class Panel:
+ """Тонкий клиент Remnawave. Пути и поля отличаются между версиями панели,
+ поэтому каждый вызов пробует несколько известных вариантов и запоминает рабочий."""
+
+def __init__(self, url: str, token: str, timeout: int = 25, insecure: bool = False, log=print):
+ self.base = url.rstrip("/")
+ self.token = token
+ self.timeout = timeout
+ self.log = log
+ self.ctx = None
+ if insecure:
+ self.ctx = ssl.create_default_context
+ self.ctx.check_hostname = False
+ self.ctx.verify_mode = ssl.CERT_NONE
+ self._usage_path = None # какой вариант пути со статистикой сработал
+
+def call(self, method: str, path: str, body=None, quiet404: bool = False):
+ url = self.base + path
+ data = json.dumps(body).encode if body is not None else None
+ req = urllib.request.Request(url, data=data, method=method)
+ req.add_header("Authorization", "Bearer " + self.token)
+ req.add_header("User-Agent", UA)
+ req.add_header("X-Forwarded-Proto", "https")
+ req.add_header("X-Forwarded-For", "127.0.0.1")
+ if data:
+ req.add_header("Content-Type", "application/json")
+
+for attempt in (1, 2, 3):
+ try:
+ with urllib.request.urlopen(req, timeout=self.timeout, context=self.ctx) as r:
+ return json.loads(r.read.decode or "{}")
+ except urllib.error.HTTPError as e:
+ text = e.read.decode(errors="replace")[:300]
+ if e.code == 401:
+ raise PanelError("панель не приняла токен (401). Проверьте token в настройках")
+ if e.code == 403:
+ raise PanelError(
+ "панель отклонила запрос (403). Токен должен быть создан в самой панели, "
+ "сессионный ключ из браузера не подходит"
+ )
+ if e.code == 404:
+ if not quiet404:
+ self.log(" путь %s не найден на этой версии панели" % path)
+ raise PanelError("404 %s" % path)
+ if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+ time.sleep(attempt * 2)
+ continue
+ raise PanelError("%s %s → %s %s" % (method, path, e.code, text))
+ except urllib.error.URLError as e:
+ if attempt < 3:
+ time.sleep(attempt * 2)
+ continue
+ raise PanelError("панель недоступна: %s" % e.reason)
+ except UnicodeEncodeError:
+ raise PanelError(
+ "в адресе панели или в токене есть недопустимые символы — "
+ "проверьте panel_url и token в настройках"
+ )
+ raise PanelError("панель не ответила за три попытки")
+
+# ─── справочники ───
+
+def squads(self) -> list:
+ resp = self.call("GET", "/api/internal-squads").get("response") or {}
+ if isinstance(resp, dict):
+ return resp.get("internalSquads") or []
+ return resp or []
+
+def nodes(self) -> list:
+ resp = self.call("GET", "/api/nodes").get("response") or []
+ return resp if isinstance(resp, list) else (resp.get("nodes") or [])
+
+def users(self) -> list:
+ out, start, size = [], 0, 500
+ while True:
+ q = "/api/users?size=%d&start=%d" % (size, start)
+ resp = self.call("GET", q).get("response") or {}
+ chunk = resp.get("users") if isinstance(resp, dict) else resp
+ chunk = chunk or []
+ out.extend(chunk)
+ total = resp.get("total") if isinstance(resp, dict) else len(out)
+ start += size
+ if not chunk or start >= int(total or 0):
+ break
+ return out
+
+# ─── трафик по нодам ───
+
+def node_usage(self, user, start: dt.date, end: dt.date) -> dict:
+ """→ {uuid ноды: байты} за период. Пробует известные пути статистики."""
+ uid = user.get("id")
+ uuid = user.get("uuid") or user.get("userUuid")
+ s, e = start.isoformat, end.isoformat
+
+variants = []
+ if uid is not None:
+ variants.append("/api/bandwidth-stats/users/%s?start=%s&end=%s" % (uid, s, e))
+ if uuid:
+ variants.append("/api/bandwidth-stats/users/%s?start=%s&end=%s" % (uuid, s, e))
+ variants.append("/api/users/stats/%s?start=%s&end=%s" % (uuid, s, e))
+ variants.append("/api/nodes/usage/%s?start=%s&end=%s" % (uuid, s, e))
+ if self._usage_path:
+ variants.sort(key=lambda v: 0 if v.startswith(self._usage_path) else 1)
+
+last = None
+ for path in variants:
+ try:
+ resp = self.call("GET", path, quiet404=True).get("response") or {}
+ except PanelError as err:
+ last = err
+ continue
+ self._usage_path = path.split("?")[0].rsplit("/", 1)[0]
+ return self._parse_usage(resp)
+ if last:
+ raise PanelError(
+ "не нашёл на этой панели путь со статистикой по нодам (%s). "
+ "Скорее всего версия панели старее, чем поддерживает скрипт" % last
+ )
+ return {}
+
+@staticmethod
+ def _parse_usage(resp) -> dict:
+ """Вытаскивает {uuid ноды: байты} из ответа любой известной формы."""
+ out = {}
+ rows = None
+ if isinstance(resp, dict):
+ for key in ("series", "topNodes", "nodes", "usage"):
+ if isinstance(resp.get(key), list) and resp[key]:
+ rows = resp[key]
+ break
+ elif isinstance(resp, list):
+ rows = resp
+ for row in rows or []:
+ if not isinstance(row, dict):
+ continue
+ node_uuid = row.get("uuid") or row.get("nodeUuid") or row.get("node_uuid")
+ total = row.get("total")
+ if total is None:
+ total = row.get("totalBytes") or row.get("total_bytes") or 0
+ if not total and isinstance(row.get("data"), list):
+ total = sum(int(x or 0) for x in row["data"])
+ if node_uuid:
+ out[str(node_uuid)] = out.get(str(node_uuid), 0) + int(total or 0)
+ return out
+
+# ─── изменение сквадов ───
+
+def set_squads(self, user, squad_uuids: list) -> None:
+ body = {"activeInternalSquads": squad_uuids}
+ if user.get("uuid"):
+ body["uuid"] = user["uuid"]
+ elif user.get("id") is not None:
+ body["id"] = user["id"]
+ else:
+ body["username"] = user["username"]
+ try:
+ self.call("PATCH", "/api/users", body)
+ return
+ except PanelError:
+ pass
+ ident = user.get("uuid") or user.get("id")
+ self.call("PATCH", "/api/users/%s" % ident, {"activeInternalSquads": squad_uuids})
+
+# ─────────────────────────── период и состояние ───────────────────────────
+
+def period_bounds(kind: str, today: dt.date) -> tuple:
+ if kind == "month":
+ first = today.replace(day=1)
+ last = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+ return first, min(today, last), today.strftime("%Y-%m")
+ first = today - dt.timedelta(days=29)
+ return first, today, "days30:" + today.isoformat
+
+def load_state(path: str) -> dict:
+ if not path or not os.path.exists(path):
+ return {"removed": {}}
+ try:
+ with open(path, encoding="utf-8") as f:
+ st = json.load(f)
+ st.setdefault("removed", {})
+ return st
+ except (OSError, json.JSONDecodeError):
+ return {"removed": {}}
+
+def save_state(path: str, state: dict) -> None:
+ if not path:
+ return
+ os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+ tmp = path + ".tmp"
+ with open(tmp, "w", encoding="utf-8") as f:
+ json.dump(state, f, ensure_ascii=False, indent=2)
+ os.replace(tmp, path)
+
+# ─────────────────────────── логика ───────────────────────────
+
+def pick_squad(squads: list, wanted: str):
+ for s in squads:
+ if str(s.get("uuid")) == wanted or str(s.get("name")) == wanted:
+ return s
+ names = ", ".join(str(s.get("name")) for s in squads) or "их вообще нет"
+ raise SystemExit(
+ "Сквад «%s» в панели не найден. Что есть: %s.\n"
+ "Впишите в bs_squad точное имя или uuid." % (wanted, names)
+ )
+
+def bs_node_uuids(nodes: list, sel: dict, log) -> set:
+ prefixes = [p.lower for p in sel.get("by_name_prefix") or []]
+ countries = [c.upper for c in sel.get("by_country") or []]
+ uuids = set(str(u) for u in sel.get("by_uuid") or [])
+ out = set
+ for n in nodes:
+ u, name = str(n.get("uuid")), str(n.get("name") or "")
+ cc = str(n.get("countryCode") or n.get("country_code") or "").upper
+ if u in uuids or any(name.lower.startswith(p) for p in prefixes) or (cc and cc in countries):
+ out.add(u)
+ if not out:
+ log("Ни одна нода не подошла под правила bs_nodes — считать будет нечего.")
+ log("Ноды в панели: " + ", ".join(
+ "%s (%s)" % (n.get("name"), n.get("countryCode") or "??") for n in nodes) or "нет нод")
+ return out
+
+def human(b: int) -> str:
+ return "%.2f ГБ" % (b / GB)
+
+def run(cfg: dict, apply: bool, only_user: str, log) -> int:
+ panel = Panel(cfg["panel_url"], cfg["token"], int(cfg["request_timeout"]),
+ bool(cfg["insecure_tls"]), log)
+
+squad = pick_squad(panel.squads, str(cfg["bs_squad"]))
+ squad_uuid = str(squad["uuid"])
+ nodes = panel.nodes
+ bs_uuids = bs_node_uuids(nodes, cfg["bs_nodes"], log)
+ if not bs_uuids:
+ return 2
+
+start, end, period_key = period_bounds(cfg["period"], dt.date.today)
+ limit = int(float(cfg["limit_gb"]) * GB)
+ state = load_state(cfg["state_file"])
+ removed = state["removed"]
+
+log("Сквад БС: %s (%s)" % (squad.get("name"), squad_uuid))
+ log("БС-ноды: %d из %d" % (len(bs_uuids), len(nodes)))
+ log("Период: %s … %s, лимит %s" % (start, end, human(limit)))
+ log("Режим: %s" % ("боевой" if apply else "сухой прогон, ничего не меняю"))
+ log("")
+
+users = panel.users
+ if only_user:
+ users = [u for u in users if str(u.get("username")) == only_user]
+ if not users:
+ log("Пользователь %s не найден" % only_user)
+ return 2
+
+checked = over = freed = restored = 0
+ for u in users:
+ uname = str(u.get("username"))
+ squads = u.get("activeInternalSquads") or []
+ in_squad = any(str(s.get("uuid")) == squad_uuid for s in squads if isinstance(s, dict))
+ rec = removed.get(uname)
+
+# вернуть тех, кого сняли в прошлом периоде
+ if not in_squad and rec and cfg["restore_on_new_period"] and rec.get("period") != period_key:
+ new_list = [str(s.get("uuid")) for s in squads if isinstance(s, dict)] + [squad_uuid]
+ log("%-24s новый период — возвращаю в сквад БС" % uname)
+ if apply:
+ panel.set_squads(u, new_list)
+ removed.pop(uname, None)
+ restored += 1
+ continue
+
+if not in_squad:
+ continue
+
+checked += 1
+ try:
+ usage = panel.node_usage(u, start, end)
+ except PanelError as e:
+ log("%-24s не смог получить статистику: %s" % (uname, e))
+ continue
+ used = sum(b for nu, b in usage.items if nu in bs_uuids)
+
+if used < limit:
+ log("%-24s %s из %s" % (uname, human(used), human(limit)))
+ continue
+
+over += 1
+ keep = [str(s.get("uuid")) for s in squads if isinstance(s, dict) and str(s.get("uuid")) != squad_uuid]
+ log("%-24s %s из %s — ЛИМИТ ВЫБРАН, снимаю со сквада БС (остаётся сквадов: %d)"
+ % (uname, human(used), human(limit), len(keep)))
+ if apply:
+ try:
+ panel.set_squads(u, keep)
+ except PanelError as e:
+ log("%-24s снять не удалось: %s" % (uname, e))
+ continue
+ removed[uname] = {"period": period_key, "used": used, "at": dt.datetime.now.isoformat(timespec="seconds")}
+ freed += 1
+
+if apply:
+ state["removed"] = removed
+ state["last_run"] = dt.datetime.now.isoformat(timespec="seconds")
+ save_state(cfg["state_file"], state)
+
+log("")
+ log("Проверено: %d · превысили: %d · снято: %d · возвращено: %d"
+ % (checked, over, freed if apply else 0, restored if apply else 0))
+ if not apply and over:
+ log("Это был сухой прогон. Чтобы применить, добавьте --apply")
+ return 0
+
+def main -> int:
+ ap = argparse.ArgumentParser(
+ description="Учёт трафика БС-нод в Remnawave и снятие со сквада при исчерпании лимита",
+ formatter_class=argparse.RawDescriptionHelpFormatter,
+ epilog=CONFIG_HELP,
+ )
+ ap.add_argument("-c", "--config", default="/etc/bstraffic.json", help="файл настроек")
+ ap.add_argument("--init-config", metavar="ПУТЬ", help="создать файл настроек и выйти")
+ ap.add_argument("--apply", action="store_true", help="применить изменения (без него — сухой прогон)")
+ ap.add_argument("--user", default="", help="проверить одного человека по имени")
+ ap.add_argument("--quiet", action="store_true", help="писать только в журнал")
+ ap.add_argument("--version", action="version", version=VERSION)
+ args = ap.parse_args
+
+if args.init_config:
+ write_default_config(args.init_config)
+ return 0
+
+cfg = load_config(args.config)
+ log = Log(cfg.get("log_file"), args.quiet)
+ try:
+ return run(cfg, args.apply, args.user, log)
+ except PanelError as e:
+ log("Ошибка панели: %s" % e)
+ return 1
+ except KeyboardInterrupt:
+ return 130
+
+if __name__ == "__main__":
+ sys.exit(main)
+
+Проверено на Remnawave 3.x: учёт только по БС-нодам, снятие со сквада, сохранение остальных сквадов, повторный запуск, возврат в новом периоде — сентябрь 2026.
+
+Оглавление

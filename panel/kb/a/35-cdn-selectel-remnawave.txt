@@ -1,0 +1,271 @@
+Заголовок: Selectel CDN + Remnawave: пошагово
+
+Это пошаговый рецепт под Remnawave. Особенности самого Selectel CDN (кеш, методы, что подтверждено, а что нет) разобраны в статье Selectel CDN, общая база по фронтингу — в CDN-фронтинг: спрятать ноду за CDN.
+
+Пошаговый пример настройки поддоменов, CDN, Nginx и VLESS XHTTP на базе Remnawave.
+
+Перед началом
+
+Замените example.com, IP-адреса, порт и домен CDN на свои значения. Команды приведены для Linux-сервера. В этом примере используются два поддомена: origin для источника и panel для панели управления.
+
+Создание поддоменов и DNS-записей
+
+В панели управления доменом создайте поддомены origin.example.com и panel.example.com. Направьте обе записи на IP VPN-сервера:
+
+Тип	Имя	Значение
+A	origin.example.com	IP-адрес VPN-сервера
+A	panel.example.com	IP-адрес VPN-сервера
+
+DNS-записи обычно применяются быстро, но в отдельных случаях обновление может занять до суток.
+
+SSL-сертификаты Let’s Encrypt
+
+Обновите пакеты и установите Certbot. Для выпуска сертификата порт 80 должен быть доступен из интернета и не занят другой службой.
+
+bash
+apt update && apt upgrade -y
+apt install snapd -y
+snap install --classic certbot
+ln -s /snap/bin/certbot /usr/local/bin/certbot
+
+Выпуск сертификатов
+bash
+certbot certonly --standalone -d origin.example.com
+certbot certonly --standalone -d panel.example.com
+
+Укажите email, примите условия (Y), при желании откажитесь от рассылки (N). Пути к сертификату и ключу появятся в выводе Certbot. Сертификаты обычно продлеваются автоматически.
+
+Сайт-заглушка и Nginx
+
+Установите Nginx и подготовьте каталог сайта:
+
+bash
+apt install nginx -y
+mkdir -p /var/www/origin.example.com/html
+chown -R $USER:$USER /var/www/origin.example.com/html
+
+Создание страницы
+
+Создайте файл:
+
+bash
+nano /var/www/origin.example.com/html/index.html
+
+Создайте страницу-заглушку. Например, сохраните такой HTML в файл index.html:
+
+html
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Welcome</title>
+<body><h1>Welcome</h1><p>Site is under maintenance.</p></body>
+</html>
+
+Сохраните файл: Ctrl+O, Enter, Ctrl+X.
+
+Конфигурация Nginx
+
+Создайте конфигурационный файл:
+
+bash
+nano /etc/nginx/sites-available/origin.example.com
+
+Конфигурация проксирует XHTTP-запросы на локальный порт 2053:
+
+nginx
+upstream xray_xhttp {
+ server 127.0.0.1:2053;
+ keepalive 128;
+}
+
+server {
+ listen 80 default_server;
+ listen 443 ssl http2 default_server;
+ server_name _;
+
+ssl_certificate /etc/letsencrypt/live/origin.example.com/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/origin.example.com/privkey.pem;
+ ssl_protocols TLSv1.2 TLSv1.3;
+
+location = /health {
+ default_type application/json;
+ return 200 '{"status":"ok","service":"media-gateway","version":"4.2.1"}';
+ }
+
+location = /api/uploadFile { return 404; }
+
+location /api/uploadFile/ {
+ proxy_pass http://xray_xhttp;
+ proxy_http_version 1.1;
+ proxy_set_header Connection "";
+ proxy_set_header Host $host;
+ proxy_set_header X-Real-IP $remote_addr;
+ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ proxy_set_header X-Forwarded-Proto https;
+ proxy_pass_request_headers on;
+ proxy_buffering off;
+ proxy_request_buffering off;
+ proxy_cache off;
+ proxy_max_temp_file_size 0;
+ gzip off;
+ proxy_connect_timeout 10s;
+ proxy_read_timeout 1h;
+ proxy_send_timeout 1h;
+ send_timeout 1h;
+ client_max_body_size 0;
+ proxy_socket_keepalive on;
+ add_header X-Accel-Buffering no always;
+ add_header Cache-Control "no-store, no-cache" always;
+ add_header CDN-Cache-Control "no-store" always;
+ add_header Pragma "no-cache" always;
+ add_header Expires "0" always;
+ add_header Accept-Ranges none always;
+ }
+
+location / {
+ root /var/www/origin.example.com/html;
+ index index.html;
+ try_files $uri $uri/ =404;
+ }
+}
+
+Параметры Nginx и активация
+
+Увеличьте лимит соединений воркера, добавьте буферы заголовков (внутри блока http { }) и включите сайт:
+
+bash
+sed -i 's/worker_connections.*/worker_connections 16384;/' /etc/nginx/nginx.conf
+nano /etc/nginx/nginx.conf
+
+Добавьте в блок http { } строку:
+
+nginx
+large_client_header_buffers 8 64k;
+
+Сохраните конфиг и выполните:
+
+bash
+ln -s /etc/nginx/sites-available/origin.example.com /etc/nginx/sites-enabled/
+rm /etc/nginx/sites-enabled/default
+nginx -t
+systemctl restart nginx
+
+После проверки откройте https://origin.example.com и убедитесь, что отображается заглушка.
+
+Продление сертификатов
+
+Настройте webroot-продление для origin:
+
+bash
+certbot reconfigure --cert-name origin.example.com --authenticator webroot --webroot-path /var/www/origin.example.com/html --deploy-hook "systemctl reload nginx"
+
+Для сертификата панели оставьте standalone-аутентификатор и останавливайте Nginx на время проверки:
+
+bash
+certbot reconfigure --cert-name panel.example.com --authenticator standalone --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx"
+
+При запросе Certbot выберите R и дождитесь завершения.
+
+Создание CDN-ресурса Selectel
+
+Создайте CDN-ресурс типа «Статика». Перед созданием ресурса проверьте условия пополнения баланса в панели Selectel (в примере используется сумма 200 ₽).
+
+Параметр	Значение
+Источник	origin.example.com:443
+Протокол к источнику	HTTPS
+Время соединения	30
+Отправка запроса	9999
+Получение ответа	9999
+Кеширование	Отключить
+Разрешённые HTTP-методы	GET, POST
+Сжатие Gzip	Отключить
+
+В качестве источника задайте домен origin с портом 443. После активации ресурсу будет назначен CDN-домен, например example.selcdn.net. Активация может занять 20–30 минут.
+
+Установка Remnawave Panel и Node
+
+Remnawave состоит из панели управления и Node: панель сама не запускает Xray. Node запускает Xray и получает конфигурацию от панели. Официальная документация допускает установку на одном сервере, но рекомендует отдельный сервер для Node.
+
+Установка панели
+
+Установите Docker с Compose plugin, затем загрузите официальный compose-файл и образец переменных:
+
+bash
+sudo curl -fsSL https://get.docker.com | sh
+mkdir -p /opt/remnawave && cd /opt/remnawave
+curl -o docker-compose.yml https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/docker-compose-prod.yml
+curl -o .env https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/.env.sample
+
+В .env задайте FRONT_END_DOMAIN=panel.example.com и SUB_PUBLIC_DOMAIN=panel.example.com/api/sub, задайте уникальные секреты и замените пароль PostgreSQL по официальной инструкции. Запустите панель:
+
+bash
+docker compose up -d
+
+HTTPS reverse proxy для панели
+
+Официальная инструкция требует reverse proxy. Добавьте отдельный HTTPS server-блок для panel.example.com в конфигурацию Nginx; upstream панели должен быть доступен только локально на 127.0.0.1:3000. Для панели используйте сертификат /etc/letsencrypt/live/panel.example.com/. Не публикуйте порт 3000 напрямую.
+
+nginx
+server {
+ listen 443 ssl http2;
+ server_name panel.example.com;
+ ssl_certificate /etc/letsencrypt/live/panel.example.com/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
+ location / {
+ proxy_pass http://127.0.0.1:3000;
+ proxy_set_header Host $host;
+ proxy_set_header X-Real-IP $remote_addr;
+ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ proxy_set_header X-Forwarded-Proto https;
+ }
+}
+
+Проверьте конфигурацию и перезагрузите Nginx: nginx -t && systemctl reload nginx. Для продления сертификата панели используйте standalone hook из предыдущего раздела, если Certbot проверяет домен через порт 80.
+
+Добавление Node
+
+В панели откройте Nodes → Management, создайте Node и задайте внутреннее имя, адрес и Node Port. Скопируйте предложенный панелью docker-compose.yml на сервер Node в /opt/remnanode, запустите контейнер и завершите создание Node в интерфейсе, выбрав Config Profile. Используйте именно compose-конфигурацию, созданную вашей версией панели; не подставляйте случайные SECRET_KEY или Node Port.
+
+bash
+mkdir -p /opt/remnanode && cd /opt/remnanode
+nano docker-compose.yml
+# Вставьте compose-файл, скопированный из панели
+docker compose up -d
+
+Ограничьте Node Port на firewall: доступ к нему должен иметь только сервер панели. Состояние Node должно стать online.
+
+Настройка VLESS XHTTP в Remnawave
+
+В Config Profiles создайте или откройте профиль, который назначен вашему Node. Добавьте в его массив inbounds VLESS inbound с XHTTP. Порт и путь должны совпасть с Nginx на origin-узле: порт 2053, путь /api/uploadFile/. Для начала используйте базовые параметры ниже; добавляйте дополнительные только если их поддерживает установленная на Node версия Xray.
+
+json
+{
+ "listen": "127.0.0.1",
+ "port": 2053,
+ "protocol": "vless",
+ "tag": "vless-xhttp",
+ "settings": { "clients": [], "decryption": "none" },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "none",
+ "xhttpSettings": {
+ "path": "/api/uploadFile/",
+ "mode": "packet-up"
+ }
+ }
+}
+
+Сохраните профиль и назначьте его Node. В Remnawave добавление/учёт пользователей управляется панелью; не заполняйте вручную список clients UUID-ами как в обычной автономной конфигурации.
+
+Host, доступ и подписка
+В Hosts создайте Host и выберите inbound vless-xhttp.
+В поле Address укажите CDN-домен, выданный провайдером. Порт для клиента — 443.
+Транспорт и путь берутся из выбранного Inbound. В Advanced Options при необходимости задайте SNI домена CDN; Host должен выдавать клиенту адрес CDN и порт 443, хотя серверный Inbound слушает 2053. Путь XHTTP должен совпадать с /api/uploadFile/, режим — packet-up. Проверьте, что подписка выдаёт подключение по HTTPS к CDN, а соединение CDN с origin использует сертификат origin.example.com.
+В Internal Squads включите этот inbound, иначе пользователи его не получат.
+Создайте пользователя, назначьте ему нужную Internal Squad и импортируйте подписку в совместимый клиент.
+Подключение клиента
+
+В карточке клиента скопируйте ссылку подключения или адрес подписки и импортируйте его в INCY либо в другой совместимый с актуальным Xray-клиент.
+
+Оглавление

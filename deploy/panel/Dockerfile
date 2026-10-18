@@ -3,8 +3,10 @@ FROM node:20-alpine AS web
 WORKDIR /web
 COPY panel/web/package.json ./
 RUN npm install
+COPY panel/kb /kb
 COPY panel/web/ ./
-RUN npm run build
+ENV KB_SRC=/kb
+RUN node scripts/build-kb.mjs && npm run build
 
 FROM golang:1.22-alpine AS server
 WORKDIR /src

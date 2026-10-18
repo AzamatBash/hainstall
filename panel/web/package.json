@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "kb": "node scripts/build-kb.mjs",
+    "predev": "node scripts/build-kb.mjs",
+    "prebuild": "node scripts/build-kb.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"

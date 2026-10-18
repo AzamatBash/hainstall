@@ -1,0 +1,167 @@
+Заголовок: VLESS-TCP-Reality (+ selfsteal)
+
+Базовый выбор для России. Работает так: когда клиент подключается к вашей ноде, начало разговора выглядит как обычный заход на известный сайт по HTTPS. Проверяющий у оператора видит визит на сайт и пропускает. Это и есть Reality.
+
+Сверху добавляется Vision (flow: xtls-rprx-vision) — он выравнивает размеры пакетов, чтобы по ним нельзя было узнать VPN уже внутри соединения. Чем отличается от других протоколов и когда брать, смотрите в обзоре «Какой протокол выбрать».
+
+📖 Незнакомые слова? Все термины простыми словами есть в Словаре терминов.
+
+Шаг 1: сгенерируйте ключи
+
+На любой машине с Xray (или прямо на ноде):
+
+bash
+# Reality-пара ключей: privateKey → в конфиг, publicKey → на Host в панели
+xray x25519
+# shortId — любой HEX чётной длины (≤16 символов)
+openssl rand -hex 8
+
+🔑 Ключи Reality проще всего сгенерировать прямо в панели. В редакторе конфига Remnawave (кнопка меню рядом с «Форматировать») есть пункт «Сгенерировать ключи» — он сам подставит пару privateKey/publicKey, ничего ставить и вызывать вручную не нужно. Там же есть «Скачать с Github» — подтянуть свежее ядро Xray.
+
+Если нужно получить пару вне панели (например, готовите конфиг заранее), подойдёт любой путь: - на ноде, внутри контейнера: docker exec remnanode xray x25519; - на любой машине, хоть на своём ноутбуке — ключи к серверу не привязаны: wget -qO- https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip | busybox unzip - xray && chmod +x xray && ./xray x25519
+
+privateKey идёт в конфиг ноды, publicKey — на Host в панели.
+
+privateKey идёт в конфиг ноды, publicKey — на Host, shortId — из openssl.
+
+Вариант A: Selfsteal (рекомендую)
+
+Reality «крадёт» ваш собственный сайт-обманку на этой же ноде: serverNames = ваш домен (A-запись на ноду), target = локальный сайт. При активном «тыке» DPI попадает на настоящий HTTPS-сайт на вашем домене: вход неотличим от обычного веб-сервера. Самый стойкий вариант под жёсткий РФ-DPI.
+
+Шаг A1: сайт-обманка (nginx на 127.0.0.1:8443, реальный серт вашего домена):
+
+nginx
+server {
+ listen 127.0.0.1:8443 ssl http2 proxy_protocol; # proxy_protocol — чтобы видеть реальный IP клиента
+ server_name your.domain;
+ ssl_certificate /etc/letsencrypt/live/your.domain/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/your.domain/privkey.pem;
+ ssl_protocols TLSv1.3;
+ root /var/www/decoy; # положите туда правдоподобный статичный сайт
+ location / { try_files $uri /index.html; }
+}
+
+Шаг A2: Config Profile целиком (вставьте в панель, подставьте свои privateKey, publicKey, shortId и домен):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-selfsteal",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "127.0.0.1:8443",
+ "xver": 1,
+ "serverNames": ["your.domain"],
+ "privateKey": "PRIVATE_KEY_X25519",
+ "shortIds": ["REALITY_SHORT_ID"]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+clients: [] не трогайте: Remnawave сам подставит пользователей из сквадов. xver: 1 (PROXY-protocol) обязателен в паре с proxy_protocol в nginx, иначе сайт-обманка не увидит клиента.
+
+Проверка стелса: откройте https://your.domain в браузере: должен открыться ваш сайт-обманка, а не ошибка. Значит и DPI увидит обычный сайт.
+
+Вариант B: Reality с донором (без своего домена)
+
+Проще: без домена и серта. Reality маскируется под чужой крупный сайт с TLS 1.3 (донор: чужой популярный сайт, под рукопожатие которого маскируется Reality). Минус: SNI-донор (SNI: имя сайта, видное в начале соединения ещё до шифрования) не резолвится в ваш IP, при глубоком анализе это «SNI ≠ владелец IP». Для жёсткого DPI лучше Selfsteal.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "your-donor.de:443",
+ "xver": 0,
+ "serverNames": ["your-donor.de"],
+ "privateKey": "PRIVATE_KEY_X25519",
+ "shortIds": ["REALITY_SHORT_ID"]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Донор: чужой домен с TLS 1.3 + HTTP/2, не за CDN, не ваш; нейтральный, стабильный. Ротируйте serverNames между нодами, не один на всех.
+
+Так инбаунд Reality выглядит в панели (Профили → Конфиг Xray): tag: vless-reality, target и serverNames = донор, ваш privateKey и shortId. Внизу редактор показывает «Xray config is valid»: конфиг принят.
+Host в Remnawave (что вписать на хосте)
+
+Сам конфиг-профиль клиентов не содержит (их даёт панель). Параметры подключения задаются на Host: впишите их так (подставьте свои значения):
+
+text
+Address: your.domain (или публичный IP/домен ноды)
+Port: 443
+SNI / Host: your.domain (для Варианта B — your-donor.de)
+publicKey: REALITY_PUBLIC_KEY
+shortId: REALITY_SHORT_ID
+flow: xtls-rprx-vision
+fingerprint: firefox
+
+Грабли (xray 26)
+Транспорт (способ упаковки трафика) называется raw (бывший tcp), оба валидны, в новых конфигах пишите raw.
+allowInsecure удалён → если нужен пиннинг, это pinnedPeerCertSha256 (HEX-строка).
+fingerprint (отпечаток, «почерк» TLS-клиента, его подделывают под браузер) клиента: chrome не ставить (палится + на части сборок нода не стартует), берите firefox / qq.
+shortIds: [""] (пустой) тоже валиден, но лучше задать реальный shortId, так чище.
+Если не подключается
+Симптом	Что проверить	Что сделать
+Клиент подключается, но интернета нет	Время на ноде: timedatectl	Расхождение больше минуты ломает Reality: рукопожатие не сходится. timedatectl set-ntp true, затем перезапуск ноды
+То же, а время верное	Открывается ли донор с самой ноды: curl -sI https://донор	Донор должен отвечать с ноды и поддерживать TLS 1.3 с HTTP/2. Не отвечает — берите другой, в той же стране, что и нода
+Соединение рвётся через несколько секунд	Совпадают ли publicKey и shortId в панели и в конфиге ноды	Любое расхождение даёт именно такой симптом. Сверьте символ в символ, проще всего перевыпустить пару ключей кнопкой в панели
+Нода не стартует после смены отпечатка	Значение fingerprint	chrome на части сборок валит ядро и заодно лучше распознаётся. Ставьте firefox
+Работает на Wi-Fi, не работает через мобильного оператора	Тот же конфиг у другого оператора	Дело в доноре или в порте: у операторов разные наборы. Смените донора и держите на ноде второй канал
+Ничего не подключается, порт 443 молчит снаружи	Кто занял порт: ss -tlnp sport =:443	Часто это Caddy или nginx, поднятые для сайта-обманки. Либо уводите их на другой порт, либо собирайте Selfsteal по инструкции выше
+В логах ноды invalid user или unexpected EOF	Совпадает ли UUID пользователя в панели и в конфиге	Пересоздайте пользователя и переимпортируйте подписку в приложении: старый ключ мог остаться в кэше клиента
+Чего Reality не умеет
+Не спасает от блокировки по адресу. Она прячет, как выглядит соединение, но если IP ноды в списке, пакеты просто не дойдут. Это лечится сменой адреса или CDN.
+Донор придётся подбирать. Он должен быть живым, быстрым, с TLS 1.3 и HTTP/2, и желательно в той же стране, что нода. Плохой донор даёт медленное и рвущееся соединение.
+Reality с чужим донором различима при упорной проверке. Если проверяющий пойдёт на ваш адрес сам и сравнит ответ с настоящим сайтом донора, разница видна. Selfsteal этим не страдает — там сайт настоящий.
+Selfsteal стоит денег и времени: домен, сертификат, настоящий сайт на ноде.
+Один канал — одна точка отказа. Reality держится хорошо, но в вечерние часы TCP давят целиком. Держите рядом Hysteria2.
+
+Обзор «что когда»: «Какой протокол выбрать». Все профили разом с командами: «Профили подключений (inbounds)». Скрытый резерв того же Reality: «gRPC» и «XHTTP».
+
+Проверено на Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

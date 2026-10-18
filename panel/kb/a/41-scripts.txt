@@ -1,0 +1,434 @@
+Заголовок: Готовые скрипты: нода, Reality, selfsteal, каскад одной командой
+
+Здесь не нужно вставлять конфиг и править в нём десять мест. Скрипты интерактивные: запускаете, отвечаете на вопросы про домен, адрес и порт — дальше они делают всё сами. Каждый прогнан на чистом сервере (Ubuntu 24.04, ядро Xray 26.3.27).
+
+Перед запуском стоит понимать две вещи. Первое: скрипт из интернета выполняется на вашем сервере с правами root, поэтому запускайте только те, содержимое которых видите — все они открыты ниже целиком. Второе: почти каждый скрипт что-то перезаписывает (конфиг ноды, правила файрвола, сертификаты), так что на сервере с уже работающим сервисом сначала сделайте бэкап.
+
+📖 Незнакомые слова? Все термины простыми словами объяснены в Словаре терминов.
+
+Имена контейнеров (remnanode, remnawave-db) и пути (/opt/...): под типовую установку Remnawave; скрипты их создают сами.
+
+Как запустить скрипт на сервере
+
+Подключитесь к серверу по SSH со своего компьютера:
+
+bash
+ssh root@IP_СЕРВЕРА # пароль/ключ выдаёт хостер
+
+Дальше подойдёт любой способ положить скрипт и запустить.
+
+Способ 1: через редактор nano (проще всего):
+
+bash
+nano myscript.sh # откроется редактор — вставь код (Ctrl+Shift+V или правый клик)
+ # сохранить: Ctrl+O, Enter выйти: Ctrl+X
+bash myscript.sh # запустить
+
+Способ 2: создать файл одной командой (heredoc):
+
+bash
+cat > myscript.sh <<'EOF'
+# сюда вставь код скрипта
+EOF
+bash myscript.sh
+
+Кавычки в <<'EOF' (с апострофами) обязательны: иначе $переменные внутри подставятся раньше времени.
+
+Способ 3: залить готовый файл с компьютера:
+
+bash
+scp myscript.sh root@IP_СЕРВЕРА:/root/ # выполняется НА своём компьютере
+ssh root@IP_СЕРВЕРА 'bash /root/myscript.sh'
+
+Автоматизация (интерактивные)
+Если скрипт не отработал
+Симптом	Что проверить	Что сделать
+Скрипт падает в первой же строке	Под кем запускаете: whoami	Почти все скрипты требуют root. Заходите под root или используйте sudo
+command not found на docker или curl	Что установлено: docker --version, curl --version	На голой системе часть пакетов отсутствует. Скрипт установки ноды ставит их сам, остальным нужны заранее
+Скрипт отработал, но сервис не поднялся	Логи: docker logs --tail 50 remnanode или journalctl -u имя -n 50	Смотрите последнюю ошибку до падения: чаще всего это занятый порт или опечатка в введённом домене
+Порт занят, скрипт ругается	Кто слушает: ss -tlnp sport =:443	Освободите порт или задайте скрипту другой. Одновременно 443 держит только один процесс
+Сертификат не выпускается	Смотрит ли домен на этот сервер: dig +short домен	A-запись должна указывать на адрес сервера, а 80-й порт быть открыт. Через прокси Cloudflare проверка не пройдёт — переводите домен в режим DNS only
+После скрипта хардненга пропал доступ по SSH	Через веб-консоль хостера: ufw status и sshd -T	Вход по ключу должен работать до запуска. Восстанавливайте через веб-консоль в панели хостера — она идёт мимо файрвола
+Скрипт что-то перезаписал, стало хуже	Есть ли бэкап рядом с изменённым файлом	Большинство скриптов кладут копию с суффиксом даты рядом. Верните её и перезапустите сервис
+Чего скрипты не делают
+Не думают за вас. Они выполняют сценарий, а решение, какая схема вам нужна, остаётся за вами.
+Не чинят блокировку адреса. Если IP заблокирован, ни один скрипт этого не изменит.
+Не следят за сервером дальше. Обновления, мониторинг и бэкапы нужно настраивать отдельно.
+Не универсальны. Написаны под Ubuntu и Debian с типовой установкой Remnawave: на другой системе или нестандартных путях сломаются.
+Их нельзя запускать вслепую дважды. Повторный запуск перезапишет конфиг — сначала бэкап, потом запуск.
+1. Генератор готового Reality-инбаунда ⭐
+
+Спрашивает домен-маскировку и порт → сам генерит ключи x25519, shortId, UUID → выдаёт готовый JSON-инбаунд для вставки в Config Profile и данные для Host. Превращает «заполни 6 полей руками и не ошибись» в «запустил → вставил».
+
+bash
+#!/usr/bin/env bash
+# gen-reality-inbound.sh — генератор готового VLESS-Reality инбаунда для Remnawave.
+set -euo pipefail
+
+echo "=== Генератор VLESS-Reality инбаунда (Remnawave) ==="
+read -rp "Домен-маскировка (SNI/dest, напр. www.cloudflare.com): " DEST
+[ -z "${DEST:-}" ] && { echo "домен обязателен"; exit 1; }
+read -rp "Порт инбаунда [443]: " PORT; PORT=${PORT:-443}
+read -rp "Тег инбаунда [VLESS-Reality]: " TAG; TAG=${TAG:-VLESS-Reality}
+
+# нужен бинарь xray для x25519/uuid — берём, если в системе нет
+XRAY=$(command -v xray 2>/dev/null || echo /tmp/xray)
+if ! "$XRAY" version >/dev/null 2>&1; then
+ echo "-> ставлю временный xray для генерации ключей..."
+ command -v unzip >/dev/null 2>&1 || { apt-get update -y >/dev/null 2>&1; apt-get install -y unzip >/dev/null 2>&1; }
+ U=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -oE 'https://[^"]*Xray-linux-64\.zip' | head -1)
+ curl -fsSL -o /tmp/xray.zip "$U" && unzip -o /tmp/xray.zip xray -d /tmp >/dev/null && chmod +x /tmp/xray
+ XRAY=/tmp/xray
+fi
+
+KEYS=$("$XRAY" x25519)
+PRIV=$(echo "$KEYS" | grep -iE 'private' | grep -oE '[A-Za-z0-9_-]{43}' | head -1)
+PUB=$(echo "$KEYS" | grep -iE 'public' | grep -oE '[A-Za-z0-9_-]{43}' | head -1)
+SID=$(openssl rand -hex 8)
+UUID=$("$XRAY" uuid)
+
+cat <<JSON
+
+============ ГОТОВЫЙ ИНБАУНД (вставь в Config Profile -> inbounds) ============
+{
+ "tag": "$TAG",
+ "listen": "0.0.0.0",
+ "port": $PORT,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "$DEST:443",
+ "xver": 0,
+ "serverNames": ["$DEST"],
+ "privateKey": "$PRIV",
+ "shortIds": ["$SID"]
+ }
+ },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] }
+}
+==============================================================================
+
+Данные для Host в панели (Inbound -> Host):
+ Address / SNI: $DEST
+ Port: $PORT
+ Public Key: $PUB
+ ShortId: $SID
+ Flow: xtls-rprx-vision (для VLESS-Reality поверх TCP)
+
+(клиентов добавит панель/сквад автоматически; пример UUID: $UUID)
+JSON
+
+Проверено: сгенерированный JSON проходит xray -test → Configuration OK.
+
+2. Установка ноды Remnawave одной командой
+
+В панели откройте Nodes → Add node и скопируйте строку SECRET_KEY=.... Запустите скрипт — он поставит docker, откроет порт в файрволе и поднимет ноду.
+
+bash
+#!/usr/bin/env bash
+# install-remnanode.sh — ставит ноду Remnawave на чистый сервер: docker + remnanode + фаервол.
+set -euo pipefail
+
+echo "=== Установка ноды Remnawave ==="
+echo "В панели: Nodes -> Add node -> скопируй строку SECRET_KEY=... целиком."
+read -rp "Порт ноды NODE_PORT [2222]: " NODE_PORT; NODE_PORT=${NODE_PORT:-2222}
+echo "Вставь SECRET_KEY из панели (можно с префиксом 'SECRET_KEY='), затем Enter:"
+read -r SSL_LINE
+SECRET_KEY=$(printf '%s' "$SSL_LINE" | sed -E "s/^[[:space:]]*SECRET_KEY=//; s/^[\"']//; s/[\"']$//")
+[ -z "$SECRET_KEY" ] && { echo "SECRET_KEY обязателен — он генерится в панели при добавлении ноды"; exit 1; }
+
+# 1. docker (если нет)
+command -v docker >/dev/null 2>&1 || { echo "-> ставлю docker..."; curl -fsSL https://get.docker.com | sh; }
+
+# 2. фаервол: SSH + порт ноды (+443 на случай инбаундов на этой ноде)
+if command -v ufw >/dev/null 2>&1; then
+ ufw allow 22/tcp >/dev/null 2>&1 || true
+ ufw allow "${NODE_PORT}/tcp" >/dev/null 2>&1 || true
+ ufw allow 443/tcp >/dev/null 2>&1 || true
+ ufw allow 443/udp >/dev/null 2>&1 || true
+fi
+
+# 3. файлы ноды (compose пишем printf'ом, без heredoc — чтобы CRLF не сломал запись)
+mkdir -p /opt/remnanode; umask 077
+printf 'NODE_PORT=%s\nSECRET_KEY=%s\n' "$NODE_PORT" "$SECRET_KEY" > /opt/remnanode/.env
+printf '%s\n' \
+ 'services:' \
+ ' remnanode:' \
+ ' container_name: remnanode' \
+ ' hostname: remnanode' \
+ ' image: remnawave/node:latest' \
+ ' restart: always' \
+ ' network_mode: host' \
+ ' cap_add:' \
+ ' - NET_ADMIN' \
+ ' env_file:' \
+ ' -.env' \
+ > /opt/remnanode/docker-compose.yml
+
+# 4. запуск
+cd /opt/remnanode && docker compose up -d
+sleep 5
+docker ps --filter name=remnanode --format ' {{.Names}}: {{.Status}}'
+echo "Готово. Нода на порту $NODE_PORT — в панели станет Connected в течение ~минуты."
+echo "Логи при проблемах: docker logs --tail 30 remnanode"
+
+Проверено: docker + фаервол + валидный compose, контейнер стартует (supervisord + Xray поднимаются). Финальный пейринг произойдёт, когда вставишь свой SECRET_KEY из панели.
+
+3. Selfsteal-сайт для Reality
+
+Поднимает правдоподобный сайт-обманку на твоём target-домене с авто-TLS. На него указывает dest/serverNames Reality, и DPI видит обычный сайт.
+
+bash
+#!/usr/bin/env bash
+# install-selfsteal.sh — декой-сайт (Caddy + авто-TLS) на target-домене для Reality.
+set -euo pipefail
+
+echo "=== Selfsteal: декой-сайт для Reality ==="
+read -rp "Домен-маскировка (A-запись домена -> на этот сервер): " DOMAIN
+[ -z "${DOMAIN:-}" ] && { echo "домен обязателен"; exit 1; }
+read -rp "Email для Let's Encrypt [admin@$DOMAIN]: " EMAIL; EMAIL=${EMAIL:-admin@$DOMAIN}
+
+# Caddy (если нет)
+if ! command -v caddy >/dev/null 2>&1; then
+ echo "-> ставлю Caddy..."
+ apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg >/dev/null 2>&1
+ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+ apt-get update >/dev/null 2>&1 && apt-get install -y caddy >/dev/null 2>&1
+fi
+
+# правдоподобная статика
+mkdir -p "/var/www/$DOMAIN"
+cat >"/var/www/$DOMAIN/index.html" <<HTML
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$DOMAIN</title>
+<style>
+ body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;background:var(--code-bg);color:var(--text);
+ display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{max-width:560px;padding:48px;text-align:center}
+ h1{font-size:28px;margin:0 0 12px} p{color:var(--text-2);line-height:1.6}
+ a{color:var(--accent);text-decoration:none}
+</style></head><body><div class="card">
+ <h1>$DOMAIN</h1>
+ <p>Our website is undergoing scheduled maintenance. We will be back shortly.</p>
+ <p>For inquiries please contact <a href="mailto:$EMAIL">support</a>.</p>
+</div></body></html>
+HTML
+
+cat >/etc/caddy/Caddyfile <<EOF
+{
+ email $EMAIL
+}
+$DOMAIN {
+ root * /var/www/$DOMAIN
+ file_server
+ encode zstd gzip
+}
+EOF
+
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
+echo "✅ Декой на https://$DOMAIN (Caddy выпустит TLS сам при наличии A-записи)."
+echo "В Reality-инбаунде: dest = $DOMAIN:443 serverNames = [\"$DOMAIN\"]"
+
+Проверено: Caddyfile валиден, декой реально отдаётся (HTTP 200). TLS-серт Caddy выпустит сам, когда A-запись домена будет смотреть на сервер.
+
+4. Каскад: РФ-вход → загран-выход
+
+Генерит конфиги обоих серверов: хоп вход→выход идёт VLESS + TLS + gRPC (устойчив к ТСПУ), общий bridge-UUID отвечает за аутентификацию. Запустите на любом сервере, файлы разложи по входу/выходу.
+
+bash
+#!/usr/bin/env bash
+# gen-cascade.sh — генератор каскада: РФ-вход -> загран-выход (VLESS+TLS+gRPC хоп).
+set -euo pipefail
+
+echo "=== Генератор каскада: РФ-вход -> загран-выход ==="
+read -rp "IP или домен ВЫХОДНОГО (загран) сервера: " EXIT_HOST
+[ -z "${EXIT_HOST:-}" ] && { echo "нужен адрес выхода"; exit 1; }
+read -rp "Порт хопа вход->выход [2053]: " HOP; HOP=${HOP:-2053}
+read -rp "Имя gRPC-сервиса [grpccascade]: " SVC; SVC=${SVC:-grpccascade}
+
+XRAY=$(command -v xray 2>/dev/null || echo /tmp/xray)
+if ! "$XRAY" version >/dev/null 2>&1; then
+ command -v unzip >/dev/null 2>&1 || { apt-get update -y >/dev/null 2>&1; apt-get install -y unzip >/dev/null 2>&1; }
+ U=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -oE 'https://[^"]*Xray-linux-64\.zip' | head -1)
+ curl -fsSL -o /tmp/xray.zip "$U" && unzip -o /tmp/xray.zip xray -d /tmp >/dev/null && chmod +x /tmp/xray; XRAY=/tmp/xray
+fi
+BRIDGE=$("$XRAY" uuid)
+
+OUT=${OUT_DIR:-/root/cascade}; mkdir -p "$OUT"
+# самоподписанный серт для хопа (аутентификация — по bridge-UUID, серт лишь шифрует канал)
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+ -subj "/CN=$EXIT_HOST" -keyout "$OUT/hop-key.pem" -out "$OUT/hop-cert.pem" >/dev/null 2>&1
+# xray 26 убрал allowInsecure -> pinnedPeerCertSha256 = HEX SHA256 серта (строкой)
+PIN=$(openssl x509 -in "$OUT/hop-cert.pem" -noout -fingerprint -sha256 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')
+
+# === ВЕСЬ КОНФИГ ВЫХОДНОГО (загран) СЕРВЕРА ===
+cat >"$OUT/cascade-exit.json" <<JSON
+{
+ "inbounds": [{
+ "tag": "hop-in",
+ "listen": "0.0.0.0",
+ "port": $HOP,
+ "protocol": "vless",
+ "settings": { "clients": [{ "id": "$BRIDGE" }], "decryption": "none" },
+ "streamSettings": {
+ "network": "grpc",
+ "security": "tls",
+ "grpcSettings": { "serviceName": "$SVC" },
+ "tlsSettings": { "certificates": [{ "certificateFile": "$OUT/hop-cert.pem", "keyFile": "$OUT/hop-key.pem" }] }
+ }
+ }],
+ "outbounds": [{ "protocol": "freedom", "tag": "direct" }]
+}
+JSON
+
+# === БЛОК ДЛЯ ВХОДНОГО (РФ) СЕРВЕРА: outbound к выходу + правило роутинга ===
+cat >"$OUT/cascade-entry-outbound.json" <<JSON
+{
+ "outbound": {
+ "tag": "to-exit",
+ "protocol": "vless",
+ "settings": { "vnext": [{ "address": "$EXIT_HOST", "port": $HOP,
+ "users": [{ "id": "$BRIDGE", "encryption": "none" }] }] },
+ "streamSettings": {
+ "network": "grpc",
+ "security": "tls",
+ "grpcSettings": { "serviceName": "$SVC" },
+ "tlsSettings": { "serverName": "$EXIT_HOST", "pinnedPeerCertSha256": "$PIN" }
+ }
+ },
+ "routingRule": { "type": "field", "inboundTag": ["<тег_клиентского_inbound>"], "outboundTag": "to-exit" }
+}
+JSON
+
+echo
+echo "Готово. Файлы в $OUT:"
+echo " cascade-exit.json = ВЕСЬ конфиг выходного (загран) сервера (+ hop-cert.pem/hop-key.pem)"
+echo " cascade-entry-outbound.json = добавь 'outbound' в outbounds[] и 'routingRule' в routing.rules[] входного"
+echo "Bridge UUID (общий секрет вход<->выход): $BRIDGE"
+
+На выходном сервере запустите xray с cascade-exit.json. На входном добавьте объект outbound в свои outbounds[], а routingRule (с тегом твоего клиентского Reality-инбаунда) в routing.rules[].
+
+Проверено end-to-end: оба конфига проходят xray -test, и реальный трафик идёт клиент → вход → TLS+gRPC-хоп → выход → интернет.
+
+Утилиты (готовые блоки)
+5. Хардненг сервера (ufw + fail2ban + ssh)
+
+⚠️ Сначала убедитесь, что ваш SSH-ключ уже добавлен (~/.ssh/authorized_keys) и вход по ключу работает в отдельной сессии, иначе после отключения пароля потеряешь доступ.
+
+bash
+#!/usr/bin/env bash
+set -euo pipefail
+apt-get update -y && apt-get install -y ufw fail2ban
+
+# 1. фаервол: наружу всё, внутрь — только SSH, 80 и 443
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 443/udp # Hysteria2 / QUIC
+ufw --force enable
+
+# 2. fail2ban на SSH
+systemctl enable --now fail2ban
+
+# 3. SSH — только по ключу.
+# На Ubuntu cloud-образах PasswordAuthentication лежит в drop-in
+# /etc/ssh/sshd_config.d/*.conf и ПЕРЕБИВАЕТ основной файл — правим оба.
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+ls /etc/ssh/sshd_config.d/*.conf >/dev/null 2>&1 &&
+ sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config.d/*.conf
+sshd -t && { systemctl restart ssh 2>/dev/null || systemctl restart sshd; }
+echo "✅ ufw + fail2ban + ssh-key-only готово"
+# проверь, что пароль реально выключен: sshd -T | grep -i passwordauthentication (должно быть: no)
+
+Проверено: ufw active, jail sshd активен, sshd -T показывает passwordauthentication no (без правки drop-in пароль остался бы включён: это и был частый «хардненг, который не работает»).
+
+6. Certbot + авто-рестарт ноды при обновлении серта
+
+Лечит частый SPAWN_ERROR: серт обновился, а нода отдаёт старый. Хук перезапускает ноду после каждого обновления.
+
+bash
+# выпуск серта (standalone — освободи:80, либо --webroot)
+certbot certonly --standalone -d node.example.com \
+ --agree-tos -m you@example.com --non-interactive
+
+# хук: перезапуск ноды после КАЖДОГО обновления
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat >/etc/letsencrypt/renewal-hooks/deploy/restart-node.sh <<'EOF'
+#!/usr/bin/env bash
+docker restart remnanode
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-node.sh
+
+certbot renew --dry-run # проверка авто-продления
+
+Проверено: certbot ставится, хук создаётся, renew --dry-run отрабатывает.
+
+7. Бэкап панели по крону (БД + конфиги)
+bash
+#!/usr/bin/env bash
+# /root/backup.sh
+set -euo pipefail
+BK=/root/backups; mkdir -p "$BK"
+TS=$(date +%F_%H%M)
+docker exec remnawave-db pg_dumpall -U postgres | gzip > "$BK/db_$TS.sql.gz" # имя контейнера БД: docker ps
+tar czf "$BK/conf_$TS.tar.gz" /opt/remnawave 2>/dev/null || true
+find "$BK" -type f -mtime +14 -delete # храним 14 дней
+echo "✅ бэкап $TS готов в $BK"
+
+В крон (каждый день в 4:00):
+
+bash
+chmod +x /root/backup.sh
+( crontab -l 2>/dev/null; echo "0 4 * * * /root/backup.sh >> /var/log/backup.log 2>&1" ) | crontab -
+
+Проверено: pg_dumpall | gzip даёт валидный дамп, find -mtime +14 -delete чистит старое. Копию полезно хранить не только на сервере (см. «Мониторинг и бэкап»).
+
+8. WARP-endpoint (wgcf): «чистый» выход
+bash
+# имя ассета содержит версию -> берём актуальную ссылку через GitHub API
+WGCF_URL=$(curl -fsSL https://api.github.com/repos/ViRb3/wgcf/releases/latest \
+ | grep -oE 'https://[^"]*wgcf_[0-9.]+_linux_amd64' | head -1)
+curl -fsSL -o /usr/local/bin/wgcf "$WGCF_URL"; chmod +x /usr/local/bin/wgcf
+
+wgcf register --accept-tos # wgcf-account.toml
+wgcf generate # wgcf-profile.conf
+grep -E 'PrivateKey|PublicKey|Address|Endpoint' wgcf-profile.conf # перенести в wireguard-outbound Xray
+
+Проверено: скачивается, register/generate дают профиль с ключами. Для Xray бери IPv4-endpoint (стабильнее с РФ-сетей). Перенося ключи в wireguard-outbound на ноде Remnawave (Xray в Docker), добавь в settings строку "noKernelTun": true: иначе kernel-TUN падает на read-only /proc/sys (подробно в статье «WARP»).
+
+9. Origin за CDN на Caddy (авто-TLS)
+bash
+apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+ | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+ | tee /etc/apt/sources.list.d/caddy-stable.list
+apt-get update && apt-get install -y caddy
+
+cat >/etc/caddy/Caddyfile <<'EOF'
+sub.example.com {
+ encode zstd gzip
+ reverse_proxy 127.0.0.1:3010 # порт страницы подписки/панели
+}
+EOF
+systemctl reload caddy
+
+Проверено: Caddy ставится, reverse_proxy реально проксирует (HTTP 200). Это origin-сторона; про сами CDN смотрите в «Спрятать сервер за CDN».
+
+10. Синхронизация общего чёрного списка
+
+Связано: «Все рабочие конфиги» (инбаунды), «Каскад RU-вход → загран-выход», «Selfsteal на nginx», «Установка панели и нод».
+
+Проверено на Ubuntu 24.04 и ядре Xray 26.x — сентябрь 2026.
+
+Оглавление

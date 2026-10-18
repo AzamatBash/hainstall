@@ -1,0 +1,360 @@
+Заголовок: RegRU как БС-фронт (неактуально с 20.08.2026)
+
+⛔ Способ неактуален с 20 августа 2026. На новых аккаунтах Reg.ru он больше не заводится. На части старых аккаунтов схема продолжает работать — если она у вас уже поднята, ничего делать не нужно, инструкция ниже остаётся верной для обслуживания и починки.
+
+Начинаете с нуля — берите другой фронт: Yandex CDN, Beeline CDN или обзор всех вариантов. Статью оставили целиком: она объясняет механику shared-хостинга как фронта, и эта часть от Reg.ru не зависит.
+
+🧭 Полная инструкция от А до Я. Итоговая цепочка: клиент → whitelisted РФ-IP хостинга → загран-выход → интернет.
+
+Обозначения. Везде ниже подставляйте свои значения вместо плейсхолдеров.
+
+Плейсхолдер	Что это
+<БС_IP>	whitelisted IP хостинга, на который будут ходить клиенты
+<EGRESS_IP>	исходящий IP хостинга (обычно тот же, что в письме про FTP)
+<ДОМЕН>	ваш домен или поддомен, привязанный к хостингу
+<ЛОГИН>	логин хостинга (вида uNNNNNNN)
+<FTP_ПАРОЛЬ>	пароль FTP
+<ПАНЕЛЬ_ПАРОЛЬ>	пароль от ISPmanager
+<EXIT_IP>	IP заграничной ноды (выход)
+<EXIT_PORT>	порт XHTTP-инбаунда на выходе (например 8081)
+<ПАНЕЛЬ_URL>	адрес вашей VPN-панели (Remnawave)
+0. Что это и когда нужно
+
+Обычный shared-хостинг Reg.ru (не VPS, ~150-300 ₽/мес) превращается в рабочий VPN-фронт на whitelisted РФ-IP. Зачем это нужно:
+
+IP из «белых» диапазонов у операторов не тарифицируется (зеро-рейтинг);
+дёшево, поднимается за 20 минут;
+не нужен root и VPS.
+
+Ограничения, которые важно понимать заранее:
+
+работает только транспорт XHTTP, WebSocket не проходит (см. п. 2);
+скорость ~2-5 МБ/с (20-43 Мбит) против ~20 МБ/с напрямую;
+задержка +0.8-2.3 с на запрос (накладные Apache);
+это shared, поэтому хостер может прибить аккаунт за постоянный проксирующий трафик. Как доп-канал — норм, как основной — нет.
+1. Что даёт хостинг (из письма при покупке)
+Код
+Панель ISPmanager: https://serverNN.hosting.reg.ru:1500/
+ логин <ЛОГИН> / <ПАНЕЛЬ_ПАРОЛЬ>
+FTP: <ЛОГИН> / <FTP_ПАРОЛЬ>, IP <EGRESS_IP>
+MySQL: отдельные креды (не понадобятся)
+
+Что реально доступно:
+
+FTP, файловый менеджер, cron (scheduler), MySQL, выпуск SSL;
+Apache 2.4.x + mod_fcgid + Phusion Passenger, PHP 8.3, exec разрешён;
+настоящего SSH нет: usershell в панели — это веб-консоль, а не sshd.
+2. Три ловушки, прочитать до начала
+⛔️ Ловушка 1: два разных IP
+
+IP из письма — это FTP и исходящий трафик. А сайт по умолчанию садится на другой IP, которого нет в белых списках, и весь смысл теряется.
+
+клиентский IP надо принудительно менять на БС-шный (п. 5);
+на выходе фаервол открывать для исходящего IP хостинга (п. 7).
+⛔️ Ловушка 2: WebSocket не работает
+Код
+RewriteRule... ws://upstream [P] → 500 (mod_proxy_wstunnel не стоит)
+RewriteRule... http://upstream [P] → работает
+WS-Upgrade через http:// → пусто, 101 не приходит
+
+Вывод: только XHTTP. Он ходит обычными HTTP-запросами, поэтому проходит.
+
+⛔️ Ловушка 3: FTP и HTTP блокируются с домашнего IP
+
+Хостер рвёт соединения с резидентных адресов. Все команды curl и FTP выполняйте с любого своего сервера, не с домашнего ПК.
+
+3. Вход в панель через API
+
+Всё делается запросами, в веб-морду лезть не обязательно.
+
+bash
+PAN="https://serverNN.hosting.reg.ru:1500/ispmgr"
+KEY=$(curl -sk "$PAN?func=auth&username=<ЛОГИН>&password=<ПАНЕЛЬ_ПАРОЛЬ>&out=json" \
+ | grep -oE '"\$id":"[^"]+"' | head -1 | cut -d'"' -f4)
+echo $KEY # сессионный ключ, дальше во всех запросах &auth=$KEY
+
+4. Узнать свои IP
+bash
+curl -sk "$PAN?func=ipaddr&auth=$KEY&out=json"
+
+Вернёт список из нескольких адресов плюс IPv6. Найдите тот, что попадает в whitelisted диапазон оператора: это и есть <БС_IP>.
+
+⚠️ Если БС-IP в списке нет, этот хостинг не подходит — берите другой тариф или сервер. Принадлежность диапазона проверяется только реальным прозвоном с мобильного: зеро-рейтинг подтверждает оператор, а не документация.
+
+5. Создать домен и посадить его на БС-IP
+
+Домен нужен любой свой, удобно — поддомен основного.
+
+5.1 Создать www-домен
+bash
+curl -sk -G "$PAN" \
+ --data-urlencode "func=webdomain.edit" \
+ --data-urlencode "auth=$KEY" \
+ --data-urlencode "name=<ДОМЕН>" \
+ --data-urlencode "email=admin@<ДОМЕН>" \
+ --data-urlencode "php=on" \
+ --data-urlencode "dirindex=index.html index.php" \
+ --data-urlencode "sok=ok" --data-urlencode "out=json"
+
+⚠️ email= обязателен, без него ошибка валидации. Создастся docroot /www/<ДОМЕН>.
+
+5.2 Пересадить на БС-IP (самый важный шаг)
+bash
+curl -sk -G "$PAN" \
+ --data-urlencode "func=webdomain.edit" \
+ --data-urlencode "elid=<ДОМЕН>" \
+ --data-urlencode "auth=$KEY" \
+ --data-urlencode "name=<ДОМЕН>" \
+ --data-urlencode "email=admin@<ДОМЕН>" \
+ --data-urlencode "ipsrc=manual" \
+ --data-urlencode "ipaddrs=<БС_IP>" \
+ --data-urlencode "php=on" \
+ --data-urlencode "dirindex=index.html index.php" \
+ --data-urlencode "sok=ok" --data-urlencode "out=json"
+
+⚠️ Передавайте все поля (name, email, php, dirindex), иначе форма не пройдёт валидацию.
+
+5.3 Проверить
+bash
+curl -sk "$PAN?func=webdomain.edit&elid=<ДОМЕН>&auth=$KEY&out=json" \
+ | grep -o '"ipaddrs":[^}]*}'
+# должен показать <БС_IP>
+
+6. Настроить выход (Remnawave)
+
+На загран-ноде нужен XHTTP-инбаунд без TLS: TLS терминирует хостинг.
+
+6.1 Добавить инбаунд в config-profile
+
+Возьмите профиль ноды и добавьте в config.inbounds[]:
+
+json
+{
+ "tag": "VLESS_XHTTP_FRONT",
+ "port": <EXIT_PORT>,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "none",
+ "xhttpSettings": { "path": "/api/generate", "mode": "packet-up" }
+ },
+ "sniffing": { "enabled": true, "destOverride": ["http","tls"] }
+}
+
+Отправить: PATCH /api/config-profiles с {"uuid": "<профиль>", "config": {...}}.
+
+⚠️ Не меняйте теги существующих инбаундов. Панель мапит их по тегу: смена тега = пересоздание с новым uuid = рвётся привязка хостов.
+
+6.2 Привязать инбаунд к ноде
+json
+PATCH /api/nodes
+{"uuid":"<нода>","configProfile":{
+ "activeConfigProfileUuid":"<профиль>",
+ "activeInbounds":["<старые...>","<uuid нового инбаунда>"]}}
+
+6.3 Добавить инбаунд в squad
+json
+PATCH /api/internal-squads
+{"uuid":"<squad>","inbounds":["<все старые>","<новый>"]}
+
+Без этого пользователи не получат конфиг.
+
+6.4 Проверить, что порт поднялся
+bash
+ssh root@<EXIT_IP> "ss -ltn | grep <EXIT_PORT>"
+
+7. Открыть фаервол на выходе
+
+Пускаем только исходящий IP хостинга:
+
+bash
+ssh root@<EXIT_IP> "ufw allow from <EGRESS_IP> to any port <EXIT_PORT> proto tcp"
+# либо: iptables -I INPUT -p tcp -s <EGRESS_IP> --dport <EXIT_PORT> -j ACCEPT
+
+Проверяем, что нода отвечает (с любого своего сервера):
+
+bash
+curl -s -o /dev/null -w '%{http_code}\n' http://<EXIT_IP>:<EXIT_PORT>/api/generate
+# 404 = НОРМА (xray так отвечает на голый GET), главное что не таймаут
+
+8. Залить.htaccess на хостинг
+
+Файл кладётся в docroot /www/<ДОМЕН>/.
+
+apache
+RewriteEngine On
+RewriteRule ^api/generate$ http://<EXIT_IP>:<EXIT_PORT>/api/generate [P,L]
+RewriteRule ^api/generate/(.*)$ http://<EXIT_IP>:<EXIT_PORT>/api/generate/$1 [P,L]
+
+Заливка по FTP — с сервера, не с домашнего ПК:
+
+bash
+curl -T.htaccess --ftp-pasv -u '<ЛОГИН>:<FTP_ПАРОЛЬ>' \
+ 'ftp://<EGRESS_IP>/www/<ДОМЕН>/'
+
+Проверить листинг:
+
+bash
+curl --ftp-pasv -u '<ЛОГИН>:<FTP_ПАРОЛЬ>' 'ftp://<EGRESS_IP>/www/<ДОМЕН>/'
+
+Проверка, что проксирование живо
+bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+ -H 'Host: <ДОМЕН>' http://<БС_IP>/api/generate
+# 404 = ОТЛИЧНО, это ответ xray через прокси
+
+Диагностическая проба окружения, по желанию: залейте probe.php
+
+php
+<?php
+echo "PHP=".phpversion."\n";
+echo "SERVER=".($_SERVER['SERVER_SOFTWARE']??'?')."\n";
+echo "exec=".(function_exists('exec')?'yes':'no')."\n";
+
+и откройте http://<БС_IP>/probe.php с заголовком Host.
+
+9. Создать хост в панели (клиентская точка входа)
+json
+POST /api/hosts
+{
+ "inbound": {
+ "configProfileUuid": "<профиль>",
+ "configProfileInboundUuid": "<uuid XHTTP-инбаунда>"
+ },
+ "remark": "БС-фронт",
+ "address": "<БС_IP>",
+ "port": 80,
+ "path": "/api/generate",
+ "host": "<ДОМЕН>",
+ "sni": "<ДОМЕН>",
+ "securityLayer": "NONE",
+ "fingerprint": "edge",
+ "xhttpExtraParams": { "mode": "packet-up" },
+ "isDisabled": false
+}
+
+⛔️ Самая коварная ошибка
+
+Поле называется xhttpExtraParams, с маленькой буквой h. Если написать xHttpExtraParams, как подсказывает камелкейс, API вернёт 200 OK и молча проигнорирует. В ссылке не будет mode, клиент пойдёт в stream-up, Apache его забуферит, и получится «Телеграм грузит медленно».
+
+Проверять обязательно:
+
+bash
+curl -s "<ПАНЕЛЬ_URL>/api/hosts/<uuid хоста>" \
+ -H "Authorization: Bearer $TOK" \
+ -H 'X-Remnawave-Client-Type: browser' | grep xhttpExtraParams
+# должно быть {"mode":"packet-up"}, а не null
+
+Правильная ссылка в подписке выглядит так:
+
+Код
+vless://<uuid>@<БС_IP>:80?encryption=none&type=xhttp
+ &path=/api/generate&host=<ДОМЕН>
+ &mode=packet-up&extra={"mode":"packet-up"}&security=none#БС-фронт
+
+10. Проверка e2e
+
+С любого своего сервера, где есть xray:
+
+bash
+cat > /root/t.json <<'J'
+{"log":{"loglevel":"warning"},
+ "inbounds":[{"port":10910,"listen":"127.0.0.1","protocol":"socks"}],
+ "outbounds":[{"protocol":"vless","settings":{"vnext":[{
+ "address":"<БС_IP>","port":80,
+ "users":[{"id":"<VLESS-UUID ЮЗЕРА>","encryption":"none"}]}]},
+ "streamSettings":{"network":"xhttp","security":"none",
+ "xhttpSettings":{"path":"/api/generate",
+ "host":"<ДОМЕН>","mode":"packet-up"}}}]}
+J
+xray run -c /root/t.json &
+sleep 6
+curl -s --socks5-hostname 127.0.0.1:10910 https://ifconfig.me/ip # → IP выхода
+curl -s --socks5-hostname 127.0.0.1:10910 -o /dev/null -w '%{http_code}\n' https://www.google.com
+
+Ожидаемо: egress = IP заграничной ноды, google = 200.
+
+⚠️ Берите именно vless-uuid пользователя (в панели поле vlessUuid), а не account-uuid, иначе auth-fail.
+
+11. Тюнинг под мобильных (обязательно)
+11.1 mode=packet-up
+
+См. п. 9. Без него Телеграм и любые загрузки тормозят.
+
+11.2 MSS-клэмп на выходе до 1280
+
+Мобильный РФ-путь не переваривает 1360.
+
+bash
+ssh root@<EXIT_IP> '
+IF=$(ip route|awk "/default/{print \$5;exit}")
+iptables -t mangle -S | grep "set-mss 1360" | sed "s/^-A /-D /" \
+ | while read R; do iptables -t mangle $R; done
+iptables -t mangle -A POSTROUTING -o $IF -p tcp --tcp-flags SYN,RST SYN \
+ -j TCPMSS --set-mss 1280
+iptables -t mangle -A OUTPUT -p tcp --tcp-flags SYN,RST SYN \
+ -j TCPMSS --set-mss 1280
+'
+
+Закрепите в systemd-юните или в скрипте персиста, иначе слетит при ребуте.
+
+11.3 После правок
+
+Пользователь должен обновить подписку в приложении (или удалить и добавить профиль заново), иначе у него останется старая ссылка без packet-up.
+
+12. TLS (по желанию, но лучше сделать)
+
+По умолчанию трафик идёт по:80 — работает, но открыто. Панель хостинга выдаёт self-signed на:443, но новые xray его не примут: allowInsecure удалён и заменён на pinnedPeerCertSha256.
+
+Чтобы сделать честный HTTPS:
+
+Завести DNS A-запись <ДОМЕН> → <БС_IP>. Если Cloudflare — серое облако, оранжевое сломает.
+Выпустить Let's Encrypt через панель (func=sslcert) или в веб-морде.
+В хосте панели поменять port на 443, а securityLayer на TLS.
+13. Что сколько даёт (реальные замеры)
+Маршрут	Скорость
+через shared-хостинг → близкий выход	5.35 МБ/с (~43 Мбит)
+через shared-хостинг → дальний выход	2.36 МБ/с (~19 Мбит)
+напрямую к выходу (для сравнения)	20.41 МБ/с (~163 Мбит)
+задержка на запрос	0.8 - 2.3 с
+
+Для сёрфинга, мессенджеров и видео годится. Для тяжёлых закачек — нет.
+
+14. Таблица проблем
+Симптом	Причина и что делать
+FTP или curl рвётся	домашний IP заблокирован → работать с сервера
+Сайт 404 на нужном IP	домен сидит на другом IP → п. 5.2 (ipsrc=manual)
+ws:// в.htaccess даёт 500	нет mod_proxy_wstunnel, WS невозможен, только XHTTP
+Подписка отдаёт заглушку 0.0.0.0:1	это HWID/UA-гейт панели, у реального приложения всё ок
+Телеграм и загрузки медленные	нет mode=packet-up, проверьте поле xhttpExtraParams с маленькой h
+Туннель встаёт, но сайты не грузятся	MSS не сброшен до 1280 на выходе
+auth-fail на всех нодах	взят account-uuid вместо vlessUuid
+/api/generate даёт 404	это норма, так xray отвечает на голый GET
+Клиент не принимает сертификат	self-signed, нужен Let's Encrypt (п. 12), allowInsecure больше не работает
+15. Риски
+
+⚠️ Это дополнительный фронт, а не основной. Три причины, по которым схему нельзя оставлять единственной.
+
+Блокировка аккаунта. Shared-хостинг не рассчитан на прокси-трафик. Хостер может ограничить или закрыть аккаунт. Держите такой фронт доп-каналом, основные фронты — на VPS.
+Скорость. В цепочке стоит Apache, он же и потолок: около 60 Мбит/с. Для тяжёлого видео и больших файлов этого мало.
+Один IP на всех. Адрес шаред-хостинга общий. Если он попадёт под блок, отваливается весь фронт целиком, у всех сразу.
+16. Быстрый чеклист
+
+Пройдите сверху вниз перед тем, как отдавать подписку людям: каждый пункт — место, где схема чаще всего и рвётся.
+
+БС-IP есть в списке (func=ipaddr)
+www-домен создан — обязательно с email
+Домен пересажен на БС-IP (ipsrc=manual) и проверен
+XHTTP-инбаунд на ноде создан, порт слушает
+Инбаунд привязан к ноде И к squad
+Фаервол ноды открыт для исходящего IP хостинга
+.htaccess залит, /api/generate отдаёт 404
+Хост в панели создан, xhttpExtraParams = {"mode":"packet-up"}
+MSS на выходе = 1280
+e2e: egress = IP ноды, google отвечает 200
+Пользователь обновил подписку в приложении
+
+✅ Все галочки на месте — фронт рабочий. Если хоть одна не ставится, дальше идти нет смысла: остальные пункты будут давать ложный результат.
+
+Оглавление

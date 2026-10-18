@@ -1,0 +1,216 @@
+Заголовок: Beeline SUPER: XHTTP-нода через ресурс «Статика» (POST-аплинк)
+
+🐝 Второй, более продвинутый рецепт для Beeline CDN. В отличие от базовой статьи про Beeline, где аплинк идёт GET-ом, здесь используется ресурс «Статика» с разрешённым методом POST и правилом Rewrite на стороне CDN. Серверная часть ставится одним скриптом: Caddy и сайт-заглушка собираются автоматически.
+
+Что это. CDN Билайна используется как «легальная прокладка» перед вашей нодой. Клиент стучится в домен Билайна, тот пересылает запросы на ваш origin (ваш исходный сервер за CDN). Провайдер и ТСПУ видят обращение к российской сети Билайна, а не к VPN. Реальный IP ноды скрыт: блокировка по IP становится бесполезной.
+
+📖 Незнакомые слова? Все термины простыми словами объяснены в Словаре терминов.
+
+🐝 Здесь только часть про «Beeline». Домен, DNS, нода и общая логика фронта разобраны в статье «Спрятать сервер за CDN», начните с неё, если ставите фронт впервые.
+
+⭐ Где взять аккаунт Beeline
+
+1. Серверная часть: Caddy и заглушка одним скриптом
+
+ℹ️ Remnanode скрипт не ставит: её вы ставите сами, как обычно. Скрипт отвечает только за Caddy + заглушку (сайт-обманку, который отдаётся всем «лишним» посетителям).
+
+Скачайте скрипт и положите его на сервер ноды в /root:
+
+⬇ Скачать install-caddy-node.sh
+
+Разрешаем выполнение и запускаем:
+
+bash
+chmod +x install-caddy-node.sh
+./install-caddy-node.sh
+
+Скрипт спросит почту и домен ноды, на который всё ставится. Дальше он сам соберёт Caddyfile и заглушку, сгенерирует путь и в конце его напомнит.
+
+🔑 Запомните выданный путь. Он понадобится трижды: в правиле Rewrite на CDN, в профиле Xray и в хосте панели. Везде должен стоять один и тот же путь.
+
+2. Создаём ресурс в Beeline CDN
+Заходим в раздел CDN → Добавить ресурс.
+Тип ресурса: «Статика».
+В адрес источника указываем домен ноды с портом 443.
+Нажимаем Создать.
+3. Конфигурация ресурса
+Параметр	Значение
+Использовать HTTPS при запросе к источникам	ВКЛ
+Указать имя SNI-хоста: домен ноды	ВКЛ
+Hostname при запросе к источнику	домен ноды
+Кэширование	ВЫКЛ (либо включить и выставить все значения в нули)
+Кэшировать с учётом query string · Учитывать все параметры	ВКЛ
+
+Кэш обязательно выключаем: VPN-трафик кэшировать нельзя, иначе CDN начнёт отдавать клиентам чужие куски сессий.
+
+4. Экспертные настройки
+Параметр	Значение
+Использовать HTTP/2	ВКЛ
+Использовать HTTP/3	ВЫКЛ
+Автоматически перенаправлять HTTP → HTTPS	ВКЛ
+Использовать только современные версии TLS	ВКЛ
+Таймауты	5 / 300 / 300
+Проверка CORS на стороне CDN	ВЫКЛ
+Сжатие Brotli	ВЫКЛ
+Сжатие Gzip	ВЫКЛ
+Разрешённые HTTP-методы	POST
+
+⚠️ Rewrite: ВКЛ. Пути меняйте на свой, который выдал скрипт!
+
+Откуда	Куда
+api/v3/segment.ts/	api/v3/segment.ts
+
+Обратите внимание на слэш в конце в поле «Откуда»: именно он и убирается правилом.
+
+5. Профиль Remnawave (Xray)
+
+Замените путь из скрипта и your-node-domain на свои значения: путь тот самый, что выдал установщик.
+
+json
+{
+ "log": {
+ "loglevel": "warning"
+ },
+ "dns": {
+ "servers": [
+ "1.1.1.1",
+ "8.8.8.8",
+ "77.88.8.8",
+ "localhost"
+ ],
+ "queryStrategy": "UseIPv4"
+ },
+ "inbounds": [
+ {
+ "tag": "Bee-CDN-Static",
+ "port": 7443,
+ "listen": "127.0.0.1",
+ "protocol": "vless",
+ "settings": {
+ "clients": [],
+ "decryption": "none"
+ },
+ "sniffing": {
+ "enabled": true,
+ "routeOnly": true,
+ "destOverride": [
+ "http",
+ "tls",
+ "quic"
+ ]
+ },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "none",
+ "xhttpSettings": {
+ "mode": "packet-up",
+ "path": "путь из скрипта",
+ "extra": {
+ "mode": "packet-up",
+ "path": "путь из скрипта",
+ "xmux": {
+ "maxConcurrency": "1"
+ },
+ "seqKey": "chunk_id",
+ "headers": {
+ "Accept": "*/*",
+ "Cookie": "session_id=СГЕНЕРИРУЙТЕ_СВОЙ",
+ "Origin": "https://your-node-domain/",
+ "Referer": "https://your-node-domain/",
+ "User-Agent": "Mozilla/5.0(WindowsNT10.0;Win64;x64;rv:151.0)Gecko/20100101Firefox/151.0",
+ "Sec-Fetch-Dest": "empty",
+ "Sec-Fetch-Mode": "cors",
+ "Sec-Fetch-Site": "same-origin",
+ "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+ },
+ "sessionKey": "auth",
+ "noSSEHeader": true,
+ "noGRPCHeader": true,
+ "seqPlacement": "query",
+ "sessionIDKey": "auth",
+ "xPaddingBytes": "50-150",
+ "sessionIDTable": "Base62",
+ "xPaddingHeader": "X-Api-Key",
+ "xPaddingMethod": "tokenish",
+ "sessionIDLength": "16-32",
+ "sessionPlacement": "query",
+ "uplinkHTTPMethod": "POST",
+ "xPaddingObfsMode": true,
+ "xPaddingPlacement": "header",
+ "downloadHTTPMethod": "GET",
+ "scMaxBufferedPosts": 100,
+ "scMaxEachPostBytes": 3000000,
+ "sessionIDPlacement": "query",
+ "uplinkDataPlacement": "body",
+ "scMinPostsIntervalMs": "5-10",
+ "serverMaxHeaderBytes": 32768
+ },
+ "noSSEHeader": true,
+ "noGRPCHeader": true,
+ "scMaxBufferedPosts": 100,
+ "scMaxEachPostBytes": 3000000,
+ "scMaxConcurrentPosts": 10,
+ "scMinPostsIntervalMs": 5,
+ "serverMaxHeaderBytes": 32768
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ {
+ "tag": "direct",
+ "protocol": "freedom",
+ "settings": {
+ "domainStrategy": "UseIPv4"
+ }
+ },
+ {
+ "tag": "block",
+ "protocol": "blackhole"
+ }
+ ],
+ "routing": {
+ "rules": [
+ {
+ "ip": [
+ "geoip:private"
+ ],
+ "outboundTag": "block"
+ },
+ {
+ "domain": [
+ "geosite:private"
+ ],
+ "outboundTag": "block"
+ },
+ {
+ "protocol": [
+ "bittorrent"
+ ],
+ "outboundTag": "block"
+ }
+ ]
+ }
+}
+
+⚠️ session_id генерируйте свой на каждую ноду: openssl rand -hex 16. Один и тот же идентификатор на всех установках это метка, по которой ноды связываются между собой: если спалили одну, вычисляются остальные.
+
+Ключевое в этом профиле: аплинк уходит POST-ом (uplinkHTTPMethod), даунлинк идёт GET-ом (downloadHTTPMethod), режим packet-up. Инбаунд слушает 127.0.0.1:7443: наружу его не выставляем, снаружи стоит Caddy.
+
+🧩 Правка от нас. В исходном профиле правила роутинга ссылались на "BLOCK" заглавными, тогда как сами outbound'ы объявлены как "block" строчными. Теги в Xray регистрозависимы, поэтому три правила блокировки (приватные IP, geosite:private, bittorrent) не срабатывали. Выше уже исправлено на "block"; если копируете конфиг из другого места, проверьте этот момент.
+
+6. Настраиваем хост в панели
+
+На вкладке «Основные» адрес это CNAME / технический домен от Билайна, порт 443:
+
+На вкладке «Расширенные»: SNI/Хост = ваш домен, Путь = тот, что выдал скрипт, ALPN = h2, отпечаток = firefox:
+
+⚠️ Не ставьте отпечаток Chrome. Берите firefox (или qq): chrome-отпечаток в РФ выделяется и ловится DPI заметно чаще.
+
+7. Финал
+
+✅ После всех действий сделайте полную очистку кэша на CDN-ресурсе, иначе Билайн какое-то время будет отдавать старые ответы, и связь не поднимется.
+
+Проверяем: подписка обновилась, клиент подключается, реальный IP ноды в трассировке не виден; снаружи всё уходит на адреса Билайна.
+
+Оглавление

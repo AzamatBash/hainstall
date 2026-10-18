@@ -1,0 +1,303 @@
+Заголовок: WARP: разблокировать ChatGPT/Spotify и чистый egress
+
+Многие сервисы режут IP дата-центров: ChatGPT/OpenAI, Spotify, часть Netflix-гео, Google-капчи. Ваша VPS-нода это как раз дата-центр → клиент видит «доступ ограничен». WARP решает: выбранный трафик выходит через чистый IP Cloudflare, а не через IP ноды.
+
+Слова, которые дальше встречаются постоянно:
+
+Исходящий маршрут (outbound) — правило «этот трафик отправляй вот туда». WARP именно такое правило, а не способ подключения клиента.
+Egress — адрес, с которого ваш сервер выходит в интернет. Именно его видят сайты.
+reserved — три числа из учётных данных WARP. Неверные — туннель молча не поднимется.
+PersistentKeepalive — как часто слать пустой пакет, чтобы соединение не забыли на стороне провайдера.
+Table = off — запрет менять таблицу маршрутов всей машины: без него через WARP уйдёт весь трафик ноды, а не только нужный.
+
+📖 Остальные термины простыми словами есть в Словаре терминов.
+
+WARP это outbound (исходящий маршрут), а не способ подключения клиента. Клиент по-прежнему коннектится к вашей ноде, а нода часть трафика (по доменам) гонит через WARP.
+
+Какой способ выбрать
+
+WARP на ноду ставят тремя разными путями, и разница между ними не косметическая.
+
+Способ 1: внутри Xray	Способ 2: интерфейс в ядре	Способ 3: контейнер с SOCKS5
+Кто держит туннель	сам Xray	systemd + сторож	отдельный контейнер
+Поле reserved	нужно считать	не нужно	не нужно
+network host у ноды	не нужен	обязателен	не нужен
+Если Xray перезапустился	туннель поднимается заново	туннель не трогается	не трогается
+Возни при установке	меньше всего	средне	больше всего
+
+Способ 1 — ниже по тексту, шаги 1–3. Он самый переносимый и не требует ничего менять в контейнере ноды. Его слабое место одно, зато крупное: reserved. Ошиблись в трёх байтах — хендшейк висит, и понять это по логам почти невозможно.
+
+Способ 2 обходит reserved стороной: туннель поднимает wg-quick, а Xray просто привязывает исходящие к готовому интерфейсу. Берите его, если способ 1 не завёлся или если хотите, чтобы туннель переживал перезапуск ядра Xray.
+
+Способ 3 — крайний случай, когда не работают оба. Описан в конце статьи.
+
+Шаг 1: креды WARP (wgcf)
+bash
+# имя ассета wgcf содержит версию — статичной ссылки нет, берём актуальную через GitHub API:
+WGCF_URL=$(curl -fsSL https://api.github.com/repos/ViRb3/wgcf/releases/latest | grep -oE 'https://[^"]*wgcf_[0-9.]+_linux_amd64' | head -1)
+curl -fsSL -o /usr/bin/wgcf "$WGCF_URL"
+chmod +x /usr/bin/wgcf
+wgcf register # создаёт wgcf-account.toml (примите ToS)
+wgcf generate # создаёт wgcf-profile.conf (PrivateKey, Address v4/v6)
+cat wgcf-profile.conf
+
+Шаг 2: outbound в Config Profile (Xray)
+
+В Config Profile в секцию outbounds добавьте WARP:
+
+js
+{
+ "tag": "warp",
+ "protocol": "wireguard",
+ "settings": {
+ "secretKey": "PRIVATE_KEY", // ← из wgcf-profile.conf (PrivateKey)
+ "address": ["172.16.0.2/32", "2606:4700:110:ХХХХ/128"], // ← Address v4/v6 из профиля
+ "peers": [{
+ "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", // публичный ключ Cloudflare WARP
+ "endpoint": "162.159.192.1:2408" // ← явный IPv4! engage.cloudflareclient.com резолвится в IPv6 → на ноде без v6 WARP «висит»
+ }],
+ "mtu": 1280,
+ "reserved": [0, 0, 0] // ← 3 байта из client_id (см. ниже)
+ }
+}
+
+reserved это критичный нюанс. Это 3 байта, вычисляемые из client_id вашего аккаунта; без корректного reserved хэндшейк к свежим эндпоинтам WARP не проходит (соединение «висит»). В wgcf-profile.conf его нет напрямую, а Remnawave обычно не высчитывает его сама: получите reserved из wgcf-account.toml.
+
+Выполните команды в той папке, где лежит wgcf-account.toml:
+
+bash
+apt install -y jq
+
+TOKEN=$(awk -F"'" '/access_token/{print $2}' wgcf-account.toml)
+DEVICE=$(awk -F"'" '/device_id/{print $2}' wgcf-account.toml)
+
+curl -sS \
+ -H "Authorization: Bearer $TOKEN" \
+ -H "User-Agent: okhttp/3.12.1" \
+ -H "CF-Client-Version: a-6.3-1922" \
+ "https://api.cloudflareclient.com/v0a1922/reg/$DEVICE" \
+ | jq -r '.config.client_id' \
+ | base64 -d \
+ | od -An -t u1 \
+ | awk '{print "["$1", "$2", "$3"]"}'
+
+На выходе будет массив вида [123, 45, 67], его и вставьте в "reserved": [...].
+
+Шаг 3: роутинг (что гнать через WARP)
+
+В секцию routing.rules (выше DIRECT/proxy) добавьте сервисы, которые режут дата-центры:
+
+js
+{
+ "type": "field",
+ "outboundTag": "warp",
+ "domain": [
+ "geosite:openai",
+ "domain:spotify.com",
+ "domain:scdn.co",
+ "geosite:netflix",
+ "domain:chatgpt.com",
+ "domain:oaistatic.com"
+ ]
+}
+
+Всё остальное идёт как обычно (DIRECT/proxy). Так через WARP уходит только то, что иначе не работает: скорость основного трафика не страдает.
+
+Способ 2: WARP интерфейсом в ядре
+
+Здесь туннель живёт вне Xray. Плюс: не нужен reserved, туннель под присмотром systemd и переживает перезапуск ноды. Минус: контейнер ноды обязан работать в режиме сети хоста, иначе Xray не увидит интерфейс.
+
+Проверьте режим до начала:
+
+bash
+docker inspect remnanode --format '{{.HostConfig.NetworkMode}}'
+
+Должно быть host. Если нет — сначала переставьте ноду, иначе дальше идти бессмысленно.
+
+Установка
+bash
+bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh)
+
+Установщик спросит язык, ключ WARP+ (можно пропустить) и интервал сторожа — ставьте 5 минут. Он поднимет интерфейс warp под systemd и повесит сторожа, который поднимает туннель при обрыве.
+
+Если установщик упал на шаге 8
+
+Симптом: шаги 1–7 зелёные, на восьмом Интерфейс WARP не найден, а ip link show warp говорит, что его нет.
+
+Причина та же, что и в способе 1: установщик прописывает endpoint именем engage.cloudflareclient.com, а оно резолвится только в IPv6. Нет IPv6 на ноде — первый хендшейк не проходит, установщик считает это провалом и откатывает интерфейс.
+
+bash
+sed -i 's|^Endpoint =.*|Endpoint = 162.159.192.1:2408|; s|^AllowedIPs =.*|AllowedIPs = 0.0.0.0/0|' /etc/wireguard/warp.conf && \
+wg-quick down warp 2>/dev/null; wg-quick up warp; sleep 5; \
+systemctl enable wg-quick@warp; \
+wg show warp latest-handshakes
+
+systemctl enable здесь обязателен: установщик упал до шага с автозапуском, и без этой команды после перезагрузки сервера WARP не встанет. Ошибка коварная — всё работает ровно до первого ребута.
+
+Эталонный конфиг
+
+/etc/wireguard/warp.conf после правок (ключи вырезаны):
+
+Код
+[Interface]
+Address = 172.16.0.2/32
+MTU = 1280
+Table = off
+[Peer]
+AllowedIPs = 0.0.0.0/0
+Endpoint = 162.159.192.1:2408
+PersistentKeepalive = 25
+
+Две строки здесь несут смысл, который стоит понимать.
+
+Table = off — без неё wg-quick пропишет маршрут по умолчанию через WARP, и весь трафик ноды уйдёт в Cloudflare, а не только выбранные домены. Именно эта строка позволяет привязать к интерфейсу отдельный outbound, не трогая остальную маршрутизацию.
+
+PersistentKeepalive = 25 — без неё туннель молчит в простое, NAT провайдера через несколько минут выбрасывает сессию, и WARP отваливается до первого исходящего пакета. Снаружи это выглядит как «нейросети то работают, то нет», и ловится тяжело. Старые версии установщика её не прописывали:
+
+bash
+grep -q PersistentKeepalive /etc/wireguard/warp.conf || \
+ sed -i '/^Endpoint/a PersistentKeepalive = 25' /etc/wireguard/warp.conf && \
+ systemctl restart wg-quick@warp
+
+Права на файл
+
+В конфиге лежит приватный ключ. По умолчанию права могут быть 644, то есть его читает любой пользователь на сервере:
+
+bash
+chmod 600 /etc/wireguard/warp.conf
+
+Outbound для этого способа
+
+Вместо wireguard-outbound из способа 1 используется обычный freedom, привязанный к интерфейсу:
+
+js
+{
+ "tag": "warp-out",
+ "protocol": "freedom",
+ "settings": { "domainStrategy": "UseIPv4" },
+ "streamSettings": {
+ "sockopt": { "interface": "warp" }
+ }
+}
+
+domainStrategy: UseIPv4 обязателен. На интерфейсе только IPv4-адрес. При UseIP резолвер иногда отдаёт AAAA первым, соединение уходит в интерфейс, где IPv6 нет, и вы получаете плавающие отвалы без внятной причины.
+
+Правила роутинга — те же, что в шаге 3, только outboundTag теперь warp-out.
+
+Проверка WARP: одна команда
+
+Годится для обоих способов, для второго — целиком:
+
+bash
+echo "=== $(hostname) ==="; systemctl is-active wg-quick@warp; systemctl is-enabled wg-quick@warp; \
+wg show warp latest-handshakes | awk '{print "hs_age: " systime-$2 "s"}'; \
+curl -s --max-time 12 --interface warp https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(warp|loc|ip)='; \
+grep -c PersistentKeepalive /etc/wireguard/warp.conf | sed 's/^/keepalive: /'; \
+docker inspect remnanode --format 'net: {{.HostConfig.NetworkMode}}'
+
+Что должно сойтись: служба active и enabled, hs_age — небольшое число секунд, warp=on (или plus с ключом), keepalive: 1, net: host.
+
+А теперь главное поле — loc. Если там loc=RU, то WARP на этой ноде для ИИ-сервисов бесполезен: Cloudflare заводит трафик в ближайшую точку присутствия, а внутри России она своя. Ни переустановка, ни новый аккаунт этого не меняют — меняется только выбором другой ноды.
+
+Чем сервисы видят ваш адрес
+bash
+echo "=== IP ноды ==="; curl -s --max-time 10 https://ifconfig.co/json | grep -oE '"(ip|country|asn_org)": *"[^"]*"'; \
+echo "=== IP WARP ==="; curl -s --max-time 10 --interface warp https://ifconfig.co/json | grep -oE '"(ip|country|asn_org)": *"[^"]*"'
+
+Часто выясняется, что «немецкий» сервер числится американским, а «голландский» — болгарским. Это и есть причина отказов при прямом выходе.
+
+⚠️ Не проверяйте WARP через ipinfo.io и ipapi.co — они сами режут датацентровые адреса и отдают пустой ответ. Вы решите, что туннель не работает, хотя он в порядке. Берите ifconfig.co или api.ipify.org.
+
+WARP+ (быстрее, выше приоритет)
+
+Бесплатный WARP лимитирован по скорости/приоритету. Если есть ключ-лицензия WARP+:
+
+bash
+wgcf update --license-key ВАШ_КЛЮЧ # привязывает лицензию к аккаунту
+wgcf generate # перегенерировать профиль
+
+Для серьёзной нагрузки берите WARP+ или несколько WARP-аккаунтов (балансировка между несколькими warp-outbound через balancer).
+
+В Remnawave
+outbound WARP и правила routing живут в Config Profile (это полный Xray-конфиг). Нода с этим профилем автоматически применит маршрут.
+WARP не создаёт Host: клиенту он не виден, это внутренний egress ноды.
+Проверка: подключитесь клиентом, откройте chat.openai.com, должно работать; на 2ip.ru IP для openai будет Cloudflare, для остального это ваша нода.
+Грабли
+Висит хэндшейк → почти всегда неверный reserved. Пересчитайте. Не помогло даже с верным reserved (туннель не встаёт)? → подними WARP в отдельном контейнере (SOCKS5), смотри раздел ниже.
+IPv6 не нужен на ноде: WARP сам даёт v6; уберите v6 из address, если ядро без IPv6.
+loc=RU в трейсе → WARP на этой ноде для ИИ не поможет, см. раздел проверки выше. Лечится только другой нодой.
+Работало, после перезагрузки перестало → не сделан systemctl enable wg-quick@warp (способ 2).
+Отваливается в простое, оживает после первого запроса → нет PersistentKeepalive, сессию выбрасывает NAT провайдера.
+Через WARP ушёл весь трафик ноды, а не только ИИ → в warp.conf нет Table = off.
+Проверка показывает пустоту → проверяете через ipinfo.io или ipapi.co, они режут датацентровые адреса. Берите ifconfig.co.
+Базовый блок WARP-outbound смотри также в статье «Все рабочие конфиги».
+Чего WARP не даёт
+Это не анонимность. Трафик идёт через Cloudflare, и у них он виден так же, как у любого провайдера.
+Не лечит блокировку вашего адреса. WARP меняет только выход наружу, а клиенты по-прежнему подключаются к вашей ноде.
+Не гарантирует нужную страну. Выходной адрес выбирает Cloudflare, и у части нод он оказывается российским — тогда ИИ-сервисы через него всё равно не открыть.
+Замедляет. Дополнительный туннель — это лишний крюк и меньшая скорость, поэтому через WARP пускают только те домены, которым он реально нужен.
+Иногда просто не поднимается. На части сборок ядра туннель не встаёт даже с верными данными — тогда остаётся вариант с отдельным контейнером ниже.
+Бесплатный тариф ограничен по скорости. WARP+ быстрее, но это платная история.
+Резерв: WARP в отдельном контейнере (SOCKS5)
+
+Иногда wireguard-outbound в Xray не поднимает туннель: хэндшейк висит даже с верным reserved (капризы ядра/сборки). Надёжный обход: вынести WARP в отдельный контейнер, который сам держит туннель со всеми правами и отдаёт SOCKS5 на localhost, а Xray просто ходит через этот SOCKS для нужных доменов. WARP-контейнер Xray не касается, он работает всегда.
+
+Код
+Клиент → Reality → Xray (нода)
+ ├─ обычный трафик → freedom (DIRECT)
+ └─ AI-домены → socks 127.0.0.1:40000 → WARP-контейнер → Cloudflare (чистый IP)
+
+1. Поднять WARP-контейнер (образ caomingjun/warp, WARP → SOCKS5):
+
+bash
+mkdir -p /opt/warp && cd /opt/warp
+cat > docker-compose.yml <<'EOF'
+services:
+  warp:
+    image: caomingjun/warp
+    container_name: warp
+    restart: always
+    ports: ["127.0.0.1:40000:1080"] # SOCKS5 только на localhost
+    environment: ["WARP_SLEEP=2"]
+    cap_add: ["NET_ADMIN"]
+    sysctls: ["net.ipv4.conf.all.src_valid_mark=1"]
+    volumes: ["./data:/var/lib/cloudflare-warp"]
+EOF
+docker compose up -d && sleep 15 && docker logs warp --tail 20 # ждём "connected"/регистрацию
+
+2. Проверить чистый IP (ключевая проверка: если тут ок, дальше только роутинг):
+
+bash
+curl -x socks5://127.0.0.1:40000 -s https://ipinfo.io/ip; echo
+curl -x socks5://127.0.0.1:40000 -s https://www.cloudflare.com/cdn-cgi/trace | grep warp
+
+IP ≠ IP ноды и warp=on → контейнер работает. Ошибка/таймаут → ещё регистрируется (подожди) или смотри docker logs warp.
+
+3. Outbound warp → socks (вместо wireguard-версии из Шага 2):
+
+js
+{
+ "tag": "warp",
+ "protocol": "socks",
+ "settings": { "servers": [{ "address": "127.0.0.1", "port": 40000 }] }
+}
+
+⚠️ Доступ Xray к localhost хоста. Контейнер ноды должен достучаться до 127.0.0.1:40000 хоста:
+
+bash
+grep -i network_mode /opt/remnanode/docker-compose.yml
+
+network_mode: host → 127.0.0.1 работает напрямую;
+обычная docker-сеть → 127.0.0.1 укажет внутрь контейнера ноды, а не на хост. Тогда: address → 172.17.0.1 (шлюз docker0), или подключи ноду и warp в одну docker-сеть и укажи "address": "warp".
+
+Правила роутинга (какие домены гнать через warp) те же, что в Шаге 3 выше (geosite:openai, domain:gemini.google.com, domain:generativelanguage.googleapis.com и т.д.). Сохрани профиль → нода применит.
+
+Грабли контейнерного WARP: - curl -x socks5://… не даёт чистый IP → контейнер ещё поднимается/регистрируется; жди, смотри docker logs warp. - socks через curl работает, а домен в браузере нет → Xray не достучался до SOCKS: проверь network_mode ноды (скорее всего нужен 172.17.0.1 вместо 127.0.0.1). - Контейнер падает/рестартует → убери sysctls (ipv6) или временно privileged: true. - restart: always → переживает ребут (после перезагрузки проверь docker ps | grep warp, должен быть Up).
+
+Когда какой: native WireGuard легче (без лишнего контейнера), но капризен к reserved/ядру. Контейнерный SOCKS5 тяжелее, зато держит туннель сам и «просто работает». Держи контейнерный как резерв на случай, если native лёг.
+
+Связано: «Маршрутизация (RU-direct)» (общий роутинг), «Все рабочие конфиги» (каркас Config Profile).
+
+Проверено на Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

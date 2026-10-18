@@ -1,0 +1,357 @@
+Заголовок: Балансировка и автовыбор: держим нагрузку
+
+Что это такое. Балансировщик — правило, по которому трафик сам выбирает, через какой из ваших серверов пойти. Без него каждый клиент намертво привязан к одному выходу: упал он — упало всё. С ним трафик разъезжается по нескольким нодам, а когда одна перестаёт отвечать, остальные подхватывают.
+
+Когда он вам не нужен. Если нода одна — балансировать нечего, и настройка только добавит способов сломаться. Заводите его, когда выходов стало хотя бы два.
+
+Дальше — четыре уровня, где балансировку можно сделать: внутри Xray на сервере, в приложении у клиента, на входном сервере перед нодами и на уровне DNS. Начните с первого: остальные нужны реже.
+
+Пять слов, которые дальше встречаются постоянно:
+
+Исходящее соединение (outbound) — описание того, куда Xray отправляет трафик дальше: конкретный сервер-выход. У каждого есть свой тег — короткое имя, по которому на него ссылаются.
+Балансировщик — список тегов плюс правило выбора между ними.
+Стратегия — как именно выбирать: случайно, по кругу, по самому быстрому или по самому стабильному.
+Пробы (health-check) — маленькие проверочные запросы, по которым балансировщик решает, жив узел или нет.
+fallbackTag — куда девать трафик, когда живых узлов не осталось. Без него трафик уходит в первое попавшееся соединение из списка, и это часто прямой выход без VPN.
+
+📖 Незнакомые слова? Все термины простыми словами объяснены в Словаре терминов.
+
+Сборка JSON балансера по тегам нод и стратегии leastLoad/leastPing разобрана в статье «СУПЕР-АВТОВЫБОР».
+
+Уровень 1. Xray-балансеры (серверные, внутри одного xray)
+
+Балансер выбирается правилом роутинга через balancerTag (в правиле: либо balancerTag, либо outboundTag). Сами балансеры находятся в routing.balancers[].
+
+Поля балансера: tag, selector (массив префиксов тегов outbound'ов), fallbackTag (куда, если все «мертвы»), strategy.
+
+Четыре стратегии: - random (по умолчанию): случайно. - roundRobin: по кругу. - leastPing: наименьший пинг (нужен observatory). - leastLoad: стабильнейший под нагрузкой (нужен burstObservatory).
+
+leastPing по трём выходам: каркас стратегии
+
+(здесь settings/streamSettings опущены для наглядности; полные outbound'ы: в готовом профиле «по сервису» ниже)
+
+js
+{
+ "outbounds": [
+ { "tag": "exit-de", "protocol": "vless", "settings": {/*...*/}, "streamSettings": {/*reality*/} },
+ { "tag": "exit-nl", "protocol": "vless", "settings": {/*...*/}, "streamSettings": {/*reality*/} },
+ { "tag": "exit-fi", "protocol": "vless", "settings": {/*...*/}, "streamSettings": {/*reality*/} },
+ { "tag": "direct", "protocol": "freedom" }
+ ],
+ "observatory": {
+ "subjectSelector": ["exit-"],
+ "probeUrl": "https://www.google.com/generate_204",
+ "probeInterval": "10s"
+ },
+ "routing": {
+ "balancers": [
+ { "tag": "bal-exits", "selector": ["exit-"], "fallbackTag": "direct", "strategy": { "type": "leastPing" } }
+ ],
+ "rules": [ { "type": "field", "inboundTag": ["in-client"], "balancerTag": "bal-exits" } ]
+ }
+}
+
+leastLoad (под нагрузкой)
+js
+"burstObservatory": {
+ "subjectSelector": ["exit-"],
+ "pingConfig": { "destination": "https://connectivitycheck.gstatic.com/generate_204",
+ "interval": "1m", "sampling": 10, "timeout": "5s", "httpMethod": "HEAD" }
+},
+"routing": { "balancers": [{
+ "tag": "bal", "selector": ["exit-"],
+ "strategy": { "type": "leastLoad", "settings": { "expected": 2, "maxRTT": "1s", "baselines": ["1s"] } }
+}]}
+
+Грабли (важно): в первом интервале до первой пробы балансер может уйти в fallbackTag → ставьте короткий probeInterval и осмысленный fallback. И помните: балансер распределяет, а не «строго основной, потом запасной». Жёсткий failover «primary → spare» делайте на уровне HAProxy/nginx или клиента.
+
+Боевой «Автовыбор»: готовый шаблон подписки
+
+В Remnawave балансер живёт в XRAY_JSON-шаблоне подписки (subscription_templates): его читают Happ / v2rayTun / Xray-клиенты. Ниже рабочий боевой шаблон: leastLoad по пулу нод + geo-dat-free RU-direct (явные IP-диапазоны и домены: не падает на урезанном geosite.dat) + блок IPv6 / QUIC / торрентов. Полный файл (97 IP-диапазонов + ~516 доменов): кнопкой ниже; в статье список сокращён для читаемости.
+
+⬇️ Скачать шаблон «Автовыбор» (.json)
+js
+{
+ "dns": { "servers": ["1.1.1.1", "1.0.0.1"], "queryStrategy": "UseIPv4" }, // клиентский DNS, только IPv4
+ "log": { "loglevel": "warning" },
+ "routing": {
+ "domainMatcher": "hybrid",
+ "domainStrategy": "IPIfNonMatch",
+ "rules": [
+ { "type": "field", "ip": ["::/0"], "outboundTag": "block" }, // глушим весь IPv6 (нет утечек/mismatch)
+ { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }, // торренты — block (abuse)
+ { "type": "field", "network": "udp", "port": "443", "outboundTag": "block" }, // QUIC off (иначе видео залипает в туннеле)
+ { "type": "field", "outboundTag": "direct",
+ "ip": ["10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+ "84.201.128.0/18", "158.160.0.0/16", "178.154.192.0/18", "/* …+90 РФ-диапазонов (см. файл) */"] },
+ { "type": "field", "outboundTag": "direct",
+ "domain": ["regexp:\\.ru$", "regexp:\\.su$", "regexp:\\.xn--p1ai$",
+ "domain:vk.com", "domain:mail.ru", "domain:ozon.ru", "domain:wildberries.ru",
+ "domain:gosuslugi.ru", "domain:sber.world", "domain:max.ru", "domain:2ip.ru",
+ "domain:ipify.org", "/* …+500 РФ-доменов и анти-фрод (см. файл) */"] },
+ { "type": "field", "network": "tcp,udp", "balancerTag": "AUTO" } // всё остальное → балансер
+ ],
+ "balancers": [
+ {
+ "tag": "AUTO",
+ "selector": ["proxy"],
+ "strategy": { "type": "leastLoad",
+ "settings": { "maxRTT": "2000ms", "expected": 5, "baselines": ["120ms", "250ms", "500ms"] } },
+ "fallbackTag": "proxy"
+ }
+ ]
+ },
+ "inbounds": [
+ { "tag": "socks", "port": 10808, "listen": "127.0.0.1", "protocol": "socks",
+ "settings": { "udp": true, "auth": "noauth" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] } }
+ ],
+ "outbounds": [
+ { "tag": "direct", "protocol": "freedom" },
+ { "tag": "block", "protocol": "blackhole" }
+ ],
+ "remnawave": {
+ "injectHosts": [
+ { "selector": { "type": "tagRegex", "pattern": "^ATCP$" }, "tagPrefix": "proxy", "selectFrom": "ALL" }
+ ]
+ },
+ "burstObservatory": {
+ "subjectSelector": ["proxy"],
+ "pingConfig": { "destination": "http://www.gstatic.com/generate_204", "interval": "10s", "timeout": "2s", "sampling": 2, "connectivity": "" }
+ }
+}
+
+Разбор параметров (что за что отвечает)
+dns: клиентский DNS (1.1.1.1/1.0.0.1), queryStrategy: UseIPv4: резолвим только в IPv4 (v6 не используем).
+routing.rules: порядок сверху вниз, первое совпадение выигрывает (это ключ к пониманию):
+ip: ["::/0"] → block: глушим весь IPv6: многие ноды без v6, а утечка по v6 = реальный IP мимо туннеля.
+bittorrent → block: торренты режем (иначе abuse-жалобы хостеру).
+udp:443 → block: глушим QUIC: иначе YouTube/видео «залипает» в туннеле. Порт-scope не трогает Telegram-звонки/STUN (они не на:443).
+РФ IP-диапазоны (CIDR) → direct: РФ-сети идут напрямую (домашний IP), без geoip:ru (geo-dat-free: не падает на урезанном geoip.dat).
+РФ-домены + IP-чекеры → direct: РФ-сервисы и сайты-проверки IP мимо VPN: домашний IP, анти-фрод не палит «VPN». regexp:\.ru$ ловит 99% РФ, плюс явные не-.ru (vk/mail/ozon/банки/анти-фрод). Тоже geo-dat-free.
+tcp,udp → balancerTag: AUTO: всё остальное (заблокированное) уходит на балансер, который выберет лучшую ноду.
+balancers[].selector: ["proxy"]: префикс: балансер тянет все outbound'ы, чьи теги начинаются на proxy (proxy, proxy-2, proxy-3…). Это и есть пул.
+strategy: leastLoad: выбирает по распределению задержек (baselines 120/250/500 мс), а не по одной мелкой пробе → не залипает на задушенном члене (в отличие от leastPing). expected: 5: целевое число «здоровых» членов, maxRTT: 2000ms: медленнее этого отсекаем.
+fallbackTag: "proxy": если все члены «мертвы», берём первый proxy (чтобы хоть что-то работало).
+inbounds.socks 127.0.0.1:10808: локальный вход клиента (его подставляет само приложение).
+outbounds: direct (freedom) и block (blackhole); proxy-члены подставит injectHosts (их тут писать не нужно).
+remnawave.injectHosts: расширение Remnawave: берёт все хосты с тегом ровно ATCP и инжектит их как proxy, proxy-2, … selectFrom: ALL = (хосты по тегу) ∩ (инбаунды сквода юзера).
+burstObservatory: пингует members (proxy*) на generate_204 каждые 10 с: это и есть данные, по которым leastLoad решает.
+Как добавлять ноды в балансировщик
+
+Пул собирается тегом хоста, а не правкой шаблона: добавить/убрать ноду можно за 10 секунд:
+
+Поднимите ноду и её inbound (лучше gRPC/xHTTP, не raw+Vision, см. «СУПЕР-АВТОВЫБОР», иначе балансер залипает на задушенном raw).
+В Hosts → создать host на этот inbound. Поставьте хосту метку Tags = ATCP (ровно так, регистр важен, он должен совпадать с pattern: "^ATCP$").
+Сделайте хост скрытым (is_hidden): он нужен только в пуле балансера, отдельной плиткой у клиента быть не должен.
+Готово: injectHosts ^ATCP$ сам подхватит его как очередной proxy-N, и leastLoad начнёт раскидывать на него нагрузку. Шаблон править не нужно.
+Убрать ноду из пула: смените её тег (или удалите хост). Добавить ещё: повторите с тем же тегом ATCP.
+
+⚠️ Тонкости: - Все члены пула должны быть в скваде тарифа (selectFrom: ALL = хосты по тегу ∩ инбаунды сквода). Нет ноды в скваде: нет её в пуле этого тарифа. - Нужен второй независимый пул (напр. для другого тарифа/обхода): заведите второй injectHosts с другим тегом (^BYPASS$ → tagPrefix: "proxyb") и второй балансер с selector: ["proxyb"]. - Кладите в пул gRPC/xHTTP-хосты: raw+Vision душится ТСПУ, и балансер на нём «работает→заглохает». - ⚠️ Балансер работает только в XRAY_JSON-выдаче. В legacy base64 «Автовыбор» выродится в одиночный сервер: это нормально, base64 групп не умеет.
+
+Этот «Автовыбор» часто «работает → заглохает» (leastPing залипает на задушенном raw+Vision). Прокачанная версия: gRPC-first leastLoad по прямым нодам + geo-dat-free роутинг с анти-фрод-логикой, смотрите в статье «СУПЕР-АВТОВЫБОР» (готовый шаблон внутри).
+
+Сервис-зависимый «Автовыбор» (нода выбирается по сервису)
+
+Самый мощный вариант: куда пойдёт юзер, зависит от того, к какому сервису он подключается. Это routing.rules + несколько балансеров: банки/госуслуги → российский выход, стриминг → отдельный пул «чистых» нод, остальное → общий пул по быстрейшему пингу.
+
+Полный профиль (вставляется целиком в Config Profile входа, поменять ←):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "in-client",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "your-donor.com:443", // ← донор (TLS1.3-сайт)
+ "serverNames": ["your-donor.com"],
+ "privateKey": "PRIVATE_KEY_ENTRY", // ← privateKey входа (генератор панели)
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "direct", "protocol": "freedom" },
+ { "tag": "block", "protocol": "blackhole" },
+ {
+ "tag": "exit-ru",
+ "protocol": "vless",
+ "settings": { "vnext": [ { "address": "ru-exit.your-domain.com", "port": 443, "users": [ { "id": "BRIDGE_USER_UUID", "flow": "xtls-rprx-vision", "encryption": "none" } ] } ] },
+ "streamSettings": { "network": "raw", "security": "reality", "realitySettings": { "publicKey": "RU_EXIT_PUBLIC_KEY", "serverName": "your-donor.com", "shortId": "", "fingerprint": "firefox" } }
+ },
+ {
+ "tag": "stream-de",
+ "protocol": "vless",
+ "settings": { "vnext": [ { "address": "de1.your-domain.com", "port": 443, "users": [ { "id": "BRIDGE_USER_UUID", "flow": "xtls-rprx-vision", "encryption": "none" } ] } ] },
+ "streamSettings": { "network": "raw", "security": "reality", "realitySettings": { "publicKey": "DE_EXIT_PUBLIC_KEY", "serverName": "your-donor.com", "shortId": "", "fingerprint": "firefox" } }
+ },
+ {
+ "tag": "stream-nl",
+ "protocol": "vless",
+ "settings": { "vnext": [ { "address": "nl1.your-domain.com", "port": 443, "users": [ { "id": "BRIDGE_USER_UUID", "flow": "xtls-rprx-vision", "encryption": "none" } ] } ] },
+ "streamSettings": { "network": "raw", "security": "reality", "realitySettings": { "publicKey": "NL_EXIT_PUBLIC_KEY", "serverName": "your-donor.com", "shortId": "", "fingerprint": "firefox" } }
+ },
+ {
+ "tag": "gen-de",
+ "protocol": "vless",
+ "settings": { "vnext": [ { "address": "de2.your-domain.com", "port": 443, "users": [ { "id": "BRIDGE_USER_UUID", "flow": "xtls-rprx-vision", "encryption": "none" } ] } ] },
+ "streamSettings": { "network": "raw", "security": "reality", "realitySettings": { "publicKey": "DE2_EXIT_PUBLIC_KEY", "serverName": "your-donor.com", "shortId": "", "fingerprint": "firefox" } }
+ },
+ {
+ "tag": "gen-fi",
+ "protocol": "vless",
+ "settings": { "vnext": [ { "address": "fi1.your-domain.com", "port": 443, "users": [ { "id": "BRIDGE_USER_UUID", "flow": "xtls-rprx-vision", "encryption": "none" } ] } ] },
+ "streamSettings": { "network": "raw", "security": "reality", "realitySettings": { "publicKey": "FI_EXIT_PUBLIC_KEY", "serverName": "your-donor.com", "shortId": "", "fingerprint": "firefox" } }
+ }
+ ],
+ "observatory": {
+ "subjectSelector": ["stream-", "gen-"],
+ "probeUrl": "https://www.google.com/generate_204",
+ "probeInterval": "10s"
+ },
+ "routing": {
+ "balancers": [
+ { "tag": "bal-stream", "selector": ["stream-"], "fallbackTag": "gen-de", "strategy": { "type": "leastPing" } },
+ { "tag": "bal-general", "selector": ["gen-"], "fallbackTag": "direct", "strategy": { "type": "leastPing" } }
+ ],
+ "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "block" },
+ { "protocol": ["bittorrent"], "outboundTag": "block" },
+ { "domain": ["geosite:category-ru", "domain:sberbank.ru", "domain:tinkoff.ru", "domain:gosuslugi.ru", "domain:nalog.ru"], "outboundTag": "exit-ru" },
+ { "ip": ["geoip:ru"], "outboundTag": "exit-ru" },
+ { "domain": ["geosite:youtube"], "outboundTag": "exit-ru" },
+ { "ip": ["geoip:google"], "outboundTag": "exit-ru" },
+ { "domain": ["geosite:netflix", "geosite:disney"], "balancerTag": "bal-stream" },
+ { "network": "tcp,udp", "balancerTag": "bal-general" }
+ ]
+ }
+}
+
+Что делают правила (сверху вниз, первое совпадение): - банки/госуслуги + geoip:ru → exit-ru (РФ-выход, низкий пинг, не «вход из-за рубежа»); - geosite:youtube + geoip:google → exit-ru (РФ-IP) → YouTube почти без рекламы (Google свернул рекламу в РФ). ⚠️ РФ-IP убирает рекламу, но не замедление: чтобы видео не буферило, РФ-выход должен обходить троттлинг (zapret, см. «Быстрый YouTube…»); - Netflix/Disney → bal-stream (пул «чистых» нод, быстрейшая); - всё остальное → bal-general (общий пул по leastPing). - Это и есть «нода по сервису»: правило сверху вниз, что подошло первым, туда и ушло. Банк → РФ-нода; YouTube → стриминг-пул; остальное → общий leastPing. - В Remnawave живёт двумя путями: (а) клиентский шаблон XRAY_JSON (как наш «Автовыбор» выше: injectHosts подставляет ноды-члены, balancers/rules делают выбор по сервису); (б) серверный: те же routing.rules в Config Profile каскадного входа (тогда выбор делает нода, клиент видит один хост). - geosite:*: встроенные списки доменов Xray; свой список банков/сервисов добавляйте доменами явно.
+
+Уровень 2. Клиентский балансер через подписку (urltest)
+
+Кладёте в подписку несколько серверов, клиент сам выбирает быстрейший. Канон это sing-box urltest:
+
+js
+{
+ "type": "urltest",
+ "tag": "auto",
+ "outbounds": [
+ "exit-de",
+ "exit-nl",
+ "exit-fi"
+ ],
+ "url": "https://www.gstatic.com/generate_204",
+ "interval": "3m",
+ "tolerance": 50,
+ "idle_timeout": "30m"
+}
+
+tolerance (мс): гистерезис, чтобы не «прыгал» между близкими серверами.
+Hiddify «Auto» = тот же urltest под капотом; v2rayNG/NekoBox: «real delay/URL test» и выбор быстрейшего вручную.
+Минус: бесшовного failover посреди соединения тут нет: при обрыве клиент перетестирует и переподключится.
+Уровень 3. Транспортный фронт (HAProxy / nginx): по SNI, без расшифровки
+
+Самый надёжный для коммерции: L4-балансер перед нодами, маршрутизирует по SNI (имя сайта, видное в начале TLS-рукопожатия) не расшифровывая TLS (Reality остаётся целым).
+
+HAProxy (TCP / SNI)
+haproxy
+frontend ft_ssl
+ bind 0.0.0.0:443
+ mode tcp
+ tcp-request inspect-delay 5s
+ tcp-request content accept if { req_ssl_hello_type 1 }
+ acl sni_n1 req_ssl_sni -i www.cloudflare.com
+ use_backend bk_node1 if sni_n1
+ default_backend bk_pool
+
+backend bk_pool
+ mode tcp
+ balance leastconn # roundrobin | leastconn | source
+ option ssl-hello-chk # пассивный health-check
+ server n1 10.0.0.11:443 check
+ server n2 10.0.0.12:443 check
+ server n3 10.0.0.13:443 check backup # backup = только при падении основных (failover)
+
+leastconn: меньше всего активных соединений (идеально для VPN: сессии длинные, roundrobin перегрузит «счастливчика»).
+source: хэш по IP клиента → липкость (TCP и UDP/инвентарь клиента летят на одну ноду).
+backup: настоящий failover; check+ssl-hello-chk: активная проверка.
+nginx stream + ssl_preread (маршрут по SNI без терминации)
+nginx
+stream {
+ map $ssl_preread_server_name $upstream {
+ www.cloudflare.com node1_pool;
+ default node_pool;
+ }
+ upstream node1_pool { least_conn; server 10.0.0.11:443; server 10.0.0.14:443; }
+ upstream node_pool { least_conn; server 10.0.0.12:443; server 10.0.0.13:443 backup; }
+ server {
+ listen 443;
+ ssl_preread on; # читаем SNI из ClientHello, TLS НЕ терминируем
+ proxy_pass $upstream;
+ }
+}
+
+Методы: least_conn, hash $remote_addr consistent (липкость, ketama), по умолчанию round-robin.
+max_fails/fail_timeout: пассивный health; backup/down: failover/слив ноды. Активный health в stream: только в nginx Plus.
+
+⚠️ HAProxy/nginx stream по SNI: только TCP. Hysteria2 это QUIC/UDP, его так не сбалансировать по SNI. Для Hysteria2: отдельный путь (DNS / port-hopping / по ноде).
+
+Уровень 4. DNS round-robin / GeoDNS: грубо
+
+Один домен → несколько A-записей (или ответ по гео). Плюс: работает для любого протокола, включая Hysteria2. Минусы и почему «грубо»: - Нет проверки здоровья: мёртвая нода в ротации до правки DNS + истечения TTL (а TTL резолверы часто игнорят). - РКН спуфит/блокирует DNS → домен можно отравить. Для РФ отдавайте в подписке сырые IP (или DoH/DoT в клиенте), а GeoDNS: только как грубое гео-направление, не как failover.
+
+Что выбрать под VPN-сервис
+Стратегия	Оптимизирует	Липкость	Health	Когда
+Failover (HAProxy/nginx backup)	аптайм	нет	да	пережить блок ноды: основные + горячий резерв
+Round-robin	равномерность	нет	частично	однородные ноды, короткие соединения
+Least-conn	нагрузка на длинных сессиях	нет	частично	реальный VPN (сессии длинные)
+Least-ping (Xray leastPing / urltest)	скорость для юзера	нет	да	мульти-регион, выбрать быстрейший
+Least-load (leastLoad)	стабильность под нагрузкой	нет	да	разнокалиберные ноды, всплески
+Source-hash	липкость	да	частично	держать TCP+UDP юзера на одной ноде
+GeoDNS/DNS-RR	грубое гео	неконтролируемо	нет	крайний случай, мульти-протокол
+
+Рекомендация: фронт HAProxy/nginx SNI-passthrough + leastconn + backup-ноды (failover и длинные сессии), сверху клиентский urltest (юзер сам берёт быстрейший регион), и Xray leastPing: только если одна нода веером уходит на несколько выходов/каскадов (наш «Автовыбор»).
+
+Если балансировщик ведёт себя странно
+
+Эти случаи разобраны на живом трафике, а не по документации: у leastLoad поведение неочевидное.
+
+Симптом	Почему так	Что сделать
+Выходной адрес прыгает от соединения к соединению, сервисы видят то одну страну, то другую	С параметром baselines стратегия берёт все узлы, уложившиеся в первый подходящий порог, и на каждое соединение выбирает среди них случайно	Уберите baselines и оставьте expected: 1 — тогда берётся ровно один верхний узел и выход перестаёт скакать
+Назначили узлу приоритет через costs, а он всё равно не выигрывает	leastLoad сортирует не по средней задержке, а по разбросу задержки, умноженному на корень из cost. У стабильных узлов разброс — единицы миллисекунд, и умножение на 10 не выводит их за порог	Строгий приоритет делается отдельным балансировщиком, у которого в selector только нужный тег, плюс fallbackTag на запасной выход
+Резервный слабый узел стал выигрывать у основного	Подняли sampling до двух и больше: ключом стал разброс задержки, а стабильный резерв «дрожит» меньше нагруженного основного	Верните sampling: 1
+Нода заблокирована, но балансировщик продолжает слать в неё трафик	Проба отправляет запрос без тела и не проверяет код ответа: узел, который отвечает, но душит трафик, она считает живым	Не полагайтесь на пробы как на единственную защиту: держите fallbackTag и следите за нодами отдельным мониторингом
+Трафик пошёл мимо VPN, в прямой выход	fallbackTag не задан, поэтому взялось первое исходящее соединение из списка	Всегда указывайте fallbackTag точным тегом. Несуществующий тег безопаснее пустого: соединение просто закроется, утечки не будет
+Прописали tolerance, ничего не изменилось	В ядре 26.3.27 это поле не читается	Не рассчитывайте на него на этой версии
+Правило не применилось, трафик идёт как раньше	В одном правиле указаны сразу balancerTag и outboundTag	Оставьте что-то одно: либо балансировщик, либо конкретный выход
+Автопереход у клиента не срабатывает	Клиент получает подписку не в формате JSON	Переключение между выходами на стороне приложения работает только у клиентов, которые читают JSON-подписку, и занимает примерно минуту
+Сразу после перезапуска ядра трафик ушёл не туда	Проб ещё нет, и первые доли секунды всё идёт в fallbackTag	Это нормально. Именно поэтому в fallbackTag нельзя ставить прямой выход
+Чего балансировщик не даёт
+Не ускоряет. Он выбирает из того, что есть: если все ноды медленные, быстрее не станет.
+Не замечает «полумёртвые» ноды. Узел, который отвечает на пробу, но режет реальный трафик, для балансировщика живой.
+Не спасает от блокировки всей подсети. Если выбило всех соседей по хостеру, переключаться будет некуда — разносите ноды по разным провайдерам.
+Усложняет отладку. Когда у клиента «иногда работает», причиной часто оказывается именно переключение между выходами, а не сеть.
+Не заменяет мониторинг. Он реагирует на свои пробы, а не на жалобы людей.
+Надёжность: health-check и авто-слив заблокированной ноды
+Проверять из РФ, а не только глобально. Нода может быть жива в мире, но зарезана TSPU для российских клиентов, это xray-observatory (он пингует с самой ноды) не видит. Держите внешний воркер с RU-точки, который бьёт в:443 каждой ноды.
+Слить ноду механически: HAProxy set server bk/n1 state maint (рантайм-API), nginx: пометить down + reload, в подписке: перегенерить без мёртвой ноды (клиенты с urltest сами выкинут мёртвый сервер).
+Горячий резерв входов: держите N заранее поднятых входных IP в разных ASN; при блоке: в пул фронта/подписку, мёртвый: в drain. Благодаря каскаду (выход и ключи не меняются) замена входа дешёвая.
+
+Дальше: обход блокировок целиком и безопасность.
+
+Проверено на Xray-core 26.3.27 и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

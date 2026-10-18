@@ -1,0 +1,280 @@
+Заголовок: Yandex CDN (рекомендую): рабочий РФ-фронт
+
+⛔ Главное с 28.07.2026: ориджин должен быть в России. Яндекс начал резать доступ к CDN-ресурсам, у которых источник (origin) это зарубежный сервер. По нашим наблюдениям уже забанены подсети play2go и aeza, и похоже, что дальше под раздачу попадёт остальной зарубеж. Симптом: всё настроено по шагам, а ресурс не встаёт или отдаёт ошибки на пустом месте. Рабочая схема: ориджин на РФ-сервере, а за границу трафик уходит уже каскадом с него (см. Каскад: вход в РФ, чистый выход). Если CDN «не заводится», первым делом переносите ориджин на российский сервер, это чинит в большинстве случаев.
+
+Что здесь получится. Ваш сервер перестаёт быть виден снаружи: клиент подключается к домену в сети Яндекса, а тот уже ходит к вам. Блокировка по адресу сервера перестаёт работать — блокировать пришлось бы саму сеть Яндекса, чего никто не делает. Занимает примерно час, из них полчаса уходит на ожидание, пока настройки разъедутся по серверам Яндекса.
+
+Кому это нужно. Тем, у кого адрес ноды уже заблокировали и смена адреса помогает ненадолго. Если у вас просто медленно — это не ваш случай, CDN добавляет задержку, а не убирает её.
+
+Это разбор одного провайдера. Что такое CDN-фронтинг, режимы «через GET / через POST» и общая база (XHTTP-инбаунд) разобраны в обзорной статье «CDN-фронтинг: спрятать ноду за CDN».
+
+Из всех российских CDN это самый предсказуемый фронт, и именно его я рекомендую как основной CDN-резерв для РФ. Сеть Яндекса «своя» для ТСПУ (российской фильтрации трафика у операторов), трафик к ней не режут, домен стабилен и не «протухает». Материал взят из реального внедрения (заменили нестабильный Beget CDN на Yandex). Стек: Remnawave + Xray-core 26.x + nginx + Yandex Cloud CDN (ourcdn) + Certificate Manager.
+
+📖 Незнакомые слова? Все термины простыми словами смотрите в Словаре терминов.
+
+✅ Плюсы: «своя» для ТСПУ сеть (не режется), стабильный домен и серты, предсказуемость, бесплатный/дешёвый трафик в рамках Yandex Cloud. ❌ Минусы: режет POST на эдже (отдаёт 405) → нужен GET-only xHTTP (транспорт за CDN; аплинк в заголовке); настройка только через yc CLI; +0.4–0.5 с латентности (общая беда CDN-фронта).
+
+Главная засада, которая экономит день: Yandex CDN (провайдер ourcdn) режет метод POST на эдже. Стандартный xHTTP шлёт аплинк через POST → через Yandex он не заработает. Лечится переводом транспорта в GET-only (uplinkHTTPMethod: GET, данные аплинка передаются в HTTP-заголовке). Провайдер gcore у Яндекса deprecated, активируется только ourcdn.
+
+Пять слов, которые дальше встречаются постоянно
+Эдж — сервер сети Яндекса, ближайший к вашему клиенту. Именно к нему человек и подключается.
+Ориджин (он же источник) — ваш сервер, с которого CDN забирает данные. Клиент его не видит.
+GSLB — то, что решает, какой эдж отдать конкретному клиенту. Первые полчаса после настройки может отдавать разные, и часть из них ещё не знает про ваш сертификат.
+Прогрев — те самые 15–30 минут, пока сертификат и настройки расходятся по всем эджам.
+Аплинк — то, что клиент отправляет наверх (запросы), в отличие от того, что он скачивает. У Яндекса аплинк приходится передавать заголовками, и это главное ограничение схемы.
+Архитектура
+text
+ TLS (SNI = CDN-домен), ALPN h2
+ [ Xray-клиент ] ──VLESS/xHTTP──► [ Yandex CDN edge ] ──HTTPS──► [ origin nginx:443 ]
+ ⚠️ РФ-сервер (иначе Яндекс режет)
+ │
+ каскад ▼
+ [ загран-выход ]
+ (Happ и т.п.) (терминирует TLS, (LE-серт на origin-FQDN)
+ GET проходит, POST=405) │ proxy_pass
+ ▼
+ [ Xray xHTTP inbound:10086 ]
+ (listen 127.0.0.1, GET-only)
+ │
+ ▼ outbound → интернет
+
+Два домена: - публичный CDN-домен (cdn.your.domain): к нему коннектится клиент; CNAME → эдж Яндекса. - ориджин-домен (origin.your.domain): откуда CDN тянет контент; A-запись → IP сервера с валидным LE-сертом; DNS «серый» (DNS only).
+
+Предусловия
+Аккаунт Yandex Cloud + установленный/авторизованный yc CLI (yc config list показывает cloud-id/folder-id).
+Управляемый DNS (например, Cloudflare), записи в режиме DNS only (серое облако).
+Origin-сервер: nginx + Xray, валидный Let's Encrypt-серт на ориджин-домен, порт 443 открыт.
+Xray-ядро с поддержкой xHTTP extra (xray-core ≥ 1.8.x / 26.x, поля SplitHTTPConfig).
+Шаг 1. Активировать CDN-провайдер
+bash
+yc cdn provider activate --type ourcdn # gcore — DEPRECATED, не активируется
+yc cdn provider list-activated # должно показать: ourcdn
+
+Шаг 2. Выпустить TLS-серт (Certificate Manager, Let's Encrypt, DNS-01)
+bash
+yc certificate-manager certificate request \
+ --name cdn-cert --domains cdn.your.domain --challenge dns
+
+# забрать запись валидации (challenge виден только с --full):
+yc certificate-manager certificate get --name cdn-cert --full --format json
+
+В выводе будет CNAME вида _acme-challenge.cdn.your.domain CNAME <id>.cm.yandexcloud.net. Добавляем её в DNS (DNS only). Берём именно CNAME, а не TXT: при автопродлении значение за CNAME меняет сам Яндекс, запись трогать не нужно. Ждём status: ISSUED (1–10 минут):
+
+bash
+yc certificate-manager certificate get --name cdn-cert --format json | jq -r.status
+
+Шаг 3. Создать ориджин-группу
+bash
+yc cdn origin-group create --name my-origin \
+ --origin source=origin.your.domain,enabled=true
+# запоминаем выданный origin-group-id
+
+Шаг 4. Создать CDN-ресурс (+ выключить кэш)
+bash
+yc cdn resource create \
+ --cname cdn.your.domain \
+ --origin-group-id <ORIGIN_GROUP_ID> \
+ --origin-protocol https \
+ --host-header origin.your.domain \
+ --cert-manager-ssl-cert-id <CERT_ID> \
+ --active=true
+
+Грабли ourcdn при создании: - булевы флаги требуют явного =true (--active=true); - POST задать нельзя ни при создании (method POST is not allowed during creation), ни позже (POST management is unavailable), поэтому и нужен GET-only.
+
+Выключить кэш обязательно (иначе эдж закэширует ответы xHTTP и сломает сессии):
+
+bash
+yc cdn resource update --id <RESOURCE_ID> --cache-expiration-time 0
+
+⚠️ У ourcdn флаг --disable-cache это no-op (в опциях остаётся edge_cache_settings: 86400). Реально выключает только --cache-expiration-time 0 (после него edge_cache_settings.value = 0).
+
+Забрать CNAME-таргет эджа:
+
+bash
+yc cdn resource get --id <RESOURCE_ID> --format json | jq -r.provider_cname
+# например: d01529f5e12f015a.topology.gslb.yccdn.ru
+
+Шаг 5. Направить публичный домен на эдж
+
+В DNS: cdn.your.domain CNAME <provider_cname> (DNS only / серое).
+
+Эдж ourcdn прогревается 15–30 минут: серт и fetch-конфиг разъезжаются по эджам постепенно, GSLB первое время «флапает» (часть эджей ещё отдаёт дефолтный *.yccdn.cloud.yandex.net). Это нормально, нужно подождать.
+
+Соберите команды под свои домены
+
+Впишите свои имена — получите готовую последовательность вместо your.domain из примеров выше.
+
+Публичный домен (к нему идёт клиент)
+Домен источника (ваш сервер)
+Имя сертификата в Yandex Cloud
+Путь, по которому ходит клиент
+ВАШИ КОМАНДЫ
+Скопировать
+Код
+# 1. включаем провайдера (gcore больше не активируется)
+yc cdn provider activate --type ourcdn && yc cdn provider list-activated
+
+# 2. заказываем сертификат на публичный домен
+yc certificate-manager certificate request --name cdn-cert --domains cdn.example.com --challenge dns
+yc certificate-manager certificate get --name cdn-cert --full --format json
+# в выводе будет CNAME _acme-challenge.cdn.example.com — добавьте его в DNS в режиме DNS only
+# ждём статус ISSUED (от минуты до десяти):
+yc certificate-manager certificate get --name cdn-cert --format json | jq -r.status
+
+# 3. группа источников
+yc cdn origin-group create --name origin-origin --origin source=origin.example.com,enabled=true
+# запомните выданный origin-group-id и id сертификата
+
+# 4. сам ресурс (подставьте два id из предыдущих шагов)
+yc cdn resource create \
+ --cname cdn.example.com \
+ --origin-group-id <ORIGIN_GROUP_ID> \
+ --origin-protocol https \
+ --host-header origin.example.com \
+ --cert-manager-ssl-cert-id <CERT_ID> \
+ --active=true
+
+# 5. выключаем кэш (иначе эдж запомнит ответы и сломает сессии)
+yc cdn resource update --id <RESOURCE_ID> --cache-expiration-time 0
+
+# 6. забираем имя эджа и ставим его CNAME для публичного домена
+yc cdn resource get --id <RESOURCE_ID> --format json | jq -r.provider_cname
+# в DNS: cdn.example.com CNAME <это значение целиком>, режим DNS only
+
+# 7. проверка с ЧУЖОГО сервера, не из-под своего же VPN
+dig +short cdn.example.com CNAME # должно совпасть с provider_cname символ в символ
+curl -s -o /dev/null -w "GET %{http_code} tls=%{ssl_verify_result}\n" https://cdn.example.com/api/v4/media/session/poll
+# ждём 404 или 400 и tls=0 — значит запрос дошёл до вашего Xray сквозь CDN
+curl -s -o /dev/null -w "POST %{http_code}\n" -X POST --data x https://cdn.example.com/api/v4/media/session/poll
+# ждём 405 — это не поломка, Яндекс так и должен резать POST
+Шаг 6. Xray: GET-only xHTTP-инбаунд (на ориджине)
+
+Сердце обхода POST-блокировки. Инбаунд слушает localhost, наружу его публикует nginx. Ключ: uplinkHTTPMethod: GET + аплинк в заголовке (uplinkDataPlacement: header), путь «правдоподобный» (под вид API-поллинга). Клиентский extra должен 1-в-1 совпадать с этим блоком.
+
+js
+{
+ "log": { "loglevel": "warning" },
+ "inbounds": [
+ {
+ "tag": "VLESS_XHTTP_CDN_GET",
+ "port": 10086,
+ "listen": "127.0.0.1",
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "none",
+ "xhttpSettings": {
+ "mode": "packet-up",
+ "path": "/api/v4/media/session/poll",
+ "extra": {
+ "xmux": {
+ "maxConcurrency": "8-16", "cMaxReuseTimes": "128-256",
+ "hKeepAlivePeriod": 30, "hMaxRequestTimes": "600-1000",
+ "hMaxReusableSecs": "1800-3600"
+ },
+ "headers": {
+ "Accept": "application/vnd.api+json, application/json, text/plain, */*",
+ "Cache-Control": "no-cache", "Pragma": "no-cache",
+ "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+ },
+ "uplinkHTTPMethod": "GET",
+ "uplinkDataPlacement": "header",
+ "uplinkDataKey": "X-Playback-Token",
+ "serverMaxHeaderBytes": 32768,
+ "sessionKey": "media_sid", "sessionPlacement": "path",
+ "seqKey": "offset", "seqPlacement": "query",
+ "xPaddingKey": "q", "xPaddingPlacement": "query",
+ "xPaddingMethod": "tokenish", "xPaddingBytes": "48-320", "xPaddingObfsMode": true,
+ "scMaxBufferedPosts": 64, "scMaxEachPostBytes": "1536-6144",
+ "scMinPostsIntervalMs": "10-30"
+ }
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": {
+ "rules": [
+ { "type": "field", "protocol": ["bittorrent"], "outboundTag": "BLOCK" },
+ { "type": "field", "ip": ["geoip:private"], "outboundTag": "BLOCK" }
+ ]
+ }
+}
+
+⚠️ Вставляйте профиль целиком, вместе с inbounds/outbounds/routing. Если скопировать только сам инбаунд (то, что внутри inbounds[]), свежая панель Remnawave отклонит его с ошибкой Config doesn't have inbounds — она ждёт полный config profile, а не фрагмент. Добавляете инбаунд к уже существующему профилю — кладите его в массив config.inbounds[], не заменяя чужие теги. Почему mode: packet-up, а не stream-up: GET-аплинк валиден только в packet-up. stream-up через CDN к тому же часто регрессирует (CDN буферит длинный POST-стрим). Outbound: обычный freedom + роутинг (блок geoip:private, bittorrent, udp/443 чтобы QUIC ушёл на TCP).
+
+Шаг 7. nginx на ориджине (роут пути в Xray)
+
+Critically: выключить буферизацию и кэш, длинные таймауты, без лимита тела.
+
+nginx
+location /api/v4/media/session/poll {
+ proxy_pass http://127.0.0.1:10086;
+ proxy_http_version 1.1;
+ proxy_set_header Host $host;
+ proxy_set_header X-Real-IP $remote_addr;
+ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ proxy_set_header X-Forwarded-Proto https;
+ proxy_buffering off;
+ proxy_request_buffering off;
+ proxy_cache off;
+ proxy_read_timeout 3600s;
+ proxy_send_timeout 3600s;
+ client_max_body_size 0;
+}
+
+nginx -t && systemctl reload nginx. (Несколько фронтов на одном ориджине разводятся по разным location-путям на разные локальные порты Xray.)
+
+Шаг 8. Клиентский хост (Remnawave)
+address / sni / host = публичный CDN-домен (cdn.your.domain), port 443;
+security TLS, network xhttp, path = тот же, что у инбаунда;
+alpn h2,http/1.1, fingerprint firefox;
+xHttpExtraParams = тот же блок extra, что и на сервере (GET-only), иначе клиент ловит 400.
+
+🔴 ЗАПАСНОЙ ВАРИАНТ: «сервер ок (форк-тест выходит), а у клиента 400 / нет интернета»: sessionPlacement: "path" (НЕ cookie/query). Это самая коварная засада GET-only: клиенты вроде Happ честно исполняют sessionPlacement и кладут session-id в cookie/query: GET /…/poll/?media_sid=<id>&offset=0. А Xray-сервер (26.x) sessionPlacement фактически игнорирует и ждёт session-id в пути: GET /…/poll/<id>?offset=0. Не совпало → сервер отбивает 400 на КАЖДЫЙ запрос → у юзера «подключилось, но нет интернета». Почему ловится не сразу: форк-тест на голом Xray-клиенте тоже шлёт session в путь (он sessionPlacement игнорит) → e2e через CDN проходит → создаётся ложное ощущение «сервер рабочий, виноват клиент». Не верьте только форк-тесту, проверяйте реальным клиентом. Диагностика (решает за минуту): origin-nginx access-лог (docker logs remnawave-nginx | grep poll, либо access.log): сравнить GET-строки: рабочая /…/poll/<sid>?offset=0 → 200, сломанная /…/poll/?media_sid=<sid>&offset=0 → 400. Реальный IP юзера смотрите в конце строки (X-Forwarded-For). Фикс: sessionPlacement: "path" в блоке extra и на сервере, и в клиентской ссылке (seqPlacement: "query" оставить: offset в query Xray принимает нормально). ⚠️ Happ кэширует конфиг: сменил ссылку → в клиенте удали старый профиль и импортни заново, иначе возьмёт старое.
+
+Проверка
+
+С нейтральной точки (с любого сервера, НЕ с машины за своим VPN, иначе локальный прокси перехватит curl и отдаст мусор edge_ip=127.0.0.1):
+
+bash
+# downlink GET — ждём 404/400 (= Xray достигнут сквозь CDN), TLS должен верифаться
+curl -s -o /dev/null -w "GET %{http_code} tls=%{ssl_verify_result} %{time_total}s\n" \
+ https://cdn.your.domain/api/v4/media/session/poll
+# → HTTP 404, tls=0
+
+# проверка, что POST режется эджем (это диагностика, не ошибка):
+curl -s -o /dev/null -w "POST %{http_code}\n" -X POST --data x \
+ https://cdn.your.domain/api/v4/media/session/poll
+# → 405 (именно поэтому GET-only)
+
+Финальная проверка: реальный конект VLESS-клиентом (Happ/v2rayN/sing-box): curl'ом полноценную xHTTP-сессию не воспроизвести. Если TLS не верифается, а серт *.yccdn.cloud.yandex.net, значит эдж ещё не прокатил кастомный серт, ждём прогрев.
+
+Если не получилось
+Симптом	Что проверить	Что сделать
+Публичный домен вообще не резолвится (NXDOMAIN)	dig +short cdn.домен CNAME и длину имени: у эджа это ровно 16 знаков из цифр и букв a–f перед.topology.gslb.yccdn.ru	Зона Яндекса отвечает на любое имя правильной длины, поэтому NXDOMAIN значит опечатку или обрезанную запись в DNS, а не удалённый ресурс. Подобрать пропавший символ нельзя: возьмите provider_cname заново из yc cdn resource get и вставьте целиком
+Сквозь эдж приходит 502, а источник живой	Слушает ли источник HTTPS на 443: ss -tlnp sport =:443	Яндекс ходит к источнику по HTTPS. Если там только 80-й порт, сервер отвечает сбросом соединения, а клиент видит 502. Поднимите TLS с валидным сертификатом на домен источника
+Сертификат не ваш (*.yccdn.cloud.yandex.net), HTTP=000	Сколько прошло с момента настройки	Первые 15–30 минут часть эджей ещё не получила ваш сертификат. Это прогрев, надо подождать. Если не прошло и через час — проверьте, что в ресурсе указан id вашего сертификата
+POST через эдж отдаёт 405, соединение не встаёт	Метод аплинка в инбаунде	Так и задумано: Яндекс режет POST. Переведите xHTTP в режим GET-only, тогда данные уедут заголовком
+gcore provider is deprecated	Тип провайдера в команде	Активируется только --type ourcdn, старый gcore Яндекс отключил
+--disable-cache не выключает кэш	yc cdn resource get → edge_cache_settings	У ourcdn этот флаг ничего не делает. Выключает только --cache-expiration-time 0, после него значение станет нулём
+method POST is not allowed during creation или POST management is unavailable	—	POST на ресурсе не включается ни при создании, ни потом. Не тратьте время, идите в GET-only
+Ресурс не встаёт, ошибки на ровном месте, источник за границей	Где физически стоит сервер-источник	⛔ С 28.07.2026 Яндекс режет зарубежные источники (первыми попали подсети play2go и aeza). Перенесите источник на российский сервер, а за границу уходите каскадом
+curl с рабочей машины показывает edge_ip=127.0.0.1	Не включён ли у вас VPN или локальный прокси	Он перехватывает запрос, и вы измеряете себя. Проверяйте с чистого чужого сервера
+Клиент получает 400 при подключении	Совпадают ли параметры extra на сервере и в ссылке	Любое расхождение между серверным extra и xHttpExtraParams в клиенте ломает сессию. Сверьте их символ в символ
+Клиент 400 или «нет интернета», хотя тест на самом сервере проходит	Куда клиент кладёт идентификатор сессии	Happ кладёт его в cookie или в строку запроса, а Xray ждёт в пути. Поставьте sessionPlacement: "path" в extra и в ссылке, затем удалите и заново импортируйте подписку в Happ
+В логах nginx на источнике нет запросов от Яндекса вообще	Резолвится ли публичный домен и приходит ли трафик: tcpdump -ni any port 443 and host АДРЕС_ИСТОЧНИКА	Пусто — проблема до источника: CNAME, прогрев или зарубежное размещение. Есть SYN и сброс в ответ — смотрите строку про 502
+Границы применимости
+
+CDN-фронтинг = +0.4–0.5 с латентности на запрос (природа edge-проксирования), а GET-only ещё ограничивает аплинк (данные в заголовках). Итог: мессенджеры/браузинг: ок; YouTube/большой upload/спидтест: структурно тяжело. Применять как узел обхода/выживания, а не как скоростной. Для скорости нужны прямые ноды.
+
+Связано: обзорная статья «CDN-фронтинг» (общая база, GET/POST), «Каскад RU-вход → загран-выход» (чтобы выход был заграничным), «Заблокировали IP?».
+
+Проверено на Yandex Cloud CDN (ourcdn), Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

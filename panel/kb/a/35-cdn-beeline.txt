@@ -1,0 +1,281 @@
+Заголовок: Beeline CDN: бесплатный РФ-фронт (XHTTP packet-up, GET-only)
+
+🆕 Обновление (июль 2026): рабочий рецепт на ресурсе «Статика» + Caddy. Транспорт: XHTTP packet-up (аплинк идёт GET-ом, даунлинк POST). Ориджин на ноде: Caddy (reverse-proxy только XHTTP-пути на локальный Xray). Отпечаток берём edge (Chrome не используем). Схема универсальна, работает на Beeline, Timeweb и Beget.
+
+Что это. Бесплатный CDN от Билайна ставится перед вашей нодой как фронт: клиент подключается к эджу/домену CDN, а тот проксирует трафик на ноду. Реальный IP ноды скрыт, блок по IP бесполезен, сеть российская, поэтому ТСПУ (российское DPI-оборудование у операторов, что блокирует и «замедляет») к ней лоялен. Транспорт: VLESS-XHTTP packet-up (XHTTP хорошо работает за CDN). За сам CDN платить не нужно.
+
+📖 Незнакомые слова? Все термины простыми словами есть в Словаре терминов.
+
+⭐ Где взять аккаунт Beeline CDN
+
+Единый путь используется везде символ-в-символ (в Xray, в Caddy и в хосте Remnawave): /med/feed/preview.php. Порт 443 занимает только один reverse proxy (Caddy): nginx на 443 одновременно не запускаем.
+
+Шаг 1: Создаём ресурс в Beeline CDN
+
+Панель Beeline → CDN → Добавить ресурс. Тип: Статика. В адрес источника указываем домен ноды с портом 443 и нажимаем Создать.
+
+Шаг 2: Настраиваем ресурс
+
+Конфигурация ресурса:
+
+text
+Использовать HTTPS при запросе к источникам включить
+Указать имя SNI-хоста включить + указать домен ноды
+Hostname при запросе к источнику домен ноды
+Кэширование выключить
+
+Экспертные настройки:
+
+text
+Использовать HTTP/2 включить
+Использовать HTTP/3 выключить
+Автоперенаправление HTTP → HTTPS включить
+Таймауты 5 / 300 / 300
+Проверка CORS на стороне CDN выключить
+Сжатие Brotli выключить
+Сжатие Gzip выключить
+Разрешённые HTTP-методы POST
+
+Сохраняем ресурс, дожидаемся статуса Активен. Позже (после настройки ноды) вернёмся и нажмём Очистить весь кэш.
+
+Шаг 3: Профиль Remnawave
+
+Config Profile → Xray. Инбаунд слушает локально 127.0.0.1:7443, режим packet-up, путь /med/feed/preview.php.
+
+json
+{
+ "log": {
+ "loglevel": "warning"
+ },
+ "dns": {
+ "servers": [
+ "1.1.1.1",
+ "8.8.8.8",
+ "77.88.8.8",
+ "localhost"
+ ],
+ "queryStrategy": "UseIPv4"
+ },
+ "inbounds": [
+ {
+ "tag": "Bee-CDN-Static",
+ "port": 7443,
+ "listen": "127.0.0.1",
+ "protocol": "vless",
+ "settings": {
+ "clients": [],
+ "decryption": "none"
+ },
+ "sniffing": {
+ "enabled": true,
+ "routeOnly": true,
+ "destOverride": [
+ "http",
+ "tls",
+ "quic"
+ ]
+ },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "none",
+ "xhttpSettings": {
+ "mode": "packet-up",
+ "path": "/med/feed/preview.php",
+ "extra": {
+ "mode": "packet-up",
+ "path": "/med/feed/preview.php",
+ "xmux": {
+ "cMaxReuseTimes": 0,
+ "maxConcurrency": 8,
+ "maxConnections": 0,
+ "hKeepAlivePeriod": 45,
+ "hMaxRequestTimes": "600-900",
+ "hMaxReusableSecs": "1800-3000"
+ },
+ "seqKey": "chunk_id",
+ "xPaddingKey": "pid",
+ "seqPlacement": "query",
+ "xPaddingBytes": "1-4",
+ "sessionIDTable": "Base62",
+ "xPaddingMethod": "tokenish",
+ "sessionIDLength": "4-8",
+ "uplinkHTTPMethod": "GET",
+ "xPaddingObfsMode": true,
+ "xPaddingPlacement": "query",
+ "downloadHTTPMethod": "POST",
+ "scMaxBufferedPosts": 160,
+ "scMaxEachPostBytes": "262144-524288",
+ "scMinPostsIntervalMs": "40-100"
+ }
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ {
+ "tag": "direct",
+ "protocol": "freedom",
+ "settings": {
+ "domainStrategy": "UseIPv4"
+ }
+ },
+ {
+ "tag": "block",
+ "protocol": "blackhole"
+ }
+ ],
+ "routing": {
+ "rules": [
+ {
+ "ip": [
+ "geoip:private"
+ ],
+ "outboundTag": "block"
+ },
+ {
+ "domain": [
+ "geosite:private"
+ ],
+ "outboundTag": "block"
+ },
+ {
+ "protocol": [
+ "bittorrent"
+ ],
+ "outboundTag": "block"
+ }
+ ]
+ }
+}
+
+Назначьте профиль нужной ноде и включите inbound Bee-CDN-Static.
+
+🗑 Если у CDN нет метода POST, просто удалите из профиля строку "downloadHTTPMethod": "POST", (тогда даунлинк тоже пойдёт GET-ом).
+
+Шаг 4: Устанавливаем Caddy
+bash
+# пакеты для скачивания Caddy
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+# ключ безопасности Caddy
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+# репозиторий Caddy
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+# обновляем список пакетов и ставим
+sudo apt update
+sudo apt install caddy
+# открываем конфиг
+sudo nano /etc/caddy/Caddyfile
+
+Шаг 5: Редактируем Caddyfile
+
+Не забудьте сменить admin@example.com и домен ноды на свои.
+
+caddy
+{
+ email admin@example.com
+ servers {
+ protocols h1 h2
+ max_header_size 65536
+ timeouts {
+ read_body 0
+ read_header 30s
+ write 0
+ idle 10m
+ }
+ }
+}
+
+домен ноды {
+ log
+
+handle /health {
+ header Content-Type "application/json"
+ respond `{"status":"ok","service":"xhttp-origin"}` 200
+ }
+
+@xhttp path /med/feed/preview.php*
+ handle @xhttp {
+ log_skip
+ reverse_proxy 127.0.0.1:7443 {
+ flush_interval -1
+ header_up Host {host}
+ header_up X-Real-IP {remote_host}
+
+transport http {
+ versions 1.1
+ dial_timeout 5s
+ keepalive 120s
+ keepalive_idle_conns 512
+ keepalive_idle_conns_per_host 256
+ }
+ }
+ }
+
+handle {
+ respond "Not Found" 404
+ }
+
+header -Server
+}
+
+Сохраняем, выходим, форматируем и проверяем:
+
+bash
+caddy fmt --overwrite /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+# должно быть: valid / validation config
+
+⚠️ Ошибка валидации? Откройте sudo nano /etc/caddy/Caddyfile, найдите log_skip и замените на skip_log, сохраните и повторите валидацию.
+
+Если валидация прошла, запускаем:
+
+bash
+systemctl enable --now caddy
+systemctl reload caddy
+systemctl status caddy --no-pager # должен быть active (running)
+
+# проверка ориджина:
+curl -i https://домен-ноды/health # ответ должен быть HTTP/2 200
+
+После этого возвращаемся в панель CDN и нажимаем Очистить весь кэш.
+
+Шаг 6: Настраиваем хост в панели
+
+Создаём Host на профиле из Шага 3.
+
+⭐ Важно: в поле Address должен быть именно этот IP:
+
+text
+Address: 91.231.236.51
+Port: 443
+
+Расширенные → «Переопределения соединений»:
+
+text
+SNI: технический домен CDN
+Host: технический домен CDN
+Path: /med/feed/preview.php
+Security Layer: TLS
+ALPN: h2
+Отпечаток: edge ⚠️ НЕ Chrome
+
+⚠️ Отпечаток. Настоятельно рекомендуем воздержаться от Chrome, пробуйте другие доступные (edge и т.п.). Chrome-отпечаток на РФ-фронте ловится быстрее.
+
+⭐ Этот способ работает на Beeline, Timeweb и Beget, везде одинаково. 🧑💻 Поддерживает клиентов Happ и Incy.
+
+После любого изменения XHTTP: в клиенте удалите старый профиль → обновите подписку → импортируйте заново (иначе клиент возьмёт старый конфиг из кэша). В подписке держите включённой опцию «Использовать JSON в базовой подписке».
+
+Диагностика (кратко)
+text
+Нет трафика на 443 клиент не дошёл до CDN/origin
+Есть 443, нет 7443 проблема Host / path / reverse proxy
+400 различаются extra на сервере и в хосте
+502 CDN не достучался до origin (проверь Caddy/серт)
+504 малы таймауты (нужно 5/300/300)
+403 / HIT кэш CDN не выключен / ресурс ещё не активен
+
+Итог
+
+Клиент видит только эдж/домен Beeline CDN и российский IP: реальный адрес ноды скрыт, блок по IP бесполезен. Схема бесплатна, платный только сам аккаунт Beeline. Работает на Beeline / Timeweb / Beget.
+
+Оглавление

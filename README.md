@@ -216,6 +216,10 @@ See `agent/README.md` and `deploy/node/README.md` for details.
 | `HAPANEL_INSECURE_SKIP_VERIFY` | `true` (Docker) | Skip verify on panel→node TLS |
 | `HAPANEL_UTLS_HELLO` | `randomized` | uTLS fingerprint: `randomized`, `chrome`, `firefox`, `golang` |
 
+### База знаний (`/kb`)
+
+Встроенные технические статьи из `panel/kb/` (источник vpn-hub): каталог по разделам, поиск, код с «Копировать», сборщик плейсхолдеров (домен, Reality-ключи и т.д.) в `localStorage` браузера. При сборке UI: `npm run kb` / `prebuild` читает `KB_SRC` (по умолчанию `panel/kb`).
+
 ### Export API (hanode stats for another panel)
 
 In the panel UI open **api** → **Сгенерировать**. The plaintext key is shown once; afterwards only the prefix is listed. You can revoke/delete keys there.

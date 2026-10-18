@@ -1,0 +1,133 @@
+Заголовок: Hysteria2 (QUIC/UDP)
+
+Hysteria2 это QUIC/UDP (быстрый транспорт поверх UDP, по сути «HTTP/3») с агрессивным управлением скоростью соединения (конгешн-контроль по алгоритму BBR): лучший протокол на потерях, мобильных сетях и там, где душат TCP. Держите вторым транспортом (способ упаковки трафика, от которого зависит стойкость к блоку) на ноде (сервер, к которому реально подключаются клиенты; см. обзор «Какой протокол выбрать»).
+
+📖 Незнакомые слова? Все термины простыми словами смотрите в Словаре терминов.
+
+✅ В Remnawave это inbound protocol: hysteria в профиле панели, НЕ отдельный демон bash <(curl get.hy2.sh) с одним общим паролем. С clients: [] панель сама наполняет пользователей → полноценный per-user (трафик, лимиты, отключение). Standalone-демон панель не видит и трафик не считает.
+
+Шаг 1: серт через Certbot в Docker (на ноде)
+bash
+mkdir -p /opt/certbot && cd /opt/certbot
+docker run --rm \
+ -v $(pwd)/certs:/etc/letsencrypt \
+ -v $(pwd)/var-lib-letsencrypt:/var/lib/letsencrypt \
+ --network host \
+ certbot/certbot certonly --standalone \
+ --non-interactive --agree-tos \
+ --email you@example.com \
+ -d your.domain
+
+Серт ляжет в /opt/certbot/certs/live/your.domain/. Если:80 занят (nginx/Caddy селфстила), временно остановите его на время выпуска.
+
+Шаг 2: пробросьте серты в контейнер ноды
+
+Монтируем всю папку /etc/letsencrypt (не только live/, иначе сломаются симлинки на archive/). В /opt/remnanode/docker-compose.yml, в volumes: сервиса remnanode:
+
+yaml
+ volumes:
+ - '/opt/certbot/certs:/etc/letsencrypt:ro'
+
+bash
+cd /opt/remnanode && docker compose down && docker compose up -d
+ufw allow 443/udp # Hysteria2 = UDP; файрвол/провайдер не должны его резать
+
+Шаг 3: Config Profile в панели (вставляется целиком)
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "HYSTERIA-BBR",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "hysteria",
+ "settings": { "clients": [], "version": 2 },
+ "streamSettings": {
+ "network": "hysteria",
+ "security": "tls",
+ "tlsSettings": {
+ "alpn": ["h3"],
+ "certificates": [
+ { "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem",
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem" }
+ ]
+ },
+ "hysteriaSettings": { "version": 2 }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Дальше: включите инбаунд (inbound — точка входа на ноде: протокол, порт и настройки, которые видит панель) → создайте Host (адрес и параметры, которые получит клиент; Address = your.domain, alpn h3) → добавьте в сквад (squad — набор серверов и профилей, который выдают пользователям одним пакетом). Клиент получит ссылку вида hysteria2://….
+
+⚠️ Чтобы Hysteria2 показалась в приложении Happ (одном из клиентских приложений подписки), отдавайте подписку как JSON. Панель: Настройки подписки → Доп. опции → «Использовать JSON в базовой подписке». Без этого Happ Hysteria2 не покажет: другой протокол, VLESS (базовый протокол Remnawave, см. «VLESS-TCP-Reality»), в подписке будет, а Hysteria — нет.
+
+Шаг 4: автообновление серта (cron)
+bash
+0 0 28 * * cd /opt/certbot && docker compose run --rm certbot renew && cd /opt/remnanode && docker compose restart
+
+Рестарт ноды после renew обязателен, иначе Hysteria отдаёт старый серт.
+
+⚠️ Важно: обновите Xray-ядро ноды (учёт онлайна/трафика)
+
+На Xray-core 26.3.27 Remnawave не видит Hysteria-юзера онлайн и не считает трафик. Поправлено в 26.5.9+. Лечится подменой ядра: монтируем свежий бинарь в remnanode:
+
+bash
+mkdir -p /opt/remnanode/custom-xray && cd /opt/remnanode/custom-xray
+wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+apt update && apt install -y unzip && unzip -o Xray-linux-64.zip
+
+⚠️ «Latest» на GitHub — не всегда самая свежая сборка. По состоянию на сентябрь 2026 релиз с пометкой Stable/Latest — это всё ещё 26.3.27, та самая версия с багом. Всё, что вышло позже (вплоть до 26.9.9 от 08.09.2026), выложено там же, но с пометкой Pre-release, и обычная ссылка releases/latest их не отдаёт. Если после замены бинаря xray version всё равно показывает 26.3.27 — зайдите на страницу релизов Xray-core, найдите нужную версию (26.5.9 или новее) и возьмите ссылку на Xray-linux-64.zip из неё, а не из /latest/.
+
+В docker-compose.yml ноды, volumes: сервиса remnanode:
+
+yaml
+ - '/opt/remnanode/custom-xray/xray:/usr/local/bin/xray:ro'
+
+bash
+cd /opt/remnanode && docker compose down && docker compose up -d
+docker exec -it remnanode xray version # должно показать 26.5.9+
+
+Host в Remnawave
+text
+Address: your.domain
+Port: 443
+ALPN: h3
+
+Полную версию с пояснениями смотрите в статье «Профили подключений (inbounds) → §7», а обзор протоколов дан в «Какой протокол выбрать».
+
+Если не получилось
+Симптом	Что проверить	Что сделать
+Клиенты вообще не могут подключиться	Открыт ли UDP/443 снаружи: ss -uln sport =:443 и ufw status	Hysteria2 работает только по UDP. Откройте ufw allow 443/udp, убедитесь, что хостер или провайдер не режет UDP на этом порту
+После обновления сертификата клиенты получают ошибку TLS, хотя раньше всё работало	Перезапускалась ли нода после certbot renew	Hysteria читает сертификат один раз при старте и не следит за файлом. После каждого renew обязателен docker compose restart
+В панели пользователь Hysteria всегда показан офлайн, трафик не считается	Версия ядра: docker exec -it remnanode xray version	Нужна версия 26.5.9 или новее. Если после замены бинаря версия всё равно 26.3.27 — скачали сборку не с той страницы, см. врезку про /latest/ выше
+Certbot падает с ошибкой, что порт 80 занят	Кто слушает 80: ss -tlnp sport =:80	Обычно это nginx/Caddy сайта-обманки. Остановите его на время выпуска сертификата, затем включите обратно
+Hysteria2 не появляется в приложении Happ, хотя VLESS в подписке есть	Настройки подписки в панели	Включите Настройки подписки → Доп. опции → «Использовать JSON в базовой подписке»
+На мобильном интернете соединение постоянно рвётся или не устанавливается	Тот же конфиг на Wi-Fi или у другого оператора	Часть операторов режет UDP жёстче, чем TCP. Держите Reality или другой TCP-протокол вторым каналом
+Чего Hysteria2 не умеет
+Не работает без UDP. Если сеть или оператор режет UDP целиком, а не только порт 443, протокол не спасёт — переключаться придётся на TCP-протокол (Reality, Trojan).
+Не прячется под чужой сайт, как Reality. У Hysteria свой домен и свой настоящий TLS-сертификат — без них протокол не поднять, обойтись «донором» без домена, как в Reality, здесь нельзя.
+Не перечитывает сертификат на лету (подробности — в разделе ниже): без перезапуска ноды после renew клиенты словят ошибку TLS.
+Сильно зависит от версии ядра Xray. На старом ядре подключение будет работать, но панель не увидит ни онлайн, ни трафик пользователя — проверяйте версию после любого обновления.
+Один канал — одна точка отказа. Если UDP/443 начнут давить, весь протокол ляжет разом. Держите рядом TCP-резерв.
+Две вещи, о которых узнают через 90 дней
+
+Hysteria не перечитывает сертификат. Она читает файл при старте и больше за ним не следит. Если сертификат обновился, клиенты получают ошибку TLS, хотя «ничего не меняли». Нужен перезапуск после обновления: плагином caddy-events-exec, параметром reloadcmd в acme.sh или по расписанию.
+
+Hysteria не обязана занимать отдельный порт. QUIC передаёт SNI (имя сайта, которое видно в начале соединения ещё до шифрования), поэтому UDP 443 можно поделить между Hysteria и HTTP/3-сайтом через SNI-разделение. Тогда снаружи открыты только TCP 443 и UDP 443, как у обычного сайта, без «странного» порта, который выдаёт ноду при сканировании.
+
+Как это настроить, смотрите в статье Эталонные схемы размещения.
+
+Проверено на Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

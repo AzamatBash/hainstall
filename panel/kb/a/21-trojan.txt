@@ -1,0 +1,142 @@
+Заголовок: Trojan (TLS / Reality)
+
+Trojan прикидывается обычным HTTPS-сайтом (сайт с шифрованием, TLS): если зайти на него просто браузером, «тыкнуть», он отдаёт настоящую страницу — это называется fallback, запасной адрес, куда уходит трафик, не похожий на протокол. А проксирует интернет только тех, кто пришёл с верным паролем. Полезен как резерв другого «вида»: если основной протокол (например, VLESS — см. «VLESS-TCP-Reality») начали фингерпринтить, то есть вычислять по характерному «почерку» трафика, переключаетесь на Trojan — он устроен иначе. Сравнение протоколов — в обзоре «Какой протокол выбрать».
+
+📖 Незнакомые слова? Все термины простыми словами объяснены в Словаре терминов.
+
+Вариант A: Trojan + TLS (свой домен + серт, есть fallback на сайт)
+bash
+apt -y install certbot
+certbot certonly --standalone -d your.domain -m you@example.com --agree-tos --non-interactive
+
+Сертификат ляжет в /etc/letsencrypt/live/your.domain/ — этот путь указан ниже в certificateFile/keyFile.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "trojan-tls",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "trojan",
+ "settings": {
+ "clients": [{ "password": "СИЛЬНЫЙ_ПАРОЛЬ" }],
+ "fallbacks": [{ "dest": "8080" }]
+ },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "tls",
+ "tlsSettings": {
+ "serverName": "your.domain",
+ "alpn": ["h2", "http/1.1"],
+ "certificates": [
+ {
+ "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem",
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem"
+ }
+ ]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+fallbacks → dest 8080: «левый» трафик (без верного пароля) уходит на реальный сайт/nginx, слушающий порт:8080. Транспорт здесь — raw (так с 25-й версии Xray называется прежний tcp, оба варианта рабочие). В Remnawave clients: [] можно оставить пустым (панель наполнит), но пароль Trojan можно и задать в профиле: он показан для наглядности.
+
+Вариант B: Trojan + Reality (без своего домена/серта)
+
+Reality здесь маскирует TLS-рукопожатие под чужой настоящий сайт (донор — чужой популярный сайт с TLS 1.3, под который прикидывается ваша нода): свой домен и сертификат не нужны, your-donor.de в конфиге ниже — адрес донора, а не вашей ноды.
+
+bash
+xray x25519 # privateKey → в конфиг
+openssl rand -hex 8 # shortId
+
+🔑 Ключи Reality проще всего сгенерировать прямо в панели. В редакторе конфига Remnawave (кнопка меню рядом с «Форматировать») есть пункт «Сгенерировать ключи» — он сам подставит пару privateKey/publicKey, ничего ставить и вызывать вручную не нужно. Там же есть «Скачать с Github» — подтянуть свежее ядро Xray.
+
+Если нужно получить пару вне панели (например, готовите конфиг заранее), подойдёт любой путь: - на ноде, внутри контейнера: docker exec remnanode xray x25519; - на любой машине, хоть на своём ноутбуке — ключи к серверу не привязаны: wget -qO- https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip | busybox unzip - xray && chmod +x xray && ./xray x25519
+
+privateKey идёт в конфиг ноды, publicKey — на Host в панели.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "trojan-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "trojan",
+ "settings": { "clients": [{ "password": "СИЛЬНЫЙ_ПАРОЛЬ" }] },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "your-donor.de:443",
+ "serverNames": ["your-donor.de"],
+ "privateKey": "PRIVATE_KEY_X25519",
+ "shortIds": ["REALITY_SHORT_ID"]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Host в Remnawave
+text
+Password: СИЛЬНЫЙ_ПАРОЛЬ
+Address: your.domain (или IP/домен ноды)
+Port: 443
+SNI / Host: your.domain (Вариант B — your-donor.de)
+publicKey: REALITY_PUBLIC_KEY (только Вариант B)
+shortId: REALITY_SHORT_ID (только Вариант B)
+fingerprint: firefox
+
+SNI (Server Name Indication) — имя сайта, которое видно в начале TLS-соединения ещё до шифрования. fingerprint — «почерк» TLS-клиента, каким его подделывает Xray: ставьте firefox, не chrome (на части сборок нода с ним не стартует, да и опознаётся такой отпечаток хуже).
+
+Грабли
+Это резерв, не основной для РФ: голый Trojan+TLS светит SNI ещё до шифрования; Trojan+Reality (маскировка под чужой реальный сайт, без своего домена) надёжнее.
+Пароль должен быть длинным, без пробелов (openssl rand -hex 16); одинаковый на сервере и Host.
+Trojan+gRPC (транспорт поверх HTTP/2, см. «VLESS-gRPC-Reality») за CDN (сетью серверов-посредников, за которыми можно спрятать настоящий IP ноды) — ещё один вариант обхода по IP (см. «XHTTP» / «Спрятать сервер за CDN»).
+Если не получилось
+Симптом	Что проверить	Что сделать
+Браузер по адресу ноды показывает ошибку сертификата вместо сайта	Срок и путь сертификата: openssl x509 -in /etc/letsencrypt/live/your.domain/fullchain.pem -noout -dates	Сертификат просрочен или указан не тот путь. Перевыпустите: certbot renew, сверьте пути в конфиге
+Клиент подключается, но сразу отваливается (оба варианта)	Пароль в конфиге ноды и в поле Host на панели	Значения должны совпадать посимвольно. Сгенерируйте пароль одной командой и вставьте в оба места
+При заходе браузером на адрес ноды видно не ваш сайт, а ошибку или заглушку	dest в fallbacks и что реально слушает порт 8080	На порту 8080 должен стоять настоящий сайт (nginx и т.п.). Проверьте: ss -tlnp sport =:8080
+Вариант Reality: клиент подключается, но интернета нет	Время на ноде: timedatectl	Расхождение больше минуты ломает Reality. timedatectl set-ntp true, затем перезапуск ноды
+Вариант Reality: соединение рвётся через несколько секунд	publicKey и shortId в панели и в конфиге ноды	Любое расхождение даёт этот симптом. Сверьте значения или перевыпустите ключи в панели
+Нода не стартует после смены отпечатка	Значение fingerprint	chrome на части сборок валит ядро. Ставьте firefox
+Порт 443 снаружи не отвечает	Кто занял порт: ss -tlnp sport =:443	Освободите порт или перенесите конфликтующий сервис на другой
+Чего Trojan не умеет
+Это резерв, а не основной протокол для России. Без Reality (Вариант B) SNI виден в открытую ещё до шифрования — обычный DPI это видит.
+Пароль — единственная защита на уровне протокола. Он не шифрует сам себя, это просто проверка на входе. Длинный случайный пароль обязателен, короткий или предсказуемый подбирается.
+Fallback защищает только от простого «тыка» браузером. Против целенаправленной проверки, которая разбирает детали TLS-рукопожатия, это не панацея — те же ограничения, что и у Reality-донора в других протоколах.
+Требует либо своего домена и сертификата (Вариант A), либо донора (Вариант B). Без одного из двух протокол не поднять.
+Один канал — одна точка отказа, как и у остальных протоколов. Держите его именно как резерв, а не единственный вход.
+
+Обзор: «Какой протокол выбрать». Все профили: «Профили подключений (inbounds)».
+
+Проверено на Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

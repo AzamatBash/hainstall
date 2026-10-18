@@ -1,0 +1,773 @@
+Заголовок: Все рабочие конфиги: Reality, Self-steal, XHTTP, WARP
+
+Здесь лежат готовые конфиги на все случаи: скопировали, поменяли пару полей, вставили в панель. Если вы ещё выбираете, что именно поднимать, сначала прочитайте Какой протокол выбрать — там сравнение и ответ «что ставить сейчас», а тут уже сборка.
+
+Из чего складывается способ подключения. Всегда из трёх вещей, и путать их не надо:
+
+Протокол — что именно едет внутри: VLESS, Trojan, Shadowsocks, Hysteria2. VLESS — самый лёгкий и основной.
+Транспорт — как поток упакован: обычный TCP (в новых версиях ядра он называется raw), XHTTP, gRPC, WebSocket.
+Маскировка — во что наряжено начало соединения: Reality (притворяется чужим сайтом), обычный TLS (честный HTTPS на вашем домене) или Selfsteal (Reality, прикрытая вашим собственным настоящим сайтом).
+
+Как это выглядит в панели. Цепочка из четырёх звеньев, каждое следующее ссылается на предыдущее:
+
+Конфиг-профиль — целый конфиг Xray: входящие соединения, исходящие, маршруты. Панель раскатывает его на ноды сама.
+Инбаунд — один входящий блок из этого конфига. Панель видит каждый tag как отдельный инбаунд.
+Хост — то, что увидит клиент: адрес, порт, имя сайта для маскировки, путь, ключи.
+Сквад — по сути тариф: набор хостов, который достаётся человеку в подписке.
+
+Пропущено любое звено — у клиента не появится ничего, и панель об этом не скажет.
+
+📖 Незнакомые слова? Все термины простыми словами есть в Словаре терминов.
+
+Что выбрать (шпаргалка)
+Профиль	От чего спасает	Нужен домен	Нужен сертификат	Насколько незаметен	Когда брать
+VLESS-TCP-Reality	от проверки имени сайта и начала соединения	нет	нет	хорошо	базовый выбор, поднимается быстро
+VLESS-Selfsteal	от того же плюс от активной проверки вашего адреса	да	да, на сайт	лучше всех	основной там, где режут жёстко
+VLESS-TCP-TLS	ни от чего: домен виден	да	да	средне	для совместимости с CDN
+VLESS-XHTTP-TLS	от блокировки адреса (через CDN)	да	да	хорошо	работа за CDN, мобильные сети
+VLESS-XHTTP-Reality	от проверки имени и от анализа поведения	нет	нет	хорошо	Reality с плюсами XHTTP
+VLESS-XHTTP-Selfsteal	от всего перечисленного сразу	да	да	лучше всех	максимум скрытности, но собирать дольше
+Hysteria2	от давления на TCP и от потерь пакетов	да	да	средне	мобильный интернет, плохие каналы
+Trojan	ни от чего особенного	да	да	средне	резерв другого вида
+Shadowsocks-2022	ни от чего: маскировки нет	нет	нет	плохо	запасной канал в мягких сетях
+WARP native	это исходящий маршрут, а не способ подключения	нет	нет	—	разблокировка сервисов, чистый выход
+
+Практика: основная нода = Selfsteal (Reality на свой сайт) + Hysteria2. Остальное как резерв/под спецзадачи. WARP не способ подключения клиента, а исходящий маршрут (см. в конце).
+
+Полный конфиг-профиль (вставляется целиком)
+
+В Remnawave в Config Profile кладётся весь Xray-конфиг ноды (log / dns / inbounds / outbounds / routing), а не отдельный inbound. Ниже дан рабочий профиль VLESS + Reality (официальный шаблон Remnawave). Скопируйте его целиком в редактор профиля и поменяйте только отмеченные строки:
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "VLESS_TCP_REALITY",
+ "port": 443,
+ "listen": "0.0.0.0",
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" }, // clients НЕ трогаем — заполнит панель
+ "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"] },
+ "streamSettings": {
+ "network": "raw", // raw = бывш. tcp (новые сборки)
+ "security": "reality",
+ "realitySettings": {
+ "target": "google.com:443", // ← ЗАМЕНИТЬ: «донор» (чужой TLS1.3-сайт) ИЛИ свой (self-steal)
+ "shortIds": [""], // ← можно оставить "" или задать свой: openssl rand -hex 8
+ "privateKey": "PRIVATE_KEY", // ← ЗАМЕНИТЬ: privateKey из генератора панели
+ "serverNames": ["google.com"] // ← ЗАМЕНИТЬ: SNI = домен из target
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" } // режем торренты — иначе abuse от хостера
+ ]}
+}
+
+Что поменять (всего 3 строки): - privateKey: приватный ключ Reality. Генерится прямо в панели (см. ниже), CLI не нужен. publicKey из той же пары пойдёт в Host. - serverNames и target: домен-маскировка. Два режима: - чужой донор (проще, без своего сайта): target: "google.com:443", serverNames: ["google.com"], любой крупный сайт с TLS 1.3, не за CDN, не ваш; - self-steal (максимальный стелс, нужен локальный сайт-обманка): target: "/dev/shm/nginx.sock" + добавить "xver": 1, serverNames: ["ваш-домен"] (nginx на unix-сокете отдаёт ваш сайт, см. раздел «VLESS-Selfsteal» ниже). - shortIds: оставьте [""] (принимает любой) или задайте свой HEX. - ⚠️ clients: [] не трогайте: Remnawave сам подставит пользователей из сквадов.
+
+Где взять ключи Reality: в самой панели. В редакторе профиля есть генератор пары x25519 (кнопка генерации ключей; под капотом /api/system/tools/x25519/generate). Нажали → privateKey вставляете в конфиг, publicKey запоминаете для Host. (CLI-вариант, если хочется: docker exec <нода> xray x25519.)
+
+Для других протоколов (XHTTP, Hysteria2, Trojan, SS, WARP-outbound) берёте этот же каркас log/outbounds/routing и заменяете/добавляете блок в inbounds (или outbounds для WARP): готовые блоки ниже по статье.
+
+Как привязать: профиль → нода → Host → сквад (по UI Remnawave)
+
+Пошагово, по реальным экранам панели (ветка 2.x). Цепочка: Config Profile → Inbound → Host → Squad → пользователь.
+
+Config Profiles → Create Config Profile. Имя (напр. main). В редакторе вставьте конфиг выше, сгенерируйте ключи x25519 (кнопка генератора), впишите serverNames/target. У inbound есть tag (VLESS_TCP_REALITY), по нему он выбирается дальше. Save.
+Nodes → Management → + Create new node. Заполните Country, Internal name, Address (IP/домен ноды), Port (= NODE_PORT, дефолт 2222). Нажмите Select Config Profile → выберите main → галочками отметьте нужные inbound-ы. Save.
+В карточке ноды блок Important information: скопируйте SECRET_KEY (иконка копирования) или нажмите Copy docker-compose.yml. На сервере ноды поднимите контейнер:
+yaml
+services:
+  remnanode:
+    image: remnawave/node:latest
+    network_mode: host
+    restart: always
+    environment:
+      - NODE_PORT=2222
+      - SECRET_KEY=КЛЮЧ_ИЗ_ПАНЕЛИ
+
+docker compose up -d → через пару секунд нода станет online. Панель сама зальёт Xray-конфиг на ноду по NODE_PORT, авторизуясь SECRET_KEY. 4. Hosts → создать host. Поля: - Remark: имя сервера для клиента (напр. 🇳🇱 NL · Reality). - Inbound: выберите тот же inbound (VLESS_TCP_REALITY). (Один Host = один inbound.) - Address: домен/IP ноды. Port подтянется из inbound. - Advanced Options (для Reality критично): - Security = reality - SNI = ваш serverNames (тот же домен) - Public Key = publicKey из сгенерированной пары (не приватный!) - Short ID = тот же, что в конфиге (или пусто, если там [""]) - Fingerprint = firefox или qq (⛔ не chrome, палевный и на части сборок не даёт ноде стартовать; см. статью «Один хост → тысячи юзеров») - Save. (В 2.1.18+ можно явно «link nodes to Hosts», привязать конкретные ноды к хосту.) 5. Internal Squads → Edit (Default-Squad или + новый) → отметьте ваш inbound → Save. ❗ Без этого пользователи inbound не увидят. 6. Users → создать/выбрать юзера → назначить сквад (или на скваде «Add users»). Юзер получает subscription URL, отдаёте клиенту.
+
+Итог-формула доступа: (inbounds в сквадах юзера) ∩ (inbounds, включённые на ноде) ∩ (видимые хосты). Если клиент «не видит сервер», почти всегда забыли шаг 5 (добавить inbound в сквад). Полная установка панели/нод описана в статье «Remnawave с нуля».
+
+Как выглядит создание Host (шаг 4) в панели:
+
+Вкладка «Основные». Отмечено, что заполнять: Примечание (имя сервера для клиента), кнопка «Выбрать» инбаунд, Адрес (домен/IP ноды) и Порт.
+Вкладка «Расширенные»: SNI = ваш serverName/домен, Отпечаток (Fingerprint): ставьте firefox или qq (⛔ не chrome).
+Подготовка (общее для всех)
+
+Генерация ключей/идентификаторов (на ноде, где стоит Xray):
+
+bash
+xray x25519 # пара ключей Reality (см. ниже, как читать вывод)
+xray uuid # UUID клиента (VLESS/Trojan-как-uuid)
+openssl rand -hex 8 # shortId для Reality (можно несколько)
+
+⚠️ Как читать вывод xray x25519 (проверено на xray 26.3.27): он печатает две строки: PrivateKey: <…> и Password (PublicKey): <…>. PrivateKey идёт в конфиг ноды (privateKey), а Password (PublicKey) это и есть публичный ключ, его вставляете клиенту / в Host → Public Key. Не пугайтесь слова «Password»: это публичный ключ Reality, а не пароль. Для всего, что на своём сертификате (TLS/Self-steal/Hysteria2/Trojan-TLS):
+
+bash
+apt -y install certbot
+ufw allow 80/tcp # HTTP-01 валидации нужен открытый:80
+certbot certonly --standalone -d your.domain # A-запись домена -> IP ноды
+# серты: /etc/letsencrypt/live/your.domain/{fullchain.pem,privkey.pem}
+
+⚠️ Проверено на РФ-хостинге: HTTP-01 валидация LE иногда таймаутит (Timeout after connect, «server may be slow»), это часто транзиент: просто повторите команду 1–2 раза, обычно со второго раза серт выпускается. Если стабильно не проходит, убедитесь, что домен на сером облаке (DNS only, не Cloudflare-proxy) и:80 открыт в ufw, либо используйте DNS-01 (без порта 80).
+
+В Remnawave конфиг Xray вы редактируете в Config Profile (панель сама раскатывает его на ноды). Команды xray x25519/uuid можно выполнить на любой ноде или локально: это просто генераторы.
+
+1. VLESS-TCP-Reality (классический)
+
+Зачем. Базовый стелс без своего домена и сертификата: рукопожатие «крадётся» у чужого реального сайта-донора (TLS 1.3). DPI видит обычный визит на cloudflare.com. Минус. SNI-донор (cloudflare.com; SNI: имя сайта, видное в начале соединения до шифрования) не резолвится в ваш IP: при глубоком анализе это рассинхрон «SNI≠владелец IP». Для жёсткого DPI лучше Self-steal (ниже).
+
+Конфиг-профиль целиком (вставьте в Config Profile, поменяйте только отмеченное ←):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "www.cloudflare.com:443", // ← донор (чужой TLS1.3-сайт, не за CDN, не ваш)
+ "xver": 0,
+ "serverNames": ["www.cloudflare.com"], // ← = домен донора
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+clients: [] не трогайте: Remnawave подставит пользователей из сквадов. flow (vision: добавка к VLESS, маскирует размеры пакетов) задаётся на стороне Host. Донор: чужой домен с TLS 1.3 + HTTP/2, не за CDN, не ваш; ротируйте serverNames между нодами. Клиенту нужно: UUID, publicKey, shortId, serverName(=донор), flow=vision.
+
+2. VLESS-Selfsteal (Reality «крадёт» ваш собственный сайт)
+
+Зачем. Самый честный Reality: serverName = ваш домен (A-запись на ноду), а dest = локальный сайт-обманка на этой же ноде. Активное прозванивание вашего IP с вашим SNI попадает на настоящий сайт → SNI, IP и контент согласованы. Эталон стелса для РФ/жёсткого DPI. Нужно: свой домен + реальный сайт-заглушка (nginx/caddy) с валидным сертом, слушающий локально.
+
+Шаг 1: сайт-обманка (nginx на 127.0.0.1:8443, реальный серт вашего домена):
+
+nginx
+server {
+ listen 127.0.0.1:8443 ssl http2 proxy_protocol; # proxy_protocol — чтобы видеть реальный IP от Xray
+ server_name your.domain;
+ ssl_certificate /etc/letsencrypt/live/your.domain/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/your.domain/privkey.pem;
+ ssl_protocols TLSv1.3;
+ root /var/www/decoy; # положите туда правдоподобный статичный сайт
+ location / { try_files $uri /index.html; }
+}
+
+Шаг 2: конфиг-профиль целиком (Reality смотрит на ваш сайт):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-selfsteal",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "127.0.0.1:8443", // локальный сайт-обманка (nginx из Шага 1)
+ "xver": 1, // PROXY-protocol → реальный IP клиента в nginx
+ "serverNames": ["your.domain"], // ← ВАШ домен (A-запись на эту ноду)
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Проверка стелса: откройте https://your.domain в браузере: должен открыться сайт-обманка (а не ошибка). Значит и DPI увидит то же самое.
+
+3. VLESS-TCP-TLS
+
+Зачем. Честный TLS на вашем домене+серте. Прост, дружит с CDN и fallback-ом на реальный сайт. Минус: TLS-ClientHello с вашим SNI можно резать по списку SNI (Reality тут устойчивее). Нужно: домен + сертификат (certbot).
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-tls",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": {
+ "clients": [],
+ "decryption": "none",
+ "fallbacks": [{ "dest": "8080" }] // «левый» трафик → реальный сайт/nginx на:8080
+ },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "tls",
+ "tlsSettings": {
+ "serverName": "your.domain", // ← ваш домен
+ "minVersion": "1.2",
+ "alpn": ["h2", "http/1.1"],
+ "certificates": [
+ {
+ "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem", // ← путь к серту
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem" // ← путь к ключу
+ }
+ ]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+⚠️ Серт для TLS-профилей (этот §3 и далее §4 XHTTP-TLS, Trojan, SS-2022) на ноде Remnawave надо положить ВНУТРЬ контейнера. Путь certificateFile: /etc/letsencrypt/... Xray резолвит внутри контейнера remnanode, а не на хосте, если файла там нет, нода падает с SPAWN_ERROR: xray (видно в docker exec remnanode tail /var/log/supervisor/xray.out.log). Выпуск серта + бинд-маунт /opt/certbot/certs:/etc/letsencrypt:ro в контейнер (монтировать папку целиком, не только live/) + авто-renew с рестартом ноды: смотрите в разделе про certbot ниже (под профилем Hysteria).
+
+4. VLESS-XHTTP-TLS
+
+Зачем. XHTTP (бывш. SplitHTTP) это современный транспорт поверх HTTP: отлично проходит через CDN (Cloudflare), устойчив, без «вебсокетных» болячек. С честным TLS+доменом. Берут, когда блокируют по IP (прячемся за CDN) и на мобильных. Нужно: домен + серт (или серт от CDN). Xray ≥ 1.8.16. С XHTTP flow не используется.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-xhttp-tls",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "tls",
+ "xhttpSettings": {
+ "host": "your.domain", // ← ваш домен
+ "path": "/xh", // ← секретный путь (тот же у клиента)
+ "mode": "auto"
+ },
+ "tlsSettings": {
+ "serverName": "your.domain", // ← ваш домен
+ "alpn": ["h2", "http/1.1"],
+ "certificates": [
+ {
+ "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem", // ← серт
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem" // ← ключ
+ }
+ ]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Режимы mode: auto (сам выбирает), packet-up (надёжнее за капризными CDN), stream-up/stream-one (ниже задержка). За Cloudflare включайте проксирование (оранжевое облако) и тот же path.
+
+5. VLESS-XHTTP-Reality
+
+Зачем. Плюсы XHTTP (CDN-дружелюбие, стабильность) + стелс Reality без своего серта (донорский SNI). Нужно: ключи Reality, донор-домен.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-xhttp-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "reality",
+ "xhttpSettings": {
+ "path": "/xh", // ← секретный путь (тот же у клиента)
+ "mode": "auto"
+ },
+ "realitySettings": {
+ "show": false,
+ "target": "www.cloudflare.com:443", // ← донор (чужой TLS1.3-сайт)
+ "serverNames": ["www.cloudflare.com"], // ← = домен донора
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+6. VLESS-XHTTP-Selfsteal
+
+Зачем. Максимальный стелс: XHTTP + Reality, где dest = ваш локальный сайт, serverNames = ваш домен (как в п.2, но транспорт XHTTP). Самый устойчивый, но и самый «навороченный», настраивайте, когда базовое уже работает. Нужно: свой домен + сайт-обманка (nginx как в п.2) + ключи Reality.
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-xhttp-selfsteal",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "xhttp",
+ "security": "reality",
+ "xhttpSettings": { "path": "/xh", "mode": "auto" }, // ← секретный путь
+ "realitySettings": {
+ "show": false,
+ "target": "127.0.0.1:8443", // локальный сайт-обманка (nginx, п.2)
+ "xver": 1,
+ "serverNames": ["your.domain"], // ← ВАШ домен
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+7. Hysteria2
+
+Зачем. QUIC/UDP с агрессивным конгешн-контролем (BBR): лучший протокол на потерях/мобильных сетях и там, где режут TCP.
+
+✅ Как это работает в Remnawave (НЕ как в типовых гайдах). В современном Xray-core (26.x) Hysteria2 это обычный inbound protocol: hysteria (version 2), поэтому в Remnawave его заводят профилем в панели, а НЕ ставят отдельным демоном bash <(curl get.hy2.sh) с одним общим паролем в /etc/hysteria/config.yaml. С clients: [] панель сама наполняет пользователей → полноценный per-user: учёт трафика, лимиты, отключение, как у VLESS. Серт получаем Certbot'ом на ноде и пробрасываем в контейнер ноды. Standalone-демон панель не видит и трафик по нему не считает, для коммерческого сервиса не годится.
+
+Нужно: домен (A-запись на ноду), свободный порт 80 (для выпуска серта), открытый UDP/443 (UDP не лимитировать).
+
+1. Certbot в Docker (на ноде)
+bash
+mkdir -p /opt/certbot && cd /opt/certbot && nano docker-compose.yml
+
+yaml
+services:
+  certbot:
+    container_name: certbot
+    image: certbot/certbot
+    network_mode: host
+    volumes:
+      - ./certs:/etc/letsencrypt
+
+2. Выпуск сертификата (порт 80 должен быть свободен)
+
+--standalone сам поднимет временный веб-сервер на:80 для проверки домена. Замените домен и e-mail на свои:
+
+bash
+docker run --rm \
+ -v $(pwd)/certs:/etc/letsencrypt \
+ -v $(pwd)/var-lib-letsencrypt:/var/lib/letsencrypt \
+ --network host \
+ certbot/certbot certonly --standalone \
+ --non-interactive --agree-tos \
+ --email you@example.com \
+ -d your.domain
+
+Серт ляжет в /opt/certbot/certs/live/your.domain/. Если:80 занят (nginx/caddy селфстила), временно остановите его на время выпуска.
+
+3. Проброс сертификатов в контейнер ноды
+
+Монтируем всю папку /etc/letsencrypt (не только live/, иначе сломаются симлинки на archive/ и Xray не прочитает серт):
+
+bash
+cd /opt/remnanode/ && nano docker-compose.yml
+
+yaml
+services:
+  remnanode:
+    #...
+    volumes:
+      - '/opt/certbot/certs:/etc/letsencrypt:ro' #:ro — только чтение
+
+bash
+cd /opt/remnanode && docker compose down && docker compose up -d
+ufw allow 443/udp # Hysteria2 — это UDP; провайдер/файрвол не должны его резать
+
+4. Config Profile в панели (вставляется целиком)
+
+Пути указывают на внутренние папки контейнера, которые мы пробросили выше. Замените your.domain; clients: [] оставьте: панель наполнит пользователей сама:
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "HYSTERIA-BBR",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "hysteria",
+ "settings": { "clients": [], "version": 2 },
+ "streamSettings": {
+ "network": "hysteria",
+ "security": "tls",
+ "tlsSettings": {
+ "alpn": ["h3"],
+ "certificates": [
+ { "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem",
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem" }
+ ]
+ },
+ "hysteriaSettings": { "version": 2 }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Дальше как обычно: включить инбаунд на ноде → создать Host (Remark «🇫🇮 FIN · Hysteria2», Address = домен ноды) → добавить инбаунд в нужные сквады. Клиент получит hysteria2://-ссылку в подписке.
+
+⚠️ Чтобы Hysteria2 показалась в Happ, отдавайте подписку как JSON. Happ (и ряд других клиентов) видит Hysteria2 только из JSON-подписки. Если подписка отдаётся «обычным» текстом, Hysteria2 в приложении просто не появится (VLESS будет, а Hysteria нет). Включите в панели: Настройки подписки → Доп. опции → «Использовать JSON в базовой подписке» (①) и сохраните.
+
+Настройки подписки → Доп. опции → включить «Использовать JSON в базовой подписке»: без этого Happ не покажет Hysteria2.
+5. Автообновление серта (cron)
+
+Серты Let's Encrypt живут 90 дней. Обновляем раз в месяц (28-го) и перезапускаем ноду, чтобы Xray подхватил новый файл (crontab -e):
+
+bash
+0 0 28 * * cd /opt/certbot && docker compose run --rm certbot renew && cd /opt/remnanode && docker compose restart
+
+Рестарт ноды после renew обязателен: без него Hysteria продолжит отдавать старый серт до перезапуска. renew реально перевыпускает, только когда до конца серта < 30 дней, иначе ничего не делает (так что ежемесячный запуск безопасен).
+
+Чтобы Remnawave видел онлайн и считал трафик Hysteria, обновите Xray-ядро ноды
+
+⚠️ Баг ядра: на Xray-core 26.3.27 Remnawave не видит Hysteria-юзера онлайн и не считает ему трафик. В свежих сборках это поправлено, проверено на 26.5.9 (и новее). Лечится подменой Xray-ядра на ноде: монтируем свежий бинарь поверх штатного в контейнер remnanode.
+
+bash
+# 1) каталог под кастомное ядро
+mkdir -p /opt/remnanode/custom-xray && cd /opt/remnanode/custom-xray
+
+# 2) скачать свежий Xray (актуальную версию см. в релизах XTLS/Xray-core)
+wget https://github.com/XTLS/Xray-core/releases/download/v26.5.9/Xray-linux-64.zip
+
+# 3) распаковать (unzip поставить, если нет) → появится бинарь ./xray
+apt update && apt install -y unzip
+unzip -o Xray-linux-64.zip
+
+В docker-compose.yml ноды (/opt/remnanode/docker-compose.yml), в volumes: сервиса remnanode, добавьте монтирование бинаря поверх штатного:
+
+yaml
+ volumes:
+ - '/opt/remnanode/custom-xray/xray:/usr/local/bin/xray:ro'
+
+Пересоздать ноду и проверить версию:
+
+bash
+cd /opt/remnanode && docker compose down && docker compose up -d && docker compose logs -f -t
+docker exec -it remnanode xray version # должно показать 26.5.9 (или новее)
+
+Откат «как было»: удалите эту строку из volumes и пересоздайте ноду (docker compose down && docker compose up -d). Подмена бинаря это общий приём: так же накатывают любой свежий/патченый Xray на ноду, не дожидаясь обновления образа remnawave/node.
+
+8. Trojan
+
+Зачем. Прикидывается обычным HTTPS-сайтом: без пароля отдаёт реальный сайт (fallback), проксирует только своих. Хороший «другой протокол» в резерв, если VLESS-паттерн начнут фингерпринтить.
+
+⚠️ Проверено на xray 26.3.27: Trojan работает (тест с РФ-сервера прошёл, HTTP 200), но ядро при старте пишет The feature Trojan (with no Flow) is deprecated… migrate to VLESS with Flow & Seed. Держите Trojan только как резерв, основным делайте VLESS+Reality. Нужно: домен + серт ИЛИ поверх Reality (без своего серта).
+
+Trojan + TLS (свой домен + fallback на сайт):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "trojan-tls",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "trojan",
+ "settings": {
+ "clients": [],
+ "fallbacks": [{ "dest": "8080" }] // без пароля → реальный сайт на:8080
+ },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "tls",
+ "tlsSettings": {
+ "serverName": "your.domain", // ← ваш домен
+ "certificates": [
+ {
+ "certificateFile": "/etc/letsencrypt/live/your.domain/fullchain.pem", // ← серт
+ "keyFile": "/etc/letsencrypt/live/your.domain/privkey.pem" // ← ключ
+ }
+ ]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+clients: [] заполнит панель. При raw-Xray впишите пароли вручную: [{ "password": "СИЛЬНЫЙ_ПАРОЛЬ" }]. Trojan + Reality (без своего серта):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "trojan-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "trojan",
+ "settings": { "clients": [] },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "www.cloudflare.com:443", // ← донор (чужой TLS1.3-сайт)
+ "serverNames": ["www.cloudflare.com"], // ← = домен донора
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+9. Shadowsocks-2022
+
+Зачем. Лёгкий AEAD-протокол без TLS-рукопожатия: запасной канал и для слабых устройств/IoT. Минус: нет TLS-маскировки → под жёстким DPI заметнее; держите как дополнение, не как основной для РФ. Нужно: ничего лишнего (домен/серт не нужны).
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "ss2022",
+ "listen": "0.0.0.0",
+ "port": 8388,
+ "protocol": "shadowsocks",
+ "settings": {
+ "method": "2022-blake3-aes-128-gcm",
+ "password": "BASE64_16BYTE_KEY", // ← openssl rand -base64 16
+ "network": "tcp,udp"
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" }
+ ]}
+}
+
+Ключ: openssl rand -base64 16. Для...aes-256-gcm используйте openssl rand -base64 32.
+
+⚠️ Проверено на xray 26.3.27: SS-2022 работает (тест прошёл, HTTP 200), но ядро пишет Shadowsocks … is deprecated … migrate to VLESS Encryption. Это нормально для запасного канала, но основным не делайте: приоритет VLESS+Reality.
+
+10. WARP native (Cloudflare WireGuard): это outbound
+
+Зачем. Не способ подключения клиента, а исходящий маршрут. Выпускает выбранный трафик через Cloudflare WARP (WireGuard): - разблокирует сервисы, режущие IP дата-центров (ChatGPT/OpenAI, Spotify, Netflix-гео и т.п.); - даёт «чистый» egress и рабочий IPv6 на ноде без него; - санкционка/гео: выводим только нужные домены, остальное напрямую.
+
+Шаг 1: получить ключи WARP (wgcf):
+
+bash
+# берём АКТУАЛЬНУЮ версию (URL с хардкодом версии часто отдаёт 404)
+VER=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/ViRb3/wgcf/releases/latest); VER=${VER##*/v}
+wget -O /usr/bin/wgcf "https://github.com/ViRb3/wgcf/releases/download/v${VER}/wgcf_${VER}_linux_amd64"
+chmod +x /usr/bin/wgcf
+wgcf register --accept-tos # создаёт wgcf-account.toml
+wgcf generate # создаёт wgcf-profile.conf (PrivateKey, Address v4/v6)
+
+⚠️ Проверено на живом сервере: не пишите версию руками (wgcf_2.2.22…): на дату теста актуальна v2.2.31, а старый URL latest/download/wgcf_2.2.22… отдаёт 404 (скачивается пустой файл → Permission denied). Команда выше подставляет реальную версию сама. Шаг 2: конфиг-профиль целиком (Reality-inbound + WARP-outbound + роутинг):
+
+js
+{
+ "log": { "loglevel": "none" },
+ "inbounds": [
+ {
+ "tag": "vless-reality",
+ "listen": "0.0.0.0",
+ "port": 443,
+ "protocol": "vless",
+ "settings": { "clients": [], "decryption": "none" },
+ "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
+ "streamSettings": {
+ "network": "raw",
+ "security": "reality",
+ "realitySettings": {
+ "show": false,
+ "target": "www.cloudflare.com:443", // ← донор
+ "serverNames": ["www.cloudflare.com"], // ← = домен донора
+ "privateKey": "PRIVATE_KEY_X25519", // ← privateKey из генератора панели
+ "shortIds": [""]
+ }
+ }
+ }
+ ],
+ "outbounds": [
+ { "tag": "DIRECT", "protocol": "freedom" },
+ { "tag": "BLOCK", "protocol": "blackhole" },
+ {
+ "tag": "warp",
+ "protocol": "wireguard",
+ "settings": {
+ "secretKey": "PRIVATE_KEY_из_wgcf-profile", // ← из wgcf-profile.conf
+ "address": ["172.16.0.2/32", "2606:4700:110:XXXX/128"], // ← из wgcf-profile.conf
+ "peers": [
+ {
+ "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", // публичный ключ Cloudflare WARP
+ "endpoint": "162.159.192.1:2408" // ← ЯВНЫЙ IPv4! (engage.cloudflareclient.com резолвится в IPv6)
+ }
+ ],
+ "mtu": 1280,
+ "reserved": [0, 0, 0], // ← 3 байта из client_id (WARP reserved calculator)
+ "noKernelTun": true // ← ОБЯЗАТЕЛЬНО на Remnawave-ноде (Xray в Docker): без неё kernel-TUN падает на read-only /proc/sys
+ }
+ }
+ ],
+ "routing": { "rules": [
+ { "ip": ["geoip:private"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:private", "geosite:category-ads-all"], "outboundTag": "BLOCK" },
+ { "protocol": ["bittorrent"], "outboundTag": "BLOCK" },
+ { "domain": ["geosite:openai", "domain:spotify.com", "geosite:netflix"], "outboundTag": "warp" } // ← что гнать через WARP
+ ]}
+}
+
+✅ Проверено на живом сервере (xray 26.3.27): с IPv4-эндпоинтом и reserved: [0,0,0] WARP поднялся: egress стал IP Cloudflare (104.28.x), а не сервера. Если у ноды нет IPv6, обязательно явный IPv4-эндпоинт (engage.cloudflareclient.com уводит в v6 → network is unreachable). reserved не лежит в wgcf-profile.conf напрямую: это 3 байта из client_id аккаунта (конвертер wgcf→Xray/«WARP reserved calculator»). [0,0,0] часто работает; для «капризных» свежих эндпоинтов вычислите корректный reserved. ⚠️ "noKernelTun": true обязателен на ноде Remnawave. Xray там работает в Docker, где /proc/sys только для чтения, а свежий Xray по умолчанию поднимает WireGuard через kernel-TUN и падает: failed to disable ipv4 rp_filter … read-only file system → весь warp-аутбаунд мёртв. Строка возвращает userspace-стек (gVisor). На standalone-бинаре xray (как в QA выше, /opt/qa) /proc/sys писаемый, поэтому там WARP поднимался и без неё, в контейнере поведение другое. WARP+ (Plus): если есть ключ-лицензия, wgcf update --license-key ВАШ_КЛЮЧ поднимет лимиты/скорость.
+
+В Remnawave WARP добавляется в Config Profile как outbound + правило в routing, не как Host. Затем любой ваш inbound может выпускать выбранные домены через него.
+
+Как это собрать в Remnawave (резюме)
+Config Profile → вставляете нужные inbounds (из блоков выше) + при желании outbounds(WARP)/routing.
+Inbound → панель видит каждый tag как отдельный inbound.
+Host → создаёте на каждый inbound: адрес (ваш домен/IP), порт, SNI/serverName, путь (для XHTTP), publicKey/shortId (для Reality).
+Squad (= тариф) → включаете нужные хосты; клиент получает подписку с несколькими конфигами и авто-фейловером.
+
+Связано: «Протоколы и обфускация» (базовый разбор протоколов), «Хосты: несколько нод и транспортов» (раздача одного/нескольких транспортов с нод), «Каскад (multihop)» (склейка нод цепочкой).
+
+Если не получилось
+Симптом	Что проверить	Что сделать
+Панель отвечает Config doesn't have inbounds	Что именно вставили в профиль	Она ждёт весь конфиг целиком (log, inbounds, outbounds, routing), а не один блок инбаунда. Вставляйте профиль полностью
+Нода не поднимается после правки конфига	Синтаксис: docker exec remnanode xray -test -config /path/config.json	Чаще всего это лишняя или потерянная запятая. Ядро скажет строку
+Инбаунд создан, но порт снаружи молчит	Кто занял порт: ss -tlnp sport =:443 и ufw status	На 443 часто уже сидит Caddy или nginx от сайта-обманки. Либо уводите их, либо собирайте Selfsteal, где они работают вместе
+Reality: клиент подключается, интернета нет	Время на ноде (timedatectl) и доступность донора с ноды	Расхождение больше минуты ломает Reality. Донор должен отвечать с самой ноды и поддерживать TLS 1.3 и HTTP/2
+Reality: рвётся через пару секунд	Совпадение publicKey и shortId в панели и на ноде	Пересоздайте пару ключей и перенесите оба значения заново
+Сертификат Let's Encrypt не выпускается, «Timeout after connect»	Открыт ли 80-й порт и не проксируется ли домен через Cloudflare	Чаще всего помогает просто повторить команду один-два раза. Стабильно не проходит — переводите домен в режим DNS only или выпускайте через DNS-проверку
+Hysteria работает, но панель не показывает онлайн и не считает трафик	Версию ядра Xray на ноде	На 26.3.27 это не работает, исправлено с 26.5.9. Подмените ядро — рецепт в разделе про Hysteria2 выше
+XHTTP: клиент получает 400 на каждом подключении	Совпадают ли параметры extra на сервере и в ссылке клиента	Любое расхождение ломает сессию. Сверяйте символ в символ
+Shadowsocks не подключается	Длину пароля	У шифров 2022 года пароль — это ключ строго определённой длины в base64, произвольная строка не подойдёт
+Всё поднялось, но в приложении нет новой плитки	Дошёл ли хост до подписки	Это отдельная история из пяти причин, она разобрана в статье Протокол поднялся, а клиент его не видит
+Чего эти конфиги не дают
+Они не выбирают за вас. Ставить все десять профилей не нужно: два рабочих канала надёжнее пяти полузаброшенных.
+Не спасают от блокировки адреса. Любая маскировка бессильна, когда пакеты до сервера просто не доходят — это лечится сменой адреса или CDN.
+Не заменяют настройку клиента. Половина обращений в поддержку — не про инбаунд, а про то, что человеку не доехала подписка.
+Требуют присмотра за версиями. Часть возможностей появляется только в свежих сборках ядра, а часть старых полей из них исчезает.
+Если инбаунд поднялся, но клиент его не видит
+
+Готовый профиль ещё не гарантия, что протокол доедет до приложения. Между конфигом и клиентом пять мест, где он теряется: инбаунд не включён у ноды, порт закрыт файрволом, транспорт назван raw вместо tcp (ядро понимает, а генератор подписки нет), хост не попал в шаблон подписки, либо плитку перехватывает балансировщик автовыбора.
+
+Порядок диагностики с командами: в статье Протокол поднялся, а клиент его не видит.
+
+Проверено на Xray-core 26.x и Remnawave 3.4.x — сентябрь 2026.
+
+Оглавление

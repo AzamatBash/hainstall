@@ -1,0 +1,234 @@
+Заголовок: РКН выносит ноды пачками: 5 дыр, по которым ТСПУ находит ваш сервер
+
+🚨 Массовые блокировки уже идут. ТСПУ вычисляет ноду по пяти признакам, и хватает одного, чтобы сервер ушёл в бан.
+
+Проверьте свою ноду бесплатно за 60 секунд (на ноде, от root):
+
+bash
+bash <(curl -fsSL https://vpn-hub.pro/static/tools/rkn-node-check.sh)
+
+Скрипт покажет, какие из пяти дыр у вас открыты. Ниже по шагам, со скриншотами Remnawave: как закрыть каждую.
+
+#	Что сделать	Почему это важно
+1	Selfsteal на 443. Reality ведёт на свой сайт на этой же ноде. Несколько транспортов сводятся на 443 через SNI-разводку nginx или caddy	ТСПУ сверяет SNI и IP: «чужой» сайт на IP вашего хостера выдаёт прокси
+2	HTTP 301 на 80	у настоящего сайта 80 порт отвечает постоянным редиректом на https
+3	Без Trojan и VLESS без Vision	вложенный TLS (TLS внутри TLS) виден по размерам пакетов
+4	Порт Remnanode закрыт (RST или DROP), доступ только с IP панели	открытый порт ноды с характерным ответом выдаёт сервер при сканировании
+5	Заглушка с TLS 1.2, TLS 1.3 и HSTS	так отвечает обычный современный сайт
+
+📖 Незнакомые слова? Все термины простыми словами смотрите в Словаре терминов.
+
+Что показывает скрипт
+
+Скрипт бесплатный и ничего не меняет на сервере. Он читает конфиг Xray и правила файрвола, стучится к ноде снаружи и показывает, что в порядке, а что исправить. Запускайте на каждой ноде (команда в начале статьи). Так выглядит проверка настроенной ноды:
+
+text
+1. Selfsteal на 443
+ ✔ VLESS_TCP: Reality (порт 443) ведёт на свою заглушку 127.0.0.1:9443
+ ✔ node.example.com указывает на этот сервер (203.0.113.25)
+ ✔ на 203.0.113.25:443 отдаётся настоящий сертификат node.example.com
+2. HTTP 301 на 80
+ ✔ http://node.example.com/ → 301 https://node.example.com/
+3. Нет Trojan и VLESS без Vision
+ ✔ VLESS_TCP: VLESS + Reality + Vision (119 клиентов)
+4. Порт Remnanode закрыт снаружи
+ ℹ к порту 2222 сейчас подключена панель: 198.51.100.7
+ ✔ снаружи порт 2222 закрыт (DROP) — проверено с внешнего сервера
+5. Заглушка: TLS 1.2, TLS 1.3, HSTS
+ ✔ TLS 1.3: есть
+ ✔ TLS 1.2: есть
+ ✔ HSTS: max-age=31536000; includeSubDomains
+
+В порядке: 5 из 5 · замечаний: 0 · исправить: 0
+
+✔ значит «в порядке», ⚠ «есть замечание», ✘ «исправить». В конце итог по пяти пунктам.
+Проверка снаружи. Закрыт ли порт ноды, скрипт проверяет с внешнего сервера: нода просит сайт постучаться на её же адрес. Сайт стучится только на адрес, с которого пришла просьба, поэтому чужие серверы через него не проверить. Отключить: флаг --no-external.
+Без доступа к ноде (например, нода у партнёра) запустите скрипт с любого сервера или ПК:
+bash
+curl -fsSLo rkn-node-check.sh https://vpn-hub.pro/static/tools/rkn-node-check.sh
+bash rkn-node-check.sh --remote node.example.com
+
+Снаружи видны пункты 1, 2, 4 и 5. Пункт 3 (протоколы) проверяется только на самой ноде.
+
+Скрипт открыт, перед запуском его можно прочитать: rkn-node-check.sh. SHA-256: f554575de6d5b4472a05415d2341c58e2f6600f4272b9c4c60befb5329a57a6c
+
+Дальше по каждому пункту: как исправить.
+
+1. Selfsteal на 443
+
+Что не так. Часто Reality «маскируется» под чужой сайт: в target стоит www.cloudflare.com:443 или www.microsoft.com:443, в serverNames тот же чужой домен. ТСПУ видит, что клиент идёт на IP вашего хостера с именем сайта, которого у этого хостера нет. Это один из главных признаков, по которым вычисляют прокси.
+
+Как должно быть. Свой домен с A-записью на IP ноды, на самой ноде настоящий сайт-заглушка с сертификатом этого домена. Reality показывает этот сайт всем, кто не знает ключа: сканер видит обычный сайт на своём сервере.
+
+1.1. Домен
+
+Нужен свой домен или поддомен, например node.example.com, с A-записью на IP ноды. Если DNS в Cloudflare, облако должно быть серым (DNS only), а не оранжевым. Про покупку и DNS: Домены.
+
+1.2. Сайт-заглушка на ноде (Caddy)
+
+Ставим Caddy (Ubuntu или Debian):
+
+bash
+apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install -y caddy
+
+Кладём сайт в /var/www/selfsteal. Лучше взять готовый шаблон обычного сайта (визитка, блог, портфолио), а не одну строку «скоро здесь будет сайт»: одинаковые пустые заглушки тоже вычисляются.
+
+Конфиг /etc/caddy/Caddyfile, замените node.example.com на свой домен:
+
+caddyfile
+{
+ http_port 80
+ https_port 9443
+ default_sni node.example.com
+ fallback_sni node.example.com
+ # свой редирект 301 вместо встроенного 308; выпуск сертификата на:80 продолжает работать
+ auto_https disable_redirects
+ servers {
+ protocols h1 h2
+ }
+}
+
+# пункт 2: http → https постоянным редиректом 301
+http://node.example.com {
+ redir https://{host}{uri} 301
+}
+
+# пункты 1 и 5: сайт-заглушка только на 127.0.0.1:9443, TLS 1.2 + 1.3, HSTS
+node.example.com {
+ bind 127.0.0.1
+ tls {
+ protocols tls1.2 tls1.3
+ }
+ root * /var/www/selfsteal
+ file_server
+ header -Server
+ header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
+bash
+caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+
+Порт 80 должен быть открыт: через него Caddy получает сертификат. Этот же Caddyfile закрывает пункты 2 и 5.
+
+1.3. Reality на свою заглушку: в Remnawave
+
+Шаг 1. Откройте Профили и у профиля вашей ноды нажмите «Конфиг. Xray».
+
+Шаг 2. В inbound'е с "security": "reality" поменяйте две строки и нажмите «Сохранить»:
+
+"target": было www.cloudflare.com:443, станет "127.0.0.1:9443" (ваша заглушка);
+"serverNames": ["node.example.com"] (ваш домен).
+
+Шаг 3. Откройте Хосты → хост этого inbound'а → вкладку «Расширенные» и впишите в поле SNI ваш домен.
+
+Нода подхватит новый конфиг сама. Пользователям достаточно обновить подписку.
+
+1.4. Если транспортов несколько: SNI-разводка на 443
+
+Каждый лишний TLS-порт (8443, 2096 и т.п.) это ещё один отпечаток сервера. Проще всего оставить на ноде один транспорт, VLESS + Reality на 443, а остальные убрать или вынести на отдельную ноду либо CDN.
+
+Если несколько транспортов нужны, 443 занимает nginx и раздаёт соединения по SNI на локальные порты Xray:
+
+nginx
+# /etc/nginx/nginx.conf, на верхнем уровне (рядом с http { }); модуль: apt install -y nginx libnginx-mod-stream
+stream {
+ map $ssl_preread_server_name $backend {
+ node.example.com 127.0.0.1:10443; # VLESS + Reality (raw), основной
+ grpc.example.com 127.0.0.1:10444; # второй транспорт со своим доменом
+ default 127.0.0.1:10443; # всё остальное в Reality, оттуда на заглушку
+ }
+ server {
+ listen 443;
+ ssl_preread on;
+ proxy_pass $backend;
+ proxy_protocol on;
+ }
+}
+
+В Remnawave в профиле у каждого такого inbound'а:
+
+"listen": "127.0.0.1" и свой порт (10443, 10444);
+в streamSettings добавить "sockopt": {"acceptProxyProtocol": true}, иначе Xray не поймёт заголовок от nginx;
+в Хостах у этих inbound'ов явно указать порт 443.
+
+Заглушка Caddy остаётся на 127.0.0.1:9443, порт 80 у Caddy. Unix-сокеты тоже подходят, но нода Remnawave работает в контейнере, и её /dev/shm не виден nginx без отдельного проброса, поэтому локальные порты проще. Меняйте схему сначала на одной ноде и проверяйте скриптом.
+
+2. HTTP 301 на 80
+
+Caddyfile выше уже это делает: auto_https disable_redirects и redir https://{host}{uri} 301. Без них Caddy отвечает кодом 308, и скрипт покажет ⚠.
+
+Для nginx:
+
+nginx
+server {
+ listen 80;
+ server_name node.example.com;
+ return 301 https://$host$request_uri;
+}
+
+Порт 80 должен быть открыт в файрволе: ufw allow 80/tcp.
+
+3. Без Trojan и VLESS без Vision
+
+Почему. У Trojan и у VLESS без Vision TLS сайта, который открывает пользователь, едет внутри внешнего TLS прокси. Размеры и порядок пакетов в первые секунды выдают такой «TLS внутри TLS». Vision (flow xtls-rprx-vision) убирает этот рисунок.
+
+В Remnawave:
+
+Шаг 1. Профили → «Конфиг. Xray». Основной inbound: "protocol": "vless", "network": "raw" (или tcp), "security": "reality". Для такого inbound'а Remnawave сам включает Vision, руками ничего добавлять не нужно. Скрипт проверяет это по живому конфигу ноды.
+
+Шаг 2. Inbound'ы с "protocol": "trojan" удалите вместе с их хостами.
+
+Шаг 3. VLESS поверх gRPC, XHTTP или WebSocket: на этих транспортах Vision невозможен. Держите их только как резерв (скрытые хосты) или за CDN, а основным оставьте VLESS + Reality + Vision.
+
+В 3x-ui: у клиента в VLESS Reality inbound'е поле Flow = xtls-rprx-vision.
+
+Если раздаёте ссылки вручную, а не подпиской, в ссылке должен быть flow=xtls-rprx-vision.
+
+4. Порт Remnanode: только для панели
+
+Панель управляет нодой через порт ноды, по умолчанию 2222. Его видно в карточке ноды:
+
+Снаружи этот порт должен быть закрыт для всех (DROP или RST) и открыт только для IP панели. На ноде (ufw):
+
+bash
+ufw allow 22/tcp # SSH первым, чтобы не потерять доступ
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow from IP_ПАНЕЛИ to any port 2222 proto tcp comment 'remnanode: только панель'
+ufw default deny incoming
+ufw enable
+ufw status
+
+IP_ПАНЕЛИ замените на IP вашей панели (или впишите его в «Конструктор конфига» вверху статьи, и он подставится сам). Скрипт показывает этот адрес в пункте 4 («к порту 2222 сейчас подключена панель»). Нода Remnawave работает в сети хоста, поэтому правила ufw на неё действуют. Если у хостера есть свой файрвол (Hetzner, Timeweb, Selectel), порт можно закрыть и там.
+
+5. Заглушка: TLS 1.2, TLS 1.3 и HSTS
+
+В Caddyfile выше это строки protocols tls1.2 tls1.3 и header Strict-Transport-Security "max-age=31536000; includeSubDomains". Caddy и так отдаёт обе версии TLS, явная строка защищает от случайного урезания.
+
+Для nginx:
+
+nginx
+server {
+ listen 127.0.0.1:9443 ssl;
+ http2 on;
+ server_name node.example.com;
+ ssl_certificate /etc/letsencrypt/live/node.example.com/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/node.example.com/privkey.pem;
+ ssl_protocols TLSv1.2 TLSv1.3;
+ add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+ root /var/www/selfsteal;
+ index index.html;
+}
+
+http2 on; работает с nginx 1.25.1. На старых версиях пишите listen 127.0.0.1:9443 ssl http2;.
+
+После правок
+
+Запустите скрипт ещё раз: все пять пунктов должны быть ✔. Если нода уже заблокирована по IP, эти меры её не разблокируют. Нужен новый IP (сразу с этими настройками) или вход через CDN: Спрятать сервер за CDN.
+
+Связанные статьи: Selfsteal на nginx, Хосты Remnawave, Защита панели и доступов.
+
+Оглавление

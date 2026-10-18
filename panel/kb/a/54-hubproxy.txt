@@ -1,0 +1,225 @@
+Заголовок: Прокси Telegram под видом обычного сайта (бета)
+
+Обычный MTProto-прокси находят за минуты. Он сидит на своём порту, отвечает на характерное рукопожатие, и сканеру хватает одного пакета. Порт закрывают, клиенты остаются без связи.
+
+Здесь прокси прячется за настоящим сайтом. На 443 стоит Caddy с сертификатом Let's Encrypt. Откроете домен браузером, увидите страницу «технические работы». Подключите Telegram, попадёте в прокси. Провайдер в обоих случаях видит одно: HTTPS к веб-серверу.
+
+⚠️ Технология в бета-тесте, работает не у всех. Транспорт TProxy Telegram только раскатывает. На момент написания статьи: Telegram Desktop поддерживает, Android в состоянии эксперимента, iOS не поддерживает вовсе. Публичный t.me ссылку такого вида ещё не обрабатывает, поэтому она может не открываться нажатием. Перед тем как выдавать это клиентам, проверьте на своём устройстве.
+
+📖 Незнакомые слова? Все термины простыми словами есть в Словаре терминов.
+
+Как устроено
+text
+Caddy:443 (TLS) → TProxy ┬→ браузер → страница «Технические работы»
+ └→ Telegram → MTProxy (только localhost)
+
+Работу делит TProxy, форк от команды Telegram Desktop. Он получает уже расшифрованное соединение и смотрит, кто пришёл: браузеру отдаёт статику, клиенту Telegram уводит соединение в MTProxy.
+
+MTProxy наружу не смотрит. Открыт единственный порт 443.
+
+Что понадобится
+сервер на Ubuntu или Debian, root
+домен, A-запись которого ведёт на этот сервер
+свободный порт 443
+Быстрая установка
+
+Одна команда, дальше скрипт всё делает сам:
+
+bash
+bash <(curl -sL https://raw.githubusercontent.com/qwe8nxtroud/hubproxy/main/install.sh) proxy.example.com
+
+Перед работой он проверит домен и порт, соберёт компоненты, выпустит сертификат и напечатает ссылку для подключения. Удаление: тот же скрипт с ключом --uninstall.
+
+Дальше разбираем те же шаги руками. Если хотите понимать, что стоит на вашем сервере, читайте.
+
+Установка по шагам
+1. Caddy
+
+Он держит 443 и сам получает сертификат.
+
+bash
+apt-get update && apt-get install -y ca-certificates gnupg curl
+curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+ | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
+ > /etc/apt/sources.list.d/caddy-stable.list
+apt-get update && apt-get install -y caddy
+
+2. MTProxy
+
+Собираем из исходников Telegram:
+
+bash
+apt-get install -y git build-essential libssl-dev zlib1g-dev
+git clone --depth 1 https://github.com/TelegramMessenger/MTProxy /tmp/mtproxy
+make -C /tmp/mtproxy -j$(nproc)
+install -D -m 0755 /tmp/mtproxy/objs/bin/mtproto-proxy /opt/hubproxy/mtproto-proxy
+
+3. TProxy
+
+Нужен Go. Ставим и собираем:
+
+bash
+curl -fsSL https://go.dev/dl/go1.23.4.linux-amd64.tar.gz -o /tmp/go.tgz
+tar -C /usr/local -xzf /tmp/go.tgz
+export PATH=$PATH:/usr/local/go/bin
+
+git clone --depth 1 https://github.com/telegramdesktop/tproxy-server /tmp/tproxy
+cd /tmp/tproxy && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+ -o /usr/local/bin/hubproxy-tproxy ./cmd/tproxy-server
+
+4. Данные Telegram и секрет
+bash
+mkdir -p /etc/hubproxy
+curl -fsS --ipv4 --max-time 60 https://core.telegram.org/getProxySecret -o /etc/hubproxy/proxy-secret
+curl -fsS --ipv4 --max-time 60 https://core.telegram.org/getProxyConfig -o /etc/hubproxy/proxy-multi.conf
+SECRET=$(head -c 16 /dev/urandom | xxd -p -c 32) && echo "$SECRET"
+
+Секрет сохраните, он понадобится дважды: в настройках TProxy и в ссылке для клиента.
+
+⚠️ С серверов в России core.telegram.org иногда отвечает по IPv6 и очень медленно. Мы замеряли 11 секунд против 0,07 с из Европы, и установка падала по таймауту. Флаг --ipv4 и запас по времени лечат это.
+
+5. Страница-заглушка
+bash
+mkdir -p /var/lib/hubproxy/site
+cat > /var/lib/hubproxy/site/index.html <<'HTML'
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>Технические работы</title></head>
+<body><h1>Технические работы</h1>
+<p>Сайт временно недоступен.</p></body></html>
+HTML
+
+Замените на что-то правдоподобное. Домен могут открыть и посмотреть глазами.
+
+6. Настройка TProxy
+bash
+cat > /etc/hubproxy/config.json <<JSON
+{
+ "public_hostname": "proxy.example.com",
+ "listen": "127.0.0.1:8080",
+ "admin_listen": "127.0.0.1:8081",
+ "public_dir": "/var/lib/hubproxy/site",
+ "profiles_file": "/etc/hubproxy/profiles.json",
+ "enable_pprof": false
+}
+JSON
+
+cat > /etc/hubproxy/profiles.json <<JSON
+{ "profiles": [ { "name": "default", "secret": "ВАШ_СЕКРЕТ", "backend": "127.0.0.1:2398" } ] }
+JSON
+chmod 600 /etc/hubproxy/profiles.json
+
+7. Caddy: конфигурация
+caddyfile
+{
+ email admin@proxy.example.com
+ admin off
+ servers {
+ protocols h1 h2
+ timeouts {
+ read_header 10s
+ read_body 60s
+ }
+ }
+}
+
+proxy.example.com {
+ encode zstd gzip
+ header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+ reverse_proxy 127.0.0.1:8080 {
+ transport http {
+ response_header_timeout 40s
+ }
+ }
+}
+
+⚠️ Таймауты здесь обязательны. TProxy держит длинные опросы около 25 секунд, а Caddy с настройками по умолчанию рвёт их. Клиент при этом показывает «недоступен», хотя все службы запущены и выглядят здоровыми.
+
+8. Службы
+ini
+# /etc/systemd/system/hubproxy-mtproto.service
+[Service]
+ExecStart=/opt/hubproxy/mtproto-proxy -u nobody -H 2398 -S ВАШ_СЕКРЕТ \
+ --aes-pwd /etc/hubproxy/proxy-secret /etc/hubproxy/proxy-multi.conf -M 1
+Restart=always
+
+ini
+# /etc/systemd/system/hubproxy-tproxy.service
+[Service]
+ExecStart=/usr/local/bin/hubproxy-tproxy --config /etc/hubproxy/config.json
+Restart=always
+
+bash
+systemctl daemon-reload
+systemctl enable --now hubproxy-mtproto hubproxy-tproxy caddy
+ufw deny 2398/tcp # наружу этот порт смотреть не должен
+
+⚠️ Не добавляйте к MTProxy --address 127.0.0.1 и --nat-info 127.0.0.1:127.0.0.1. Оба флага ограничивают исходящие соединения, и прокси перестаёт дозваниваться до серверов Telegram: журнал заполняется connect: Invalid argument, клиент висит на «соединение». Порт закрывайте файрволом.
+
+Проверка
+bash
+# сайт отдаётся и сертификат выпущен
+curl -I https://proxy.example.com/
+
+# обе службы живы
+systemctl is-active hubproxy-mtproto hubproxy-tproxy
+
+# прокси дозвонился до Telegram: соединений должно быть много
+ss -tnp state established | grep -c mtproto
+
+# ошибок быть не должно
+journalctl -u hubproxy-mtproto --since "2 minutes ago" | grep -c "Invalid argument"
+
+Последние две проверки важнее остальных. Службы могут числиться активными, а прокси при этом не иметь связи с Telegram.
+
+Подключение
+
+Ссылка выглядит так:
+
+text
+tg://webproxy?server=proxy.example.com&secret=ВАШ_СЕКРЕТ
+
+Секрет здесь тот же, что в profiles.json, без префиксов.
+
+⚠️ Схема именно webproxy. Знакомая tg://proxy с секретом, начинающимся на ee, здесь не подойдёт: это другой транспорт, при котором клиент открывает MTProto-соединение напрямую и упирается в веб-сервер.
+
+Ссылка может не открываться нажатием, потому что t.me этот маршрут пока не обрабатывает. На macOS проверьте через терминал:
+
+bash
+open "tg://webproxy?server=proxy.example.com&secret=ВАШ_СЕКРЕТ"
+
+Не сработало? Значит ваш клиент транспорт ещё не поддерживает. Ждите обновления либо поднимайте классический MTProto: «MTProto-прокси».
+
+Управление
+bash
+cat /etc/hubproxy/connection.txt # данные подключения
+journalctl -u hubproxy-tproxy -n 50 # журнал
+
+Смена секрета: правите profiles.json и строку запуска MTProxy, перезапускаете обе службы. Через скрипт короче: bash install.sh proxy.example.com --rotate.
+
+Если не получилось
+Симптом	Что проверить	Что сделать
+Сертификат не выпускается, Caddy пишет про ошибку проверки	Смотрит ли домен на этот сервер и открыт ли 80-й порт: dig +short домен, ufw status	A-запись должна указывать на адрес сервера. Если домен за Cloudflare — временно выключите проксирование, иначе проверка не дойдёт
+Страница-заглушка открывается, Telegram не подключается	Запущены ли обе службы: systemctl status caddy mtproxy tproxy	Сайт отдаёт Caddy, а канал связи — отдельная служба. Упала любая из них, и симптом именно такой
+Служба падает сразу после старта	Логи: journalctl -u tproxy -n 50 --no-pager	Чаще всего дело в неверном секрете или занятом порте: сверьте значения с теми, что в profiles.json
+Caddy не стартует, порт занят	Кто держит 443: ss -tlnp sport =:443	Прокси и сторонний веб-сервер на одной машине не уживаются. Разносите их по разным серверам
+Ссылка не открывается по нажатию в Telegram	Как именно передаёте ссылку	Публичный t.me такой формат ещё не обрабатывает. Передавайте ссылку текстом с инструкцией «скопировать и вставить в настройках»
+Работает на компьютере, не работает на телефоне	Устройство клиента	На iPhone этот транспорт сейчас не поддерживается вовсе, на Android — экспериментально. Это не ваша поломка
+Подключение обрывается через несколько минут	Не менялся ли секрет и не перезапускалась ли служба	После смены секрета переподключить придётся всех, кто им пользуется
+Грабли
+Домен за Cloudflare. Выключите проксирование на время выпуска сертификата, иначе Let's Encrypt не достучится до сервера.
+Домен светится в Certificate Transparency. Выпуск сертификата попадает в публичные логи. Берите отдельное имя, не связанное с основным сервисом.
+Один секрет на всех клиентов. Утёк у одного, менять придётся всем. Для розницы заводите отдельные профили в profiles.json.
+Занятый 443. Если на сервере уже работает nginx, разносите прокси и сайт по разным машинам.
+Telegram видит IP сервера. Прокси скрывает факт использования от провайдера, но не прячет вас от самого мессенджера.
+Клиенты поддерживают не все. Повторю: на iPhone это сейчас не работает. Не обещайте клиентам того, что не проверили на их устройствах.
+Что дальше
+Классический MTProto, который понимают все клиенты: «MTProto-прокси».
+Спрятать за CDN основную ноду: «Спрятать сервер за CDN».
+Резервные протоколы: «NaiveProxy и AmneziaWG».
+
+Скрипт: github.com/qwe8nxtroud/hubproxy. Схему подсмотрели у sacoq/web-proxy-tg-installer, код написан заново.
+
+Проверено на живом сервере, транспорт в бете — сентябрь 2026.
+
+Оглавление

@@ -1,12 +1,25 @@
 import { Link } from 'react-router-dom'
 
-export type BrandNavActive = 'panel' | 'tasks' | 'stats' | 'olcnode' | 'team' | 'api'
+export type BrandNavActive =
+  | 'panel'
+  | 'tasks'
+  | 'stats'
+  | 'olcnode'
+  | 'team'
+  | 'api'
+  | 'kb'
 
 export default function BrandNav({ active }: { active: BrandNavActive }) {
   return (
     <nav className="brand-nav" aria-label="Разделы">
       <Link to="/" className={`brand${active === 'panel' ? ' active' : ''}`}>
         ha<span>panel</span>
+      </Link>
+      <Link
+        to="/kb"
+        className={`brand brand-kb${active === 'kb' ? ' active' : ''}`}
+      >
+        ba<span>za</span>
       </Link>
       <Link
         to="/tasks"
