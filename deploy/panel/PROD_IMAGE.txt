@@ -1,10 +1,10 @@
 # Exact production image (hapanel-panel)
 # Config ID (docker image id):
-sha256:cd3dd3755117718a2310bcedcdc0ffa29cfd5cba32798516301d0adadb54b547
+sha256:edd71ca23c92be7d99ab819c97ea53cc772ce67ff640ed103c1989355264f179
 # Hub digest:
-sha256:91c2715d33a47c145a1fb5d1eda400132d98482715a29c47cd51af0591f4e835
-# Tag on prod: azamatbash/hapanel:0.1.16
+sha256:413a34d40fb3a483995f5270dc7ca5b159ab913223660401ebc95a0746e1d443
+# Tag on prod: azamatbash/hapanel:0.1.17
 # Synced:
-2026-10-18T22:52:00Z
+2026-10-18T23:00:44Z
 # Node agent Hub (azamatbash/hanode:0.1.7 / :latest) — compose recreate conflict fix:
 sha256:bb7955f1434c27b90bd557ad4c63d04a6956d5181d3f72a9b62e0e49105ec0ef
