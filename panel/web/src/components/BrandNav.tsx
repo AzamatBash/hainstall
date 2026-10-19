@@ -95,6 +95,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { id: 'panel', to: '/', label: 'Ноды', icon: <IconGrid /> },
       { id: 'stats', to: '/stats', label: 'Статистика', icon: <IconChart /> },
+      { id: 'kb', to: '/kb', label: 'База знаний', icon: <IconBook /> },
     ],
   },
   {
@@ -107,10 +108,7 @@ const GROUPS: NavGroup[] = [
   },
   {
     title: 'Инструменты',
-    items: [
-      { id: 'kb', to: '/kb', label: 'База знаний', icon: <IconBook /> },
-      { id: 'olcnode', to: '/olcnode', label: 'olcNode', icon: <IconLink /> },
-    ],
+    items: [{ id: 'olcnode', to: '/olcnode', label: 'olcNode', icon: <IconLink /> }],
   },
 ]
 

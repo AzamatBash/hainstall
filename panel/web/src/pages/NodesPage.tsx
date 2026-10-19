@@ -645,44 +645,11 @@ export default function NodesPage() {
     }
   }
 
-  return (
-    <div className="shell">
-      <header className="page-toolbar">
-        <div className="page-toolbar-title">
-          <h1>Ноды</h1>
-        </div>
-        <div className="page-toolbar-actions">
-          {filterTab !== 'remna' && filterTab !== 'agent' && (
-            <label className="nodes-search" title="Поиск по имени, IP ноды, адресу из Remnawave или бэкенда">
-              <span className="nodes-search-icon" aria-hidden>
-                <SearchIcon />
-              </span>
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Имя, IP, адрес из Remnawave…"
-                aria-label="Поиск нод"
-              />
-            </label>
-          )}
-          {filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent' && (
-            <>
-              <button className="btn btn-sm" type="button" onClick={() => void load()}>
-                Обновить
-              </button>
-              <button
-                className="btn btn-sm btn-primary"
-                type="button"
-                onClick={() => setShowAdd(true)}
-              >
-                Добавить ноду
-              </button>
-            </>
-          )}
-        </div>
-      </header>
+  const showNodesChrome =
+    filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent'
 
+  return (
+    <div className="shell nodes-shell">
       <nav className="page-tabs" aria-label="Разделы">
         <button
           type="button"
@@ -733,7 +700,7 @@ export default function NodesPage() {
         <AgentDeployChat onDone={() => void load()} />
       ) : (
       <>
-        {!loading && (nodes?.length ?? 0) > 0 && filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent' && (
+        {!loading && (nodes?.length ?? 0) > 0 && showNodesChrome && (
           <div className="nodes-summary" aria-label="Сводка">
             {(() => {
               const down = formatBitrateParts(nodesSummary.down)
@@ -795,10 +762,24 @@ export default function NodesPage() {
           </div>
         )}
 
-      <section className="panel nodes-panel">
-        <div className="panel-head">
-          <h2>{activePanelName}</h2>
-          <div className="panel-head-aside nodes-sort">
+      <section className="nodes-panel">
+        <div className="nodes-section-head">
+          <h1 className="nodes-section-title">{activePanelName}</h1>
+          <div className="nodes-section-actions">
+            {showNodesChrome && (
+              <label className="nodes-search" title="Поиск по имени, IP, Remnawave или бэкенду">
+                <span className="nodes-search-icon" aria-hidden>
+                  <SearchIcon />
+                </span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Поиск…"
+                  aria-label="Поиск нод"
+                />
+              </label>
+            )}
             <button
               type="button"
               className={`btn btn-sm btn-ghost th-sort${listSort?.key === 'online' ? ' active' : ''}`}
@@ -821,6 +802,22 @@ export default function NodesPage() {
                 {listSort?.key === 'traffic' ? (listSort.dir === 'desc' ? '↓' : '↑') : '↕'}
               </span>
             </button>
+            {showNodesChrome && (
+              <>
+                <button className="btn btn-sm" type="button" onClick={() => void load()}>
+                  Обновить
+                </button>
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  onClick={() => setShowAdd(true)}
+                  title="Добавить ноду"
+                  aria-label="Добавить ноду"
+                >
+                  Добавить
+                </button>
+              </>
+            )}
           </div>
         </div>
         {error && <p className="error">{error}</p>}
