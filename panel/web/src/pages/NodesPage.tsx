@@ -645,62 +645,70 @@ export default function NodesPage() {
     }
   }
 
-  const showNodesChrome =
-    filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent'
+  const sectionTabs = (
+    <nav className="page-tabs nodes-filter-tabs" aria-label="Разделы">
+      <button
+        type="button"
+        className={`page-tab${filterTab === 'remna' ? ' active' : ''}`}
+        onClick={() => setFilterTab('remna')}
+      >
+        Панели Remnawave
+      </button>
+      <button
+        type="button"
+        className={`page-tab${filterTab === 'providers' ? ' active' : ''}`}
+        onClick={() => setFilterTab('providers')}
+      >
+        Провайдеры
+      </button>
+      <button
+        type="button"
+        className={`page-tab${filterTab === 'nodes' ? ' active' : ''}`}
+        onClick={() => setFilterTab('nodes')}
+      >
+        Ноды
+      </button>
+      <button
+        type="button"
+        className={`page-tab${filterTab === 'agent' ? ' active' : ''}`}
+        onClick={() => setFilterTab('agent')}
+      >
+        Агент
+      </button>
+      {panels.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          className={`page-tab${filterTab === p.id ? ' active' : ''}`}
+          onClick={() => setFilterTab(p.id)}
+          title={p.base_url}
+        >
+          {p.name}
+        </button>
+      ))}
+    </nav>
+  )
 
   return (
     <div className="shell nodes-shell">
-      <nav className="page-tabs" aria-label="Разделы">
-        <button
-          type="button"
-          className={`page-tab${filterTab === 'remna' ? ' active' : ''}`}
-          onClick={() => setFilterTab('remna')}
-        >
-          Панели Remnawave
-        </button>
-        <button
-          type="button"
-          className={`page-tab${filterTab === 'providers' ? ' active' : ''}`}
-          onClick={() => setFilterTab('providers')}
-        >
-          Провайдеры
-        </button>
-        <button
-          type="button"
-          className={`page-tab${filterTab === 'nodes' ? ' active' : ''}`}
-          onClick={() => setFilterTab('nodes')}
-        >
-          Ноды
-        </button>
-        <button
-          type="button"
-          className={`page-tab${filterTab === 'agent' ? ' active' : ''}`}
-          onClick={() => setFilterTab('agent')}
-        >
-          Агент
-        </button>
-        {panels.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`page-tab${filterTab === p.id ? ' active' : ''}`}
-            onClick={() => setFilterTab(p.id)}
-            title={p.base_url}
-          >
-            {p.name}
-          </button>
-        ))}
-      </nav>
-
       {filterTab === 'remna' ? (
-        <RemnaPanelsSection />
+        <>
+          {sectionTabs}
+          <RemnaPanelsSection />
+        </>
       ) : filterTab === 'providers' ? (
-        <ProvidersSection providers={providers} onChange={() => void loadProviders()} />
+        <>
+          {sectionTabs}
+          <ProvidersSection providers={providers} onChange={() => void loadProviders()} />
+        </>
       ) : filterTab === 'agent' ? (
-        <AgentDeployChat onDone={() => void load()} />
+        <>
+          {sectionTabs}
+          <AgentDeployChat onDone={() => void load()} />
+        </>
       ) : (
       <>
-        {!loading && (nodes?.length ?? 0) > 0 && showNodesChrome && (
+        {!loading && (nodes?.length ?? 0) > 0 && (
           <div className="nodes-summary" aria-label="Сводка">
             {(() => {
               const down = formatBitrateParts(nodesSummary.down)
@@ -766,60 +774,48 @@ export default function NodesPage() {
         <div className="nodes-section-head">
           <h1 className="nodes-section-title">{activePanelName}</h1>
           <div className="nodes-section-actions">
-            {showNodesChrome && (
-              <label className="nodes-search" title="Поиск по имени, IP, Remnawave или бэкенду">
-                <span className="nodes-search-icon" aria-hidden>
-                  <SearchIcon />
-                </span>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Поиск…"
-                  aria-label="Поиск нод"
-                />
-              </label>
-            )}
+            <label className="nodes-search" title="Поиск по имени, IP, Remnawave или бэкенду">
+              <span className="nodes-search-icon" aria-hidden>
+                <SearchIcon />
+              </span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Поиск…"
+                aria-label="Поиск нод"
+              />
+            </label>
             <button
               type="button"
-              className={`btn btn-sm btn-ghost th-sort${listSort?.key === 'online' ? ' active' : ''}`}
+              className={`nodes-icon-btn${listSort?.key === 'online' ? ' active' : ''}`}
               onClick={() => cycleListSort('online')}
               title="Сортировать по Online"
             >
-              Online
-              <span className="th-sort-ind" aria-hidden>
-                {listSort?.key === 'online' ? (listSort.dir === 'desc' ? '↓' : '↑') : '↕'}
-              </span>
+              Online{listSort?.key === 'online' ? (listSort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
             </button>
             <button
               type="button"
-              className={`btn btn-sm btn-ghost th-sort${listSort?.key === 'traffic' ? ' active' : ''}`}
+              className={`nodes-icon-btn${listSort?.key === 'traffic' ? ' active' : ''}`}
               onClick={() => cycleListSort('traffic')}
-              title="Сортировать по текущему трафику"
+              title="Сортировать по трафику"
             >
-              Трафик
-              <span className="th-sort-ind" aria-hidden>
-                {listSort?.key === 'traffic' ? (listSort.dir === 'desc' ? '↓' : '↑') : '↕'}
-              </span>
+              Трафик{listSort?.key === 'traffic' ? (listSort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
             </button>
-            {showNodesChrome && (
-              <>
-                <button className="btn btn-sm" type="button" onClick={() => void load()}>
-                  Обновить
-                </button>
-                <button
-                  className="btn btn-sm btn-primary"
-                  type="button"
-                  onClick={() => setShowAdd(true)}
-                  title="Добавить ноду"
-                  aria-label="Добавить ноду"
-                >
-                  Добавить
-                </button>
-              </>
-            )}
+            <button className="nodes-icon-btn" type="button" onClick={() => void load()} title="Обновить">
+              ↻
+            </button>
+            <button
+              className="btn btn-sm btn-primary"
+              type="button"
+              onClick={() => setShowAdd(true)}
+              title="Добавить ноду"
+            >
+              +
+            </button>
           </div>
         </div>
+        {sectionTabs}
         {error && <p className="error">{error}</p>}
         {loading ? (
               <p className="muted">Загрузка…</p>

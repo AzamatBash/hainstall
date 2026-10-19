@@ -12,7 +12,7 @@
   --ok: #34d399;
   --node-card: #1a222c;
   --node-card-hover: #212b37;
-  --sidebar-w: 15.5rem;
+  --sidebar-w: 14.25rem;
   --radius: 10px;
   --radius-lg: 14px;
   --font: 'IBM Plex Sans', system-ui, sans-serif;
@@ -133,12 +133,12 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0.55rem 0.7rem;
+  gap: 0.55rem;
+  padding: 0.5rem 0.65rem;
   border-radius: 9px;
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
   text-decoration: none;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   transition: background 0.2s ease, color 0.2s ease;
 }
 
@@ -1717,26 +1717,27 @@ select {
 .nodes-summary-value {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
   margin-top: 0.15rem;
   line-height: 1.1;
   font-family: var(--font);
 }
 
 .nodes-summary-num {
-  font-size: 1.45rem;
+  font-size: 1.4rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.015em;
   color: var(--text);
 }
 
 .nodes-summary-unit {
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   font-weight: 500;
   color: var(--muted);
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
+  margin-left: 0.05rem;
 }
 
 .nodes-shell {
@@ -1766,36 +1767,52 @@ select {
 .nodes-section-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   flex-wrap: wrap;
   margin-left: auto;
 }
 
-.nodes-section-actions .th-sort {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
+.nodes-icon-btn {
+  appearance: none;
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  line-height: 1;
 }
 
-.nodes-section-actions .th-sort.active {
+.nodes-icon-btn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.nodes-icon-btn.active {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.nodes-filter-tabs {
+  margin: 0 0 0.7rem;
 }
 
 .nodes-cards {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.35rem;
   margin: 0;
 }
 
 .node-card {
   display: grid;
-  grid-template-columns: 2.85rem minmax(0, 1fr) minmax(8.5rem, 11rem) 2rem;
+  grid-template-columns: auto minmax(0, 1fr) minmax(9rem, 12rem) 1.75rem;
   align-items: center;
-  column-gap: 0.75rem;
-  row-gap: 0.3rem;
-  padding: 0.55rem 0.7rem;
+  column-gap: 0.85rem;
+  padding: 0.5rem 0.65rem;
   background: color-mix(in srgb, var(--node-card) 94%, transparent);
   border: 1px solid var(--glass-border);
   border-radius: 10px;
@@ -1820,10 +1837,10 @@ select {
 
 .node-card-rail {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 0.25rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
 }
 
 .node-card-pulse {
@@ -1843,24 +1860,25 @@ select {
 .node-card-users {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.22rem;
   color: color-mix(in srgb, #60a5fa 85%, var(--text));
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  min-width: 2.4rem;
 }
 
 .node-card-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.28rem;
+  gap: 0.2rem;
 }
 
 .node-card-top {
   display: flex;
   align-items: center;
-  gap: 0.45rem 0.6rem;
+  gap: 0.4rem 0.55rem;
   flex-wrap: nowrap;
   min-width: 0;
 }
@@ -1868,22 +1886,23 @@ select {
 .node-card-title {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   min-width: 0;
   flex: 0 1 auto;
-  max-width: 38%;
+  max-width: none;
 }
 
 .node-card-title .node-name-link {
   font-family: var(--font);
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   color: var(--text);
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  max-width: 14rem;
 }
 
 .node-card-title .node-name-link:hover {
@@ -1894,7 +1913,7 @@ select {
 .node-card-tags {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.4rem;
   flex: 0 1 auto;
   min-width: 0;
 }
@@ -1977,12 +1996,12 @@ select {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.4rem;
+  gap: 0.28rem;
   min-width: 0;
 }
 
 .node-card-traffic-bar {
-  height: 0.45rem;
+  height: 0.38rem;
   border-radius: 999px;
   background: color-mix(in srgb, #000 35%, var(--border));
   overflow: hidden;
@@ -2048,10 +2067,10 @@ select {
   }
 
   .node-card {
-    grid-template-columns: 2.85rem minmax(0, 1fr) 2rem;
+    grid-template-columns: auto minmax(0, 1fr) 1.75rem;
     grid-template-areas:
       'rail body actions'
-      'rail aside actions';
+      '. aside actions';
   }
 
   .node-card-rail { grid-area: rail; }
@@ -2059,8 +2078,8 @@ select {
   .node-card-aside { grid-area: aside; }
   .node-card-actions { grid-area: actions; align-self: start; }
 
-  .node-card-title {
-    max-width: 55%;
+  .node-card-title .node-name-link {
+    max-width: 10rem;
   }
 
   .node-card-tags {
@@ -2081,15 +2100,9 @@ select {
       'aside aside';
   }
 
-  .node-card-rail {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.85rem;
-  }
-
   .node-card-metrics {
     flex-wrap: wrap;
-    gap: 0.65rem 0.85rem;
+    gap: 0.5rem 0.7rem;
   }
 }
 
