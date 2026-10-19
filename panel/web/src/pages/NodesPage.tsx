@@ -881,82 +881,85 @@ export default function NodesPage() {
                         </span>
                         <span className="node-card-users" title="Online в Remnawave">
                           <IconUsersTiny />
-                          <span className="mono">{n.remna_online ?? 0}</span>
+                          <span>{n.remna_online ?? 0}</span>
                         </span>
                       </div>
 
-                      <div className="node-card-main">
-                        <div className="node-card-identity">
-                          <span onClick={(e) => e.stopPropagation()}>
-                            <CountryPicker
-                              value={n.country || ''}
-                              onChange={(code) => void setCountry(n.id, code)}
-                            />
-                          </span>
-                          {renamingId === n.id ? (
-                            <form
-                              className="inline-rename"
-                              onClick={(e) => e.stopPropagation()}
-                              onSubmit={(e) => {
-                                e.preventDefault()
-                                void submitRename(n.id)
-                              }}
-                            >
-                              <input
-                                ref={renameRef}
-                                className="inline-rename-input"
-                                value={renameValue}
-                                disabled={renameBusy}
-                                onChange={(e) => setRenameValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Escape') {
-                                    e.preventDefault()
-                                    setRenamingId(null)
-                                  }
-                                }}
-                                onBlur={() => {
-                                  window.setTimeout(() => {
-                                    if (!renameBusy) setRenamingId(null)
-                                  }, 120)
-                                }}
-                              />
-                            </form>
-                          ) : (
-                            <Link
-                              to={`/nodes/${n.id}`}
-                              className="node-name-link"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {n.name}
-                            </Link>
-                          )}
-                          {n.provider_name ? (
+                      <div className="node-card-body">
+                        <div className="node-card-top">
+                          <div className="node-card-title">
                             <span onClick={(e) => e.stopPropagation()}>
+                              <CountryPicker
+                                value={n.country || ''}
+                                onChange={(code) => void setCountry(n.id, code)}
+                              />
+                            </span>
+                            {renamingId === n.id ? (
+                              <form
+                                className="inline-rename"
+                                onClick={(e) => e.stopPropagation()}
+                                onSubmit={(e) => {
+                                  e.preventDefault()
+                                  void submitRename(n.id)
+                                }}
+                              >
+                                <input
+                                  ref={renameRef}
+                                  className="inline-rename-input"
+                                  value={renameValue}
+                                  disabled={renameBusy}
+                                  onChange={(e) => setRenameValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Escape') {
+                                      e.preventDefault()
+                                      setRenamingId(null)
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    window.setTimeout(() => {
+                                      if (!renameBusy) setRenamingId(null)
+                                    }, 120)
+                                  }}
+                                />
+                              </form>
+                            ) : (
+                              <Link
+                                to={`/nodes/${n.id}`}
+                                className="node-name-link"
+                                onClick={(e) => e.stopPropagation()}
+                                title={n.name}
+                              >
+                                {n.name}
+                              </Link>
+                            )}
+                          </div>
+                          <div className="node-card-tags" onClick={(e) => e.stopPropagation()}>
+                            {n.provider_name ? (
                               <ProviderBadge
                                 name={n.provider_name}
                                 favicon={n.provider_favicon}
                                 loginUrl={n.provider_login_url}
                                 accountLogin={n.provider_account_login}
                               />
+                            ) : null}
+                            <span className="node-card-host">
+                              <span className="node-card-ip">{host}</span>
+                              <button
+                                type="button"
+                                className={`icon-btn${copiedId === n.id ? ' copied' : ''}`}
+                                title={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
+                                aria-label={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
+                                onClick={() => void onCopyHost(n.id, host)}
+                              >
+                                {copiedId === n.id ? <CheckIcon /> : <CopyIcon />}
+                              </button>
                             </span>
-                          ) : null}
-                          <span className="node-card-host" onClick={(e) => e.stopPropagation()}>
-                            <span className="mono muted">{host}</span>
-                            <button
-                              type="button"
-                              className={`icon-btn${copiedId === n.id ? ' copied' : ''}`}
-                              title={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
-                              aria-label={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
-                              onClick={() => void onCopyHost(n.id, host)}
-                            >
-                              {copiedId === n.id ? <CheckIcon /> : <CopyIcon />}
-                            </button>
-                          </span>
-                          {n.remna_panel_name ? (
-                            <span className="node-card-panel muted" title="Панель Remnawave">
-                              {n.remna_panel_name}
-                            </span>
-                          ) : null}
+                            {n.remna_panel_name ? (
+                              <span className="node-card-panel" title="Панель Remnawave">
+                                {n.remna_panel_name}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
 
                         <div className="node-card-metrics">
@@ -966,10 +969,10 @@ export default function NodesPage() {
                                 <span className="node-live-bar" aria-hidden>
                                   <span className="node-live-bar-fill" style={{ width: `${cpu}%` }} />
                                 </span>
-                                <span className="mono">{cpu.toFixed(0)}%</span>
+                                <span className="node-metric-num">{cpu.toFixed(0)}%</span>
                               </span>
                               {load ? (
-                                <span className="node-live-load mono" title="Load average">
+                                <span className="node-live-load" title="Load average">
                                   {load}
                                 </span>
                               ) : null}
@@ -977,13 +980,13 @@ export default function NodesPage() {
                                 <span className="node-live-arrow" aria-hidden>
                                   ↓
                                 </span>
-                                {formatBitrateShort(m?.downBps)}
+                                <span className="node-metric-num">{formatBitrateShort(m?.downBps)}</span>
                               </span>
                               <span className="node-live-net up" title="Загрузка (RX)">
                                 <span className="node-live-arrow" aria-hidden>
                                   ↑
                                 </span>
-                                {formatBitrateShort(m?.upBps)}
+                                <span className="node-metric-num">{formatBitrateShort(m?.upBps)}</span>
                               </span>
                             </>
                           ) : (
@@ -993,7 +996,7 @@ export default function NodesPage() {
                           )}
                           {backends.length > 0 ? (
                             <span
-                              className="node-card-backends muted"
+                              className="node-card-backends"
                               title={backends.map((b) => b.name).join(', ')}
                             >
                               {backends.length} бэк.
@@ -1002,28 +1005,30 @@ export default function NodesPage() {
                         </div>
                       </div>
 
-                      <div className="node-card-traffic" title="Текущий трафик относительно других нод">
+                      <div className="node-card-aside" title="Текущий трафик относительно других нод">
                         <div className="node-card-traffic-bar" aria-hidden>
                           <span style={{ width: `${barPct}%` }} />
                         </div>
-                        <div className="node-card-traffic-label mono">
-                          {n.status === 'online' && score > 0
-                            ? formatBitrateShort(score)
-                            : '—'}
+                        <div className="node-card-traffic-meta">
+                          <span className="node-card-traffic-label">
+                            {n.status === 'online' && score > 0
+                              ? formatBitrateShort(score)
+                              : '—'}
+                          </span>
+                          {seen ? (
+                            <span className="node-card-seen" title="Последний ответ">
+                              {seen}
+                            </span>
+                          ) : null}
+                          {n.status === 'online' && n.live?.agent_version ? (
+                            <span className="node-card-ver" title="Версия hanode">
+                              v{n.live.agent_version}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
 
-                      <div className="node-card-meta" onClick={(e) => e.stopPropagation()}>
-                        {seen ? (
-                          <span className="node-card-seen mono muted" title="Последний ответ">
-                            {seen}
-                          </span>
-                        ) : null}
-                        {n.status === 'online' && n.live?.agent_version ? (
-                          <span className="node-card-ver mono muted" title="Версия hanode">
-                            v{n.live.agent_version}
-                          </span>
-                        ) : null}
+                      <div className="node-card-actions" onClick={(e) => e.stopPropagation()}>
                         <div
                           className="kebab-wrap"
                           ref={menuOpenId === n.id ? menuRef : undefined}
