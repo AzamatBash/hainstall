@@ -1,7 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { api, setToken, translateError } from '../api'
-import { withBase } from '../basePath'
-import BrandNav from '../components/BrandNav'
+import { api, translateError } from '../api'
 
 const MSK = 'Europe/Moscow'
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
@@ -127,16 +125,6 @@ export default function TeamPage() {
     return n
   }, [marks, selectedId, cursor])
 
-  async function logout() {
-    try {
-      await api('/api/auth/logout', { method: 'POST' })
-    } catch {
-      /* ignore */
-    }
-    setToken(null)
-    window.location.href = withBase('/login')
-  }
-
   async function addMember(e: FormEvent) {
     e.preventDefault()
     const trimmed = name.trim()
@@ -220,23 +208,14 @@ export default function TeamPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="team" />
-        <div className="row">
-          <button className="btn btn-sm btn-ghost" type="button" onClick={() => void logout()}>
-            Выйти
-          </button>
-        </div>
-      </header>
-
-      <div className="team-head">
-        <div>
-          <h1 className="team-title">Команда</h1>
-          <p className="muted" style={{ margin: '0.2rem 0 0' }}>
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>Команда</h1>
+          <p className="muted">
             Выберите человека и нажимайте дни, когда он отдыхает. Один клик — один день.
           </p>
         </div>
-        <form className="row" onSubmit={(e) => void addMember(e)}>
+        <form className="page-toolbar-actions row" onSubmit={(e) => void addMember(e)}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -248,7 +227,7 @@ export default function TeamPage() {
             Добавить
           </button>
         </form>
-      </div>
+      </header>
 
       {error && <p className="error">{error}</p>}
       {loading && <p className="muted">Загрузка…</p>}

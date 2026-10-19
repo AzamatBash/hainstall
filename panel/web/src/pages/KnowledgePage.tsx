@@ -1,8 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, setToken } from '../api'
-import { withBase } from '../basePath'
-import BrandNav from '../components/BrandNav'
 import KbCodeBlock from '../components/KbCodeBlock'
 import KbProse from '../components/KbProse'
 import bundleJson from '../kb/bundle.json'
@@ -19,12 +16,6 @@ import { KbArticle, KbBundle, pathToSlug, slugToPath } from '../kb/types'
 
 const bundle = bundleJson as KbBundle
 const glossary = bundle.glossary || []
-
-function logout() {
-  void api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  setToken(null)
-  window.location.href = withBase('/login')
-}
 
 function ArticleView({ article }: { article: KbArticle }) {
   const [values, setValues] = useState<KbValues>(() => loadKbValues())
@@ -239,15 +230,6 @@ export default function KnowledgePage() {
 
   return (
     <div className="shell kb-shell">
-      <header className="topbar">
-        <BrandNav active="kb" />
-        <div className="row">
-          <button className="btn btn-sm btn-ghost" type="button" onClick={logout}>
-            Выйти
-          </button>
-        </div>
-      </header>
-
       <div className="kb-layout">
         <aside className="kb-nav">
           <div className="kb-nav-head">

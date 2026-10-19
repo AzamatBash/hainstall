@@ -2,13 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type Clip
 import {
   api,
   RemnaPanel,
-  setToken,
   Task,
   TaskStatus,
   translateError,
 } from '../api'
 import { withBase } from '../basePath'
-import BrandNav from '../components/BrandNav'
 
 const COLUMNS: { status: TaskStatus; label: string }[] = [
   { status: 'todo', label: 'Новая' },
@@ -92,16 +90,6 @@ export default function TasksPage() {
     return map
   }, [tasks])
 
-  async function logout() {
-    try {
-      await api('/api/auth/logout', { method: 'POST' })
-    } catch {
-      /* ignore */
-    }
-    setToken(null)
-    window.location.href = withBase('/login')
-  }
-
   async function openTask(id: string) {
     setViewLoading(true)
     setError('')
@@ -179,18 +167,17 @@ export default function TasksPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="tasks" />
-        <div className="row">
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>Задачи</h1>
+        </div>
+        <div className="page-toolbar-actions">
           <button
             className="btn btn-sm btn-primary"
             type="button"
             onClick={() => setShowCreate(true)}
           >
             Новая задача
-          </button>
-          <button className="btn btn-sm btn-ghost" type="button" onClick={() => void logout()}>
-            Выйти
           </button>
         </div>
       </header>

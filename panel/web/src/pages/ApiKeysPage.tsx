@@ -1,8 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { api, setToken, translateError } from '../api'
-import { withBase } from '../basePath'
+import { api, translateError } from '../api'
 import { copyToClipboard } from '../clipboard'
-import BrandNav from '../components/BrandNav'
 
 interface ApiKeyRow {
   id: string
@@ -48,16 +46,6 @@ export default function ApiKeysPage() {
   useEffect(() => {
     void load()
   }, [load])
-
-  async function logout() {
-    try {
-      await api('/api/auth/logout', { method: 'POST' })
-    } catch {
-      /* ignore */
-    }
-    setToken(null)
-    window.location.href = withBase('/login')
-  }
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
@@ -109,24 +97,15 @@ export default function ApiKeysPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="api" />
-        <div className="row">
-          <button className="btn btn-sm btn-ghost" type="button" onClick={() => void logout()}>
-            Выйти
-          </button>
-        </div>
-      </header>
-
-      <div className="team-head">
-        <div>
-          <h1 className="team-title">API ключи</h1>
-          <p className="muted" style={{ margin: '0.2rem 0 0' }}>
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>API ключи</h1>
+          <p className="muted">
             Ключ для внешней панели: <code>GET /api/v1/hanodes</code> (CPU и трафик ханод).
             Заголовок <code>X-API-Key</code> или <code>Authorization: Bearer …</code>.
           </p>
         </div>
-        <form className="row" onSubmit={(e) => void onCreate(e)}>
+        <form className="page-toolbar-actions row" onSubmit={(e) => void onCreate(e)}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -138,7 +117,7 @@ export default function ApiKeysPage() {
             Сгенерировать
           </button>
         </form>
-      </div>
+      </header>
 
       {error && <p className="error">{error}</p>}
 

@@ -261,7 +261,7 @@ export function formatBitrate(bytesPerSec?: number | null): string {
   return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
 }
 
-/** Compact HAP-style: 124.73Mb/s */
+/** Compact HAP-style: 124.73 Mb/s */
 export function formatBitrateShort(bytesPerSec?: number | null): string {
   if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—'
   const bits = bytesPerSec * 8
@@ -272,7 +272,23 @@ export function formatBitrateShort(bytesPerSec?: number | null): string {
     v /= 1000
     i++
   }
-  return `${v.toFixed(i === 0 ? 0 : 2)}${units[i]}`
+  return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
+}
+
+/** Split bitrate for summary cards: { value: "4.17", unit: "Gb/s" } */
+export function formatBitrateParts(bytesPerSec?: number | null): { value: string; unit: string } {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) {
+    return { value: '—', unit: '' }
+  }
+  const bits = bytesPerSec * 8
+  const units = ['bit/s', 'Kb/s', 'Mb/s', 'Gb/s']
+  let v = bits
+  let i = 0
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000
+    i++
+  }
+  return { value: v.toFixed(i === 0 ? 0 : 2), unit: units[i] }
 }
 
 export function formatUptime(sec?: number | null): string {

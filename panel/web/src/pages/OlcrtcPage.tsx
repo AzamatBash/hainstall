@@ -9,7 +9,6 @@ import {
   type Provider,
 } from '../api'
 import { copyToClipboard } from '../clipboard'
-import BrandNav from '../components/BrandNav'
 import CountryPicker from '../components/CountryPicker'
 import HelpTip from '../components/HelpTip'
 import { ProviderBadge } from './NodesPage'
@@ -310,9 +309,11 @@ export default function OlcrtcPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="olcnode" />
-        <div className="row">
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>olcNode</h1>
+        </div>
+        <div className="page-toolbar-actions">
           <button
             className="btn btn-sm"
             type="button"

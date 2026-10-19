@@ -3,16 +3,15 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   api,
   BackendServer,
+  formatBitrateParts,
   formatBitrateShort,
   Node,
   Provider,
   RemnaPanel,
-  setToken,
   statusLabel,
   translateError,
 } from '../api'
 import { copyToClipboard, downloadTextFile } from '../clipboard'
-import BrandNav from '../components/BrandNav'
 import CountryPicker from '../components/CountryPicker'
 import {
   getNodesCacheMap,
@@ -20,7 +19,6 @@ import {
   putNodesCache,
   removeNodeCache,
 } from '../nodeCache'
-import { withBase } from '../basePath'
 
 const METRICS_POLL_MS = 5000
 
@@ -106,17 +104,6 @@ function StatusBadge({ status, large }: { status: string; large?: boolean }) {
   )
 }
 
-/** Compact variant A: dot + muted text, no pill. */
-function StatusInline({ status }: { status: string }) {
-  const s = status || 'unknown'
-  return (
-    <span className={`status-inline ${s}`} title={statusLabel(s)}>
-      <span className="status-inline-dot" aria-hidden />
-      {statusLabel(s)}
-    </span>
-  )
-}
-
 function nodeHost(url: string): string {
   try {
     return new URL(url).hostname || url
@@ -197,54 +184,59 @@ function cpuBarTone(cpu: number): string {
   return 'ok'
 }
 
-function NodeLiveRow({ m }: { m: NodeLiveMetrics }) {
-  const cpu = Math.max(0, Math.min(100, Number(m.cpu) || 0))
-  const load =
-    m.loadAvg && m.loadAvg.length >= 3
-      ? m.loadAvg.map((n) => Number(n).toFixed(2)).join(' ')
-      : null
-  return (
-    <div className="node-live">
-      <span className={`node-live-cpu ${cpuBarTone(cpu)}`} title="CPU">
-        <span className="node-live-bar" aria-hidden>
-          <span className="node-live-bar-fill" style={{ width: `${cpu}%` }} />
-        </span>
-        <span className="mono">{cpu.toFixed(0)}%</span>
-      </span>
-      {load && (
-        <span className="node-live-load mono" title="Load average">
-          {load}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function NodeTrafficCell({ m }: { m?: NodeLiveMetrics }) {
-  if (!m) return <span className="muted">—</span>
-  return (
-    <div className="node-traffic-cell">
-      <span className="node-live-net down" title="Отдача (TX)">
-        <span className="node-live-arrow" aria-hidden>
-          ↓
-        </span>
-        {formatBitrateShort(m.downBps)}
-      </span>
-      <span className="node-live-net up" title="Загрузка (RX)">
-        <span className="node-live-arrow" aria-hidden>
-          ↑
-        </span>
-        {formatBitrateShort(m.upBps)}
-      </span>
-    </div>
-  )
-}
-
 function trafficScore(m?: NodeLiveMetrics): number {
   if (!m) return 0
   const down = Number(m.downBps)
   const up = Number(m.upBps)
   return (Number.isFinite(down) ? down : 0) + (Number.isFinite(up) ? up : 0)
+}
+
+function IconUsersTiny() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75">
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5S14 16 14.5 19" strokeLinecap="round" />
+      <circle cx="17" cy="9" r="2.2" />
+      <path d="M15.5 14.8c1.6.25 3 1.2 3.5 3.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconPulseTiny() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M3 12h3.2l2-5.5L12.5 18l2.8-6H21" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function IconDownTiny() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 4v14M6.5 13.5 12 19l5.5-5.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function IconUpTiny() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 20V6M6.5 10.5 12 5l5.5 5.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function formatSeenAgo(iso?: string): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return ''
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.floor(h / 24)}d`
 }
 
 type ListSortKey = 'online' | 'traffic'
@@ -444,6 +436,29 @@ export default function NodesPage() {
     })
   }
 
+  const nodesSummary = useMemo(() => {
+    let down = 0
+    let up = 0
+    let users = 0
+    let online = 0
+    let peak = 0
+    for (const n of visibleNodes) {
+      if (n.status === 'online') online += 1
+      if (typeof n.remna_online === 'number' && Number.isFinite(n.remna_online)) {
+        users += n.remna_online
+      }
+      const m = metricsMap[n.id]
+      if (!m) continue
+      const d = Number(m.downBps)
+      const u = Number(m.upBps)
+      if (Number.isFinite(d)) down += d
+      if (Number.isFinite(u)) up += u
+      const score = trafficScore(m)
+      if (score > peak) peak = score
+    }
+    return { down, up, users, online, peak: peak > 0 ? peak : 1, total: visibleNodes.length }
+  }, [visibleNodes, metricsMap])
+
   const activePanelName =
     filterTab === 'remna'
       ? 'Панели Remnawave'
@@ -595,35 +610,16 @@ export default function NodesPage() {
     setDragId(id)
     setDragOverId(null)
 
-    const tr = e.currentTarget.closest('tr')
-    if (!tr) return
-    const rect = tr.getBoundingClientRect()
+    const card = e.currentTarget.closest('.node-card') as HTMLElement | null
+    if (!card) return
+    const rect = card.getBoundingClientRect()
     const wrap = document.createElement('div')
     wrap.className = 'node-drag-ghost-wrap'
     wrap.style.width = `${rect.width}px`
-    const table = document.createElement('table')
-    table.className = tr.closest('table')?.className || 'table table-nodes'
-    table.style.width = `${rect.width}px`
-    const colgroup = tr.closest('table')?.querySelector('colgroup')
-    if (colgroup) {
-      table.appendChild(colgroup.cloneNode(true))
-    } else {
-      // Match column widths so the ghost looks like the real plaque.
-      const cols = Array.from(tr.children) as HTMLElement[]
-      const cg = document.createElement('colgroup')
-      for (const cell of cols) {
-        const col = document.createElement('col')
-        col.style.width = `${cell.getBoundingClientRect().width}px`
-        cg.appendChild(col)
-      }
-      table.appendChild(cg)
-    }
-    const tbody = document.createElement('tbody')
-    const clone = tr.cloneNode(true) as HTMLTableRowElement
-    clone.classList.add('node-drag-ghost-row')
-    tbody.appendChild(clone)
-    table.appendChild(tbody)
-    wrap.appendChild(table)
+    const clone = card.cloneNode(true) as HTMLElement
+    clone.classList.add('node-drag-ghost-card')
+    clone.style.width = `${rect.width}px`
+    wrap.appendChild(clone)
     document.body.appendChild(wrap)
     dragGhostRef.current = wrap
     const offsetX = Math.max(12, e.clientX - rect.left)
@@ -649,35 +645,27 @@ export default function NodesPage() {
     }
   }
 
-  async function logout() {
-    try {
-      await api('/api/auth/logout', { method: 'POST' })
-    } catch {
-      /* ignore */
-    }
-    setToken(null)
-    window.location.href = withBase('/login')
-  }
-
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="panel" />
-        {filterTab !== 'remna' && filterTab !== 'agent' && (
-          <label className="nodes-search" title="Поиск по имени, IP ноды, адресу из Remnawave или бэкенда">
-            <span className="nodes-search-icon" aria-hidden>
-              <SearchIcon />
-            </span>
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Имя, IP, адрес из Remnawave…"
-              aria-label="Поиск нод"
-            />
-          </label>
-        )}
-        <div className="row">
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>Ноды</h1>
+        </div>
+        <div className="page-toolbar-actions">
+          {filterTab !== 'remna' && filterTab !== 'agent' && (
+            <label className="nodes-search" title="Поиск по имени, IP ноды, адресу из Remnawave или бэкенда">
+              <span className="nodes-search-icon" aria-hidden>
+                <SearchIcon />
+              </span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Имя, IP, адрес из Remnawave…"
+                aria-label="Поиск нод"
+              />
+            </label>
+          )}
           {filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent' && (
             <>
               <button className="btn btn-sm" type="button" onClick={() => void load()}>
@@ -692,9 +680,6 @@ export default function NodesPage() {
               </button>
             </>
           )}
-          <button className="btn btn-sm btn-ghost" type="button" onClick={() => void logout()}>
-            Выйти
-          </button>
         </div>
       </header>
 
@@ -747,8 +732,97 @@ export default function NodesPage() {
       ) : filterTab === 'agent' ? (
         <AgentDeployChat onDone={() => void load()} />
       ) : (
-      <section className="panel">
-        <h2>{activePanelName}</h2>
+      <>
+        {!loading && (nodes?.length ?? 0) > 0 && filterTab !== 'remna' && filterTab !== 'providers' && filterTab !== 'agent' && (
+          <div className="nodes-summary" aria-label="Сводка">
+            {(() => {
+              const down = formatBitrateParts(nodesSummary.down)
+              const up = formatBitrateParts(nodesSummary.up)
+              return (
+                <>
+                  <div className="nodes-summary-card">
+                    <span className="nodes-summary-icon down" aria-hidden>
+                      <IconDownTiny />
+                    </span>
+                    <div>
+                      <div className="nodes-summary-label">Скачивание</div>
+                      <div className="nodes-summary-value">
+                        <span className="nodes-summary-num">{down.value}</span>
+                        {down.unit ? <span className="nodes-summary-unit">{down.unit}</span> : null}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="nodes-summary-card">
+                    <span className="nodes-summary-icon up" aria-hidden>
+                      <IconUpTiny />
+                    </span>
+                    <div>
+                      <div className="nodes-summary-label">Отдача</div>
+                      <div className="nodes-summary-value">
+                        <span className="nodes-summary-num">{up.value}</span>
+                        {up.unit ? <span className="nodes-summary-unit">{up.unit}</span> : null}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="nodes-summary-card">
+                    <span className="nodes-summary-icon users" aria-hidden>
+                      <IconUsersTiny />
+                    </span>
+                    <div>
+                      <div className="nodes-summary-label">Онлайн</div>
+                      <div className="nodes-summary-value">
+                        <span className="nodes-summary-num">
+                          {nodesSummary.users.toLocaleString('ru-RU')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="nodes-summary-card">
+                    <span className="nodes-summary-icon pulse" aria-hidden>
+                      <IconPulseTiny />
+                    </span>
+                    <div>
+                      <div className="nodes-summary-label">Ноды</div>
+                      <div className="nodes-summary-value">
+                        <span className="nodes-summary-num">{nodesSummary.online}</span>
+                        <span className="nodes-summary-unit">/ {nodesSummary.total}</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
+          </div>
+        )}
+
+      <section className="panel nodes-panel">
+        <div className="panel-head">
+          <h2>{activePanelName}</h2>
+          <div className="panel-head-aside nodes-sort">
+            <button
+              type="button"
+              className={`btn btn-sm btn-ghost th-sort${listSort?.key === 'online' ? ' active' : ''}`}
+              onClick={() => cycleListSort('online')}
+              title="Сортировать по Online"
+            >
+              Online
+              <span className="th-sort-ind" aria-hidden>
+                {listSort?.key === 'online' ? (listSort.dir === 'desc' ? '↓' : '↑') : '↕'}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm btn-ghost th-sort${listSort?.key === 'traffic' ? ' active' : ''}`}
+              onClick={() => cycleListSort('traffic')}
+              title="Сортировать по текущему трафику"
+            >
+              Трафик
+              <span className="th-sort-ind" aria-hidden>
+                {listSort?.key === 'traffic' ? (listSort.dir === 'desc' ? '↓' : '↑') : '↕'}
+              </span>
+            </button>
+          </div>
+        </div>
         {error && <p className="error">{error}</p>}
         {loading ? (
               <p className="muted">Загрузка…</p>
@@ -763,278 +837,253 @@ export default function NodesPage() {
                   : 'В этой вкладке пока нет нод — выберите панель в карточке ноды.'}
               </p>
             ) : (
-              <div className="table-wrap">
-                <table className="table table-clickable table-nodes">
-                  <thead>
-                    <tr>
-                      <th className="col-drag" aria-label="Order" />
-                      <th>Имя</th>
-                      <th>Адрес</th>
-                      <th>
-                        <button
-                          type="button"
-                          className={`th-sort${listSort?.key === 'online' ? ' active' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            cycleListSort('online')
-                          }}
-                          title={
-                            listSort?.key === 'online' && listSort.dir === 'desc'
-                              ? 'Сейчас: больше → меньше. Клик — по возрастанию'
-                              : listSort?.key === 'online' && listSort.dir === 'asc'
-                                ? 'Сейчас: меньше → больше. Клик — ручной порядок'
-                                : 'Сортировать по Online'
-                          }
-                        >
-                          Online
-                          <span className="th-sort-ind" aria-hidden>
-                            {listSort?.key === 'online'
-                              ? listSort.dir === 'desc'
-                                ? '↓'
-                                : '↑'
-                              : '↕'}
+              <div className="nodes-cards">
+                {visibleNodes.map((n) => {
+                  const host = nodeHost(n.url)
+                  const backends = backendsMap[n.id] ?? []
+                  const m = metricsMap[n.id]
+                  const score = trafficScore(m)
+                  const barPct = n.status === 'online' && score > 0
+                    ? Math.max(6, Math.min(100, (score / nodesSummary.peak) * 100))
+                    : 0
+                  const cpu = m ? Math.max(0, Math.min(100, Number(m.cpu) || 0)) : null
+                  const load =
+                    m?.loadAvg && m.loadAvg.length >= 3
+                      ? m.loadAvg.map((x) => Number(x).toFixed(2)).join(' ')
+                      : null
+                  const seen = formatSeenAgo(n.last_seen)
+                  return (
+                    <article
+                      key={n.id}
+                      className={`node-card${dragOverId === n.id ? ' drag-over' : ''}${dragId === n.id ? ' dragging' : ''}${n.status === 'online' ? ' is-online' : n.status === 'offline' ? ' is-offline' : ''}`}
+                      onClick={() => {
+                        if (renamingId === n.id) return
+                        if (dragMovedRef.current) {
+                          dragMovedRef.current = false
+                          return
+                        }
+                        navigate(`/nodes/${n.id}`)
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        e.dataTransfer.dropEffect = 'move'
+                        if (dragId && dragId !== n.id) moveNodeBefore(n.id)
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        finishDrag()
+                      }}
+                    >
+                      <div className="node-card-rail" title={statusLabel(n.status)}>
+                        <span className={`node-card-pulse ${n.status || 'unknown'}`} aria-hidden>
+                          <IconPulseTiny />
+                        </span>
+                        <span className="node-card-users" title="Online в Remnawave">
+                          <IconUsersTiny />
+                          <span className="mono">{n.remna_online ?? 0}</span>
+                        </span>
+                      </div>
+
+                      <div className="node-card-main">
+                        <div className="node-card-identity">
+                          <span onClick={(e) => e.stopPropagation()}>
+                            <CountryPicker
+                              value={n.country || ''}
+                              onChange={(code) => void setCountry(n.id, code)}
+                            />
                           </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button
-                          type="button"
-                          className={`th-sort${listSort?.key === 'traffic' ? ' active' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            cycleListSort('traffic')
-                          }}
-                          title={
-                            listSort?.key === 'traffic' && listSort.dir === 'desc'
-                              ? 'Сейчас: больше → меньше. Клик — по возрастанию'
-                              : listSort?.key === 'traffic' && listSort.dir === 'asc'
-                                ? 'Сейчас: меньше → больше. Клик — ручной порядок'
-                                : 'Сортировать по текущему трафику (TX+RX)'
-                          }
-                        >
-                          Трафик
-                          <span className="th-sort-ind" aria-hidden>
-                            {listSort?.key === 'traffic'
-                              ? listSort.dir === 'desc'
-                                ? '↓'
-                                : '↑'
-                              : '↕'}
-                          </span>
-                        </button>
-                      </th>
-                      <th>Бэкенды</th>
-                      <th className="col-actions" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleNodes.map((n) => {
-                      const host = nodeHost(n.url)
-                      const backends = backendsMap[n.id] ?? []
-                      return (
-                        <tr
-                          key={n.id}
-                          className={`row-click${dragOverId === n.id ? ' drag-over' : ''}${dragId === n.id ? ' dragging' : ''}`}
-                          onClick={() => {
-                            if (renamingId === n.id) return
-                            if (dragMovedRef.current) {
-                              dragMovedRef.current = false
-                              return
-                            }
-                            navigate(`/nodes/${n.id}`)
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault()
-                            e.dataTransfer.dropEffect = 'move'
-                            if (dragId && dragId !== n.id) moveNodeBefore(n.id)
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            finishDrag()
-                          }}
-                        >
-                          <td
-                            className="col-drag"
-                            onClick={(e) => e.stopPropagation()}
-                            draggable
-                            onDragStart={(e) => startRowDrag(e, n.id)}
-                            onDragEnd={() => finishDrag()}
-                            title="Перетащить"
-                          >
-                            <span className="drag-handle" aria-hidden>
-                              ⠿
-                            </span>
-                          </td>
-                          <td onClick={(e) => renamingId === n.id && e.stopPropagation()}>
-                            <div className="name-stack">
-                              <div className="name-cell">
-                                <div className="name-cell-main">
-                                  <span
-                                    className="node-remna-panel muted"
-                                    title={n.remna_panel_name || undefined}
-                                  >
-                                    {n.remna_panel_name || '—'}
-                                  </span>
-                                  <span onClick={(e) => e.stopPropagation()}>
-                                    <CountryPicker
-                                      value={n.country || ''}
-                                      onChange={(code) => void setCountry(n.id, code)}
-                                    />
-                                  </span>
-                                  {renamingId === n.id ? (
-                                    <form
-                                      className="inline-rename"
-                                      onSubmit={(e) => {
-                                        e.preventDefault()
-                                        void submitRename(n.id)
-                                      }}
-                                    >
-                                      <input
-                                        ref={renameRef}
-                                        className="inline-rename-input"
-                                        value={renameValue}
-                                        disabled={renameBusy}
-                                        onChange={(e) => setRenameValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Escape') {
-                                            e.preventDefault()
-                                            setRenamingId(null)
-                                          }
-                                        }}
-                                        onBlur={() => {
-                                          window.setTimeout(() => {
-                                            if (!renameBusy) setRenamingId(null)
-                                          }, 120)
-                                        }}
-                                      />
-                                    </form>
-                                  ) : (
-                                    <Link
-                                      to={`/nodes/${n.id}`}
-                                      className="node-name-link"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      {n.name}
-                                    </Link>
-                                  )}
-                                </div>
-                                <StatusInline status={n.status} />
-                                {n.status === 'online' && n.live?.agent_version ? (
-                                  <span
-                                    className="mono muted"
-                                    style={{ fontSize: '0.75rem' }}
-                                    title="Версия агента (hanode)"
-                                  >
-                                    v{n.live.agent_version}
-                                  </span>
-                                ) : null}
-                              </div>
-                              {n.status === 'online' && metricsMap[n.id] && (
-                                <NodeLiveRow m={metricsMap[n.id]} />
-                              )}
-                            </div>
-                          </td>
-                          <td onClick={(e) => e.stopPropagation()}>
-                            <div className="addr-cell">
-                              {n.provider_name ? (
-                                <ProviderBadge
-                                  name={n.provider_name}
-                                  favicon={n.provider_favicon}
-                                  loginUrl={n.provider_login_url}
-                                  accountLogin={n.provider_account_login}
-                                />
-                              ) : null}
-                              <span className="mono muted">{host}</span>
-                              <button
-                                type="button"
-                                className={`icon-btn${copiedId === n.id ? ' copied' : ''}`}
-                                title={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
-                                aria-label={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
-                                onClick={() => void onCopyHost(n.id, host)}
-                              >
-                                {copiedId === n.id ? <CheckIcon /> : <CopyIcon />}
-                              </button>
-                            </div>
-                          </td>
-                          <td className="mono">{n.remna_online ?? 0}</td>
-                          <td>
-                            {n.status === 'online' ? (
-                              <NodeTrafficCell m={metricsMap[n.id]} />
-                            ) : (
-                              <span className="muted">—</span>
-                            )}
-                          </td>
-                          <td
-                            className="col-backends"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {backends.length === 0 ? (
-                              <span className="muted">—</span>
-                            ) : (
-                              <div
-                                className="backends-scroll"
-                                title={backends.map((b) => b.name).join(', ')}
-                              >
-                                {backends.map((b) => (
-                                  <div key={`${b.backend}-${b.name}`} className="backends-scroll-item">
-                                    {b.name}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                          <td className="col-actions" onClick={(e) => e.stopPropagation()}>
-                            <div
-                              className="kebab-wrap"
-                              ref={menuOpenId === n.id ? menuRef : undefined}
+                          {renamingId === n.id ? (
+                            <form
+                              className="inline-rename"
+                              onClick={(e) => e.stopPropagation()}
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                void submitRename(n.id)
+                              }}
                             >
+                              <input
+                                ref={renameRef}
+                                className="inline-rename-input"
+                                value={renameValue}
+                                disabled={renameBusy}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    setRenamingId(null)
+                                  }
+                                }}
+                                onBlur={() => {
+                                  window.setTimeout(() => {
+                                    if (!renameBusy) setRenamingId(null)
+                                  }, 120)
+                                }}
+                              />
+                            </form>
+                          ) : (
+                            <Link
+                              to={`/nodes/${n.id}`}
+                              className="node-name-link"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {n.name}
+                            </Link>
+                          )}
+                          {n.provider_name ? (
+                            <span onClick={(e) => e.stopPropagation()}>
+                              <ProviderBadge
+                                name={n.provider_name}
+                                favicon={n.provider_favicon}
+                                loginUrl={n.provider_login_url}
+                                accountLogin={n.provider_account_login}
+                              />
+                            </span>
+                          ) : null}
+                          <span className="node-card-host" onClick={(e) => e.stopPropagation()}>
+                            <span className="mono muted">{host}</span>
+                            <button
+                              type="button"
+                              className={`icon-btn${copiedId === n.id ? ' copied' : ''}`}
+                              title={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
+                              aria-label={copiedId === n.id ? 'Скопировано' : 'Копировать IP'}
+                              onClick={() => void onCopyHost(n.id, host)}
+                            >
+                              {copiedId === n.id ? <CheckIcon /> : <CopyIcon />}
+                            </button>
+                          </span>
+                          {n.remna_panel_name ? (
+                            <span className="node-card-panel muted" title="Панель Remnawave">
+                              {n.remna_panel_name}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="node-card-metrics">
+                          {n.status === 'online' && cpu != null ? (
+                            <>
+                              <span className={`node-live-cpu ${cpuBarTone(cpu)}`} title="CPU">
+                                <span className="node-live-bar" aria-hidden>
+                                  <span className="node-live-bar-fill" style={{ width: `${cpu}%` }} />
+                                </span>
+                                <span className="mono">{cpu.toFixed(0)}%</span>
+                              </span>
+                              {load ? (
+                                <span className="node-live-load mono" title="Load average">
+                                  {load}
+                                </span>
+                              ) : null}
+                              <span className="node-live-net down" title="Отдача (TX)">
+                                <span className="node-live-arrow" aria-hidden>
+                                  ↓
+                                </span>
+                                {formatBitrateShort(m?.downBps)}
+                              </span>
+                              <span className="node-live-net up" title="Загрузка (RX)">
+                                <span className="node-live-arrow" aria-hidden>
+                                  ↑
+                                </span>
+                                {formatBitrateShort(m?.upBps)}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="muted node-card-metrics-empty">
+                              {n.status === 'offline' ? 'Офлайн' : 'Нет метрик'}
+                            </span>
+                          )}
+                          {backends.length > 0 ? (
+                            <span
+                              className="node-card-backends muted"
+                              title={backends.map((b) => b.name).join(', ')}
+                            >
+                              {backends.length} бэк.
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="node-card-traffic" title="Текущий трафик относительно других нод">
+                        <div className="node-card-traffic-bar" aria-hidden>
+                          <span style={{ width: `${barPct}%` }} />
+                        </div>
+                        <div className="node-card-traffic-label mono">
+                          {n.status === 'online' && score > 0
+                            ? formatBitrateShort(score)
+                            : '—'}
+                        </div>
+                      </div>
+
+                      <div className="node-card-meta" onClick={(e) => e.stopPropagation()}>
+                        {seen ? (
+                          <span className="node-card-seen mono muted" title="Последний ответ">
+                            {seen}
+                          </span>
+                        ) : null}
+                        {n.status === 'online' && n.live?.agent_version ? (
+                          <span className="node-card-ver mono muted" title="Версия hanode">
+                            v{n.live.agent_version}
+                          </span>
+                        ) : null}
+                        <div
+                          className="kebab-wrap"
+                          ref={menuOpenId === n.id ? menuRef : undefined}
+                        >
+                          <button
+                            className="btn btn-sm btn-ghost kebab-btn"
+                            type="button"
+                            aria-label="Действия"
+                            onClick={() =>
+                              setMenuOpenId((cur) => (cur === n.id ? null : n.id))
+                            }
+                          >
+                            ⋮
+                          </button>
+                          {menuOpenId === n.id && (
+                            <div className="kebab-menu">
                               <button
-                                className="btn btn-sm btn-ghost kebab-btn"
+                                className="kebab-item"
                                 type="button"
-                                aria-label="Действия"
-                                onClick={() =>
-                                  setMenuOpenId((cur) => (cur === n.id ? null : n.id))
-                                }
+                                onClick={() => startRename(n)}
                               >
-                                ⋮
+                                Переименовать
                               </button>
-                              {menuOpenId === n.id && (
-                                <div className="kebab-menu">
-                                  <button
-                                    className="kebab-item"
-                                    type="button"
-                                    onClick={() => startRename(n)}
-                                  >
-                                    Переименовать
-                                  </button>
-                                  <button
-                                    className="kebab-item"
-                                    type="button"
-                                    onClick={() => void toggleTrafficLog(n)}
-                                  >
-                                    {n.traffic_log
-                                      ? 'Выключить подсчёт трафика'
-                                      : 'Включить подсчёт трафика'}
-                                  </button>
-                                  <button
-                                    className="kebab-item danger"
-                                    type="button"
-                                    onClick={() => void onDelete(n.id, n.name)}
-                                  >
-                                    Удалить
-                                  </button>
-                                </div>
-                              )}
+                              <button
+                                className="kebab-item"
+                                type="button"
+                                onClick={() => void toggleTrafficLog(n)}
+                              >
+                                {n.traffic_log
+                                  ? 'Выключить подсчёт трафика'
+                                  : 'Включить подсчёт трафика'}
+                              </button>
+                              <button
+                                className="kebab-item danger"
+                                type="button"
+                                onClick={() => void onDelete(n.id, n.name)}
+                              >
+                                Удалить
+                              </button>
                             </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                          )}
+                        </div>
+                        <span
+                          className="drag-handle node-card-drag"
+                          draggable
+                          onDragStart={(e) => startRowDrag(e, n.id)}
+                          onDragEnd={() => finishDrag()}
+                          title="Перетащить"
+                          aria-hidden
+                        >
+                          ⠿
+                        </span>
+                      </div>
+                    </article>
+                  )
+                })}
               </div>
             )}
           </section>
+      </>
         )}
 
       {showAdd && (

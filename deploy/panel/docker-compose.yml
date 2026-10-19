@@ -1,7 +1,7 @@
 services:
   panel:
-    image: azamatbash/hapanel:0.1.25
-    # Equivalent tags on Hub: azamatbash/hapanel:0.1.25 and :latest (same digest).
+    image: azamatbash/hapanel:0.1.26
+    # Equivalent tags on Hub: azamatbash/hapanel:0.1.26 and :latest (same digest).
     # Digest updated in PROD_IMAGE.txt after push.
     # Optional local rebuild from sources (will NOT match prod digest):
     #   docker compose build

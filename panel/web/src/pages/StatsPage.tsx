@@ -8,7 +8,6 @@ import {
   type WeekAnalytics,
   translateError,
 } from '../api'
-import BrandNav from '../components/BrandNav'
 import OnlineUsersChart, { type MetricPoint, type OnlinePoint } from '../components/OnlineUsersChart'
 import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
 import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
@@ -506,9 +505,11 @@ export default function StatsPage() {
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <BrandNav active="stats" />
-        <div className="row">
+      <header className="page-toolbar">
+        <div className="page-toolbar-title">
+          <h1>Статистика</h1>
+        </div>
+        <div className="page-toolbar-actions">
           <button
             className="btn btn-sm"
             type="button"

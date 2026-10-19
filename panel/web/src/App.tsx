@@ -49,16 +49,25 @@ function AuthedLayout() {
 
   if (!ready) {
     return (
-      <div className="shell page-fade">
-        <header className="topbar">
-          <BrandNav active="panel" />
-        </header>
-        <p className="muted">Проверка сессии…</p>
+      <div className="app-frame page-fade">
+        <BrandNav active="panel" />
+        <div className="app-main">
+          <div className="shell">
+            <p className="muted">Проверка сессии…</p>
+          </div>
+        </div>
       </div>
     )
   }
   if (!ok) return <Navigate to="/login" replace />
-  return <PageFade />
+  return (
+    <div className="app-frame">
+      <BrandNav />
+      <div className="app-main">
+        <PageFade />
+      </div>
+    </div>
+  )
 }
 
 export default function App() {
