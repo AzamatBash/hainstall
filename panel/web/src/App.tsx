@@ -11,6 +11,7 @@ import OlcrtcPage from './pages/OlcrtcPage'
 import TeamPage from './pages/TeamPage'
 import ApiKeysPage from './pages/ApiKeysPage'
 import KnowledgePage from './pages/KnowledgePage'
+import HomePage from './pages/HomePage'
 
 function PageFade() {
   const { pathname } = useLocation()
@@ -75,7 +76,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<AuthedLayout />}>
-        <Route path="/" element={<NodesPage />} />
+        <Route path="/" element={<HomePage />} />
+        <Route path="/nodes" element={<NodesPage />} />
         <Route path="/nodes/:id" element={<NodeDetailPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/stats" element={<StatsPage />} />

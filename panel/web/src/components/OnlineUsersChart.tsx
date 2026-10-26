@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { bucketBySpan, seriesPath } from './chartCurve'
 
 export type MetricPoint = { t: number; value: number }
 
@@ -9,6 +17,8 @@ type Props = {
   points: MetricPoint[]
   hours: number
   onZoom?: (from: number, to: number) => void
+  /** Right click on the nearest sample. */
+  onContextPoint?: (at: { t: number; clientX: number; clientY: number }) => void
   className?: string
   valueLabel?: string
   formatValue?: (n: number) => string
@@ -63,29 +73,6 @@ function formatHover(ts: number, value: number, formatValue: (n: number) => stri
   return { date, time: `${time} МСК`, value, valueText: formatValue(value) }
 }
 
-function downsample(points: MetricPoint[], maxPoints: number): MetricPoint[] {
-  if (points.length <= maxPoints) return points
-  const bucket = Math.ceil(points.length / maxPoints)
-  const out: MetricPoint[] = []
-  for (let i = 0; i < points.length; i += bucket) {
-    const slice = points.slice(i, i + bucket)
-    let min = slice[0]
-    let max = slice[0]
-    for (const p of slice) {
-      if (p.value < min.value) min = p
-      if (p.value > max.value) max = p
-    }
-    if (min.t <= max.t) {
-      out.push(min)
-      if (max.t !== min.t) out.push(max)
-    } else {
-      out.push(max)
-      if (min.t !== max.t) out.push(min)
-    }
-  }
-  return out
-}
-
 function Plaque({
   info,
   valueLabel,
@@ -115,6 +102,7 @@ export default function OnlineUsersChart({
   points,
   hours,
   onZoom,
+  onContextPoint,
   className,
   valueLabel = 'Онлайн',
   formatValue = defaultFormat,
@@ -139,7 +127,15 @@ export default function OnlineUsersChart({
   } | null>(null)
   const [dragX, setDragX] = useState<number | null>(null)
 
-  const drawPoints = useMemo(() => downsample(points, hours >= 168 ? 800 : 1200), [points, hours])
+  const drawPoints = useMemo(
+    () =>
+      bucketBySpan(points, (group, center) => {
+        let sum = 0
+        for (const p of group) sum += p.value
+        return { t: center, value: sum / group.length }
+      }),
+    [points],
+  )
 
   useEffect(() => {
     setActive(null)
@@ -156,8 +152,8 @@ export default function OnlineUsersChart({
       tAt: (_x: number) => 0,
     }
     if (!drawPoints.length) return empty
-    const t0 = drawPoints[0].t
-    const t1 = drawPoints[drawPoints.length - 1].t
+    const t0 = points[0]?.t ?? drawPoints[0].t
+    const t1 = points[points.length - 1]?.t ?? drawPoints[drawPoints.length - 1].t
     const span = Math.max(t1 - t0, 1)
     const maxVal = Math.max(1, ...drawPoints.map((p) => p.value))
     const niceMax = Math.max(1, maxVal * 1.1)
@@ -166,10 +162,11 @@ export default function OnlineUsersChart({
     const xAtFn = (t: number) => padL + ((t - t0) / span) * plotW
     const yAtFn = (v: number) => padT + plotH - (Math.min(v, niceMax) / niceMax) * plotH
     const tAtFn = (x: number) => t0 + ((x - padL) / plotW) * span
-    const d = drawPoints
-      .map((p, i) => `${i === 0 ? 'M' : 'L'}${xAtFn(p.t).toFixed(1)},${yAtFn(p.value).toFixed(1)}`)
-      .join(' ')
-    const areaD = `${d} L${xAtFn(t1).toFixed(1)},${(padT + plotH).toFixed(1)} L${xAtFn(t0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`
+    const xy = drawPoints.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
+    const d = seriesPath(xy)
+    const xClose0 = xy[0].x.toFixed(1)
+    const xClose1 = xy[xy.length - 1].x.toFixed(1)
+    const areaD = `${d} L${xClose1},${(padT + plotH).toFixed(1)} L${xClose0},${(padT + plotH).toFixed(1)} Z`
     const labels: { x: number; label: string }[] = []
     const n = hours <= 1 ? 3 : hours <= 24 ? 4 : 5
     for (let i = 0; i < n; i++) {
@@ -177,20 +174,20 @@ export default function OnlineUsersChart({
       labels.push({ x: xAtFn(t), label: formatTick(t, hours) })
     }
     return { path: d, area: areaD, maxY: niceMax, xLabels: labels, xAt: xAtFn, yAt: yAtFn, tAt: tAtFn }
-  }, [drawPoints, hours, padL])
+  }, [drawPoints, points, hours, padL])
 
   function nearest(t: number): MetricPoint | null {
     if (!points.length) return null
-    let best = points[0]
-    let bestDist = Math.abs(points[0].t - t)
-    for (const p of points) {
-      const d = Math.abs(p.t - t)
-      if (d < bestDist) {
-        best = p
-        bestDist = d
-      }
+    let lo = 0
+    let hi = points.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (points[mid].t < t) lo = mid + 1
+      else hi = mid
     }
-    return best
+    const cur = points[lo]
+    const prev = lo > 0 ? points[lo - 1] : cur
+    return Math.abs(prev.t - t) <= Math.abs(cur.t - t) ? prev : cur
   }
 
   function infoAtX(svgX: number): PointInfo | null {
@@ -216,10 +213,25 @@ export default function OnlineUsersChart({
         return
       }
     }
-    if (e.pointerType === 'mouse' && info) setActive(info)
+    if (e.pointerType === 'mouse' && info) {
+      setActive((prev) => (prev && prev.x === info.x && prev.value === info.value ? prev : info))
+    }
+  }
+
+  function onContext(e: ReactMouseEvent<SVGSVGElement>) {
+    if (!onContextPoint) return
+    e.preventDefault()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * width
+    const info = infoAtX(x)
+    if (info) setActive(info)
+    const p = nearest(tAt(x))
+    if (!p) return
+    onContextPoint({ t: p.t, clientX: e.clientX, clientY: e.clientY })
   }
 
   function onDown(e: ReactPointerEvent<SVGSVGElement>) {
+    if (e.button !== 0) return
     const x = svgXFromEvent(e)
     dragRef.current = {
       startX: x,
@@ -310,6 +322,7 @@ export default function OnlineUsersChart({
           }}
           onPointerDown={onDown}
           onPointerUp={onUp}
+          onContextMenu={onContext}
           onPointerCancel={() => {
             dragRef.current = null
             setDragX(null)
@@ -350,6 +363,13 @@ export default function OnlineUsersChart({
                 y1={padT}
                 y2={height - padB}
                 className="online-chart-cross"
+              />
+              <line
+                x1={padL}
+                x2={width - padR}
+                y1={active.y}
+                y2={active.y}
+                className="online-chart-cross-h"
               />
               <circle cx={active.x} cy={active.y} r={4.5} className="online-chart-dot" />
             </>

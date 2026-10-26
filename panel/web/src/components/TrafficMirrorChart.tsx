@@ -3,9 +3,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { formatBitrateShort } from '../api'
+import { bucketBySpan, seriesPath } from './chartCurve'
 
 export type TrafficPoint = {
   t: number
@@ -21,6 +23,8 @@ type Props = {
   /** `stats` matches OnlineUsersChart block size + hover/zoom on /stats. */
   size?: 'compact' | 'stats'
   onZoom?: (from: number, to: number) => void
+  /** Right click on the nearest sample. */
+  onContextPoint?: (at: { t: number; clientX: number; clientY: number }) => void
   currentDownBps?: number | null
   currentUpBps?: number | null
 }
@@ -36,17 +40,6 @@ type PointInfo = {
 }
 
 const TAP_SLOP = 14
-const MAX_DRAW_POINTS = 1200
-
-function downsample(points: TrafficPoint[], max: number): TrafficPoint[] {
-  if (points.length <= max) return points
-  const out: TrafficPoint[] = []
-  const step = (points.length - 1) / (max - 1)
-  for (let i = 0; i < max; i++) {
-    out.push(points[Math.round(i * step)])
-  }
-  return out
-}
 
 function toMbit(bytesPerSec: number): number {
   if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return 0
@@ -125,6 +118,7 @@ export default function TrafficMirrorChart({
   className,
   size = 'compact',
   onZoom,
+  onContextPoint,
   currentDownBps = null,
   currentUpBps = null,
 }: Props) {
@@ -135,7 +129,6 @@ export default function TrafficMirrorChart({
   const padR = 12
   const padT = stats ? 18 : 14
   const padB = stats ? 30 : 28
-  const maxPoints = hours >= 168 ? 800 : MAX_DRAW_POINTS
 
   const [active, setActive] = useState<PointInfo | null>(null)
   const dragRef = useRef<{
@@ -180,7 +173,16 @@ export default function TrafficMirrorChart({
       yRx: (_v: number) => padT,
       tAt: (_x: number) => 0,
     }
-    const drawn = downsample(points, maxPoints)
+    const drawn = bucketBySpan(points, (group, center) => {
+      let down = 0
+      let up = 0
+      for (const p of group) {
+        down += p.down_bps
+        up += p.up_bps
+      }
+      const n = group.length
+      return { t: center, down_bps: down / n, up_bps: up / n }
+    })
     if (!drawn.length) return empty
 
     // down_bps = host TX (outbound), up_bps = host RX (inbound)
@@ -188,8 +190,8 @@ export default function TrafficMirrorChart({
     const rxVals = drawn.map((p) => toMbit(p.up_bps))
     const peak = Math.max(0.01, ...txVals, ...rxVals)
     const maxM = niceMax(peak)
-    const minT = drawn[0].t
-    const maxT = drawn[drawn.length - 1].t
+    const minT = points[0]?.t ?? drawn[0].t
+    const maxT = points[points.length - 1]?.t ?? drawn[drawn.length - 1].t
     const spanT = Math.max(maxT - minT, 1)
     const innerW = width - padL - padR
     const innerH = height - padT - padB
@@ -200,23 +202,13 @@ export default function TrafficMirrorChart({
     const yRxFn = (mbit: number) => midY + (Math.min(mbit, maxM) / maxM) * (innerH / 2)
     const tAtFn = (x: number) => minT + ((x - padL) / innerW) * spanT
 
-    const txPath = drawn
-      .map((p, i) => {
-        const x = xAtFn(p.t)
-        const y = yTxFn(toMbit(p.down_bps))
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-      })
-      .join(' ')
-    const rxPath = drawn
-      .map((p, i) => {
-        const x = xAtFn(p.t)
-        const y = yRxFn(toMbit(p.up_bps))
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-      })
-      .join(' ')
+    const txXY = drawn.map((p) => ({ x: xAtFn(p.t), y: yTxFn(toMbit(p.down_bps)) }))
+    const rxXY = drawn.map((p) => ({ x: xAtFn(p.t), y: yRxFn(toMbit(p.up_bps)) }))
+    const txPath = seriesPath(txXY)
+    const rxPath = seriesPath(rxXY)
 
-    const x0 = xAtFn(drawn[0].t)
-    const x1 = xAtFn(drawn[drawn.length - 1].t)
+    const x0 = txXY[0].x
+    const x1 = txXY[txXY.length - 1].x
     const areaTx = `${txPath} L${x1.toFixed(1)},${midY.toFixed(1)} L${x0.toFixed(1)},${midY.toFixed(1)} Z`
     const areaRx = `${rxPath} L${x1.toFixed(1)},${midY.toFixed(1)} L${x0.toFixed(1)},${midY.toFixed(1)} Z`
 
@@ -243,7 +235,7 @@ export default function TrafficMirrorChart({
       yRx: yRxFn,
       tAt: tAtFn,
     }
-  }, [points, hours, maxPoints, width, height, padL, padR, padT, padB])
+  }, [points, hours, width, height, padL, padR, padT, padB])
 
   const innerH = height - padT - padB
   const midY = padT + innerH / 2
@@ -265,16 +257,16 @@ export default function TrafficMirrorChart({
 
   function nearest(t: number): TrafficPoint | null {
     if (!points.length) return null
-    let best = points[0]
-    let bestDist = Math.abs(points[0].t - t)
-    for (const p of points) {
-      const d = Math.abs(p.t - t)
-      if (d < bestDist) {
-        best = p
-        bestDist = d
-      }
+    let lo = 0
+    let hi = points.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (points[mid].t < t) lo = mid + 1
+      else hi = mid
     }
-    return best
+    const cur = points[lo]
+    const prev = lo > 0 ? points[lo - 1] : cur
+    return Math.abs(prev.t - t) <= Math.abs(cur.t - t) ? prev : cur
   }
 
   function infoAtX(svgX: number): PointInfo | null {
@@ -306,11 +298,29 @@ export default function TrafficMirrorChart({
         return
       }
     }
-    if (e.pointerType === 'mouse' && info) setActive(info)
+    if (e.pointerType === 'mouse' && info) {
+      setActive((prev) =>
+        prev && prev.x === info.x && prev.downText === info.downText && prev.upText === info.upText
+          ? prev
+          : info,
+      )
+    }
+  }
+
+  function onContext(e: ReactMouseEvent<SVGSVGElement>) {
+    if (!onContextPoint) return
+    e.preventDefault()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * width
+    const info = infoAtX(x)
+    if (info) setActive(info)
+    const p = nearest(tAt(x))
+    if (!p) return
+    onContextPoint({ t: p.t, clientX: e.clientX, clientY: e.clientY })
   }
 
   function onDown(e: ReactPointerEvent<SVGSVGElement>) {
-    if (!stats) return
+    if (!stats || e.button !== 0) return
     const x = svgXFromEvent(e)
     dragRef.current = {
       startX: x,
@@ -379,6 +389,7 @@ export default function TrafficMirrorChart({
       }
       onPointerDown={stats ? onDown : undefined}
       onPointerUp={stats ? onUp : undefined}
+      onContextMenu={onContextPoint ? onContext : undefined}
       onPointerCancel={
         stats
           ? () => {
@@ -435,6 +446,20 @@ export default function TrafficMirrorChart({
             y1={padT}
             y2={height - padB}
             className="online-chart-cross"
+          />
+          <line
+            x1={padL}
+            x2={width - padR}
+            y1={active.yTx}
+            y2={active.yTx}
+            className="online-chart-cross-h tx"
+          />
+          <line
+            x1={padL}
+            x2={width - padR}
+            y1={active.yRx}
+            y2={active.yRx}
+            className="online-chart-cross-h rx"
           />
           <circle cx={active.x} cy={active.yTx} r={4.5} className="online-chart-dot traffic-dot-tx" />
           <circle cx={active.x} cy={active.yRx} r={4.5} className="online-chart-dot traffic-dot-rx" />

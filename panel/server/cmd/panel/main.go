@@ -214,6 +214,7 @@ func serveIndex(w http.ResponseWriter, indexPath, basePath string, logger *slog.
 		html = strings.ReplaceAll(html, `href="/assets/`, `href="`+basePath+`/assets/`)
 		html = strings.ReplaceAll(html, `src="/assets/`, `src="`+basePath+`/assets/`)
 		html = strings.ReplaceAll(html, `href="/vite.svg"`, `href="`+basePath+`/vite.svg"`)
+		html = strings.ReplaceAll(html, `href="/favicon.svg"`, `href="`+basePath+`/favicon.svg"`)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(html))

@@ -11,6 +11,8 @@ type FrontendStat struct {
 	Name     string `json:"name"`
 	Status   string `json:"status"`
 	Sessions int    `json:"sessions"`
+	Limit    int    `json:"limit,omitempty"`
+	Rate     int    `json:"rate,omitempty"`
 	ReqRate  int    `json:"req_rate"`
 	BytesIn  int64  `json:"bytes_in"`
 	BytesOut int64  `json:"bytes_out"`
@@ -21,6 +23,9 @@ type BackendStat struct {
 	Name     string `json:"name"`
 	Status   string `json:"status"`
 	Sessions int    `json:"sessions"`
+	Limit    int    `json:"limit,omitempty"`
+	Queue    int    `json:"queue,omitempty"`
+	QueueMax int    `json:"queue_max,omitempty"`
 	Servers  int    `json:"servers_up"`
 	BytesIn  int64  `json:"bytes_in"`
 	BytesOut int64  `json:"bytes_out"`
@@ -38,12 +43,15 @@ type Stats struct {
 
 // ServerInfo is a server row from stats or servers state.
 type ServerInfo struct {
-	Backend string `json:"backend"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Weight  int    `json:"weight"`
-	Status  string `json:"status"`
+	Backend   string `json:"backend"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Port      int    `json:"port"`
+	Weight    int    `json:"weight"`
+	Status    string `json:"status"`
+	ClientIP  string `json:"client_ip,omitempty"`
+	Check     string `json:"check,omitempty"`
+	CheckPort int    `json:"check_port,omitempty"`
 }
 
 // csvField indexes for "show stat" (HAProxy CSV).
@@ -51,11 +59,15 @@ type ServerInfo struct {
 const (
 	statPxName  = 0
 	statSvName  = 1
+	statQcur    = 2
+	statQmax    = 3
 	statScur    = 4
+	statSlim    = 6
 	statBin     = 8
 	statBout    = 9
 	statStatus  = 17
 	statWeight  = 18
+	statRate    = 33
 	statReqRate = 46
 )
 
@@ -76,6 +88,9 @@ func ParseStats(raw string) Stats {
 	backendStatus := map[string]string{}
 	backendBin := map[string]int64{}
 	backendBout := map[string]int64{}
+	backendLimit := map[string]int{}
+	backendQueue := map[string]int{}
+	backendQueueMax := map[string]int{}
 
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -103,6 +118,8 @@ func ParseStats(raw string) Stats {
 				Name:     px,
 				Status:   status,
 				Sessions: scur,
+				Limit:    atoiField(fields, statSlim),
+				Rate:     atoiField(fields, statRate),
 				ReqRate:  reqRate,
 				BytesIn:  bin,
 				BytesOut: bout,
@@ -116,6 +133,9 @@ func ParseStats(raw string) Stats {
 			backendStatus[px] = status
 			backendBin[px] = bin
 			backendBout[px] = bout
+			backendLimit[px] = atoiField(fields, statSlim)
+			backendQueue[px] = atoiField(fields, statQcur)
+			backendQueueMax[px] = atoiField(fields, statQmax)
 			out.ActiveSessions += scur
 		default:
 			if status == "UP" {
@@ -129,12 +149,23 @@ func ParseStats(raw string) Stats {
 			Name:     name,
 			Status:   backendStatus[name],
 			Sessions: sessions,
+			Limit:    backendLimit[name],
+			Queue:    backendQueue[name],
+			QueueMax: backendQueueMax[name],
 			Servers:  backendServersUp[name],
 			BytesIn:  backendBin[name],
 			BytesOut: backendBout[name],
 		})
 	}
 	return out
+}
+
+func atoiField(fields []string, idx int) int {
+	if len(fields) <= idx {
+		return 0
+	}
+	n, _ := strconv.Atoi(fields[idx])
+	return n
 }
 
 func parseInt64Field(fields []string, idx int) int64 {
@@ -315,8 +346,20 @@ func (c *Client) SetServerState(backend, name, state string) error {
 }
 
 // AddServerRuntime tries dynamic "add server" (HAProxy 2.5+ with dynamic servers).
-func (c *Client) AddServerRuntime(backend, name, address string, port, weight int) error {
-	cmd := fmt.Sprintf("add server %s/%s %s:%d check weight %d", backend, name, address, port, weight)
+func (c *Client) AddServerRuntime(backend, name, address string, port, weight int, clientIP, check string) error {
+	extra := ""
+	if SendProxyV2(clientIP) {
+		extra = " send-proxy-v2"
+	}
+	mode, err := NormalizeCheck(check)
+	if err != nil {
+		return err
+	}
+	checkWord := ""
+	if mode != CheckOff {
+		checkWord = " check"
+	}
+	cmd := fmt.Sprintf("add server %s/%s %s:%d%s weight %d%s", backend, name, address, port, checkWord, weight, extra)
 	resp, err := c.Exec(cmd)
 	if err != nil {
 		return err

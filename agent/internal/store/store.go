@@ -12,11 +12,23 @@ import (
 
 // Server is a persisted backend server entry.
 type Server struct {
-	Backend string `json:"backend"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Weight  int    `json:"weight"`
+	Backend  string `json:"backend"`
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Weight   int    `json:"weight"`
+	ClientIP string `json:"client_ip,omitempty"` // off, proxy-ng, proxy-vl; empty means off
+	// Health check. Empty or off means no check (Reality breaks on a blind ssl hello).
+	Check       string `json:"check,omitempty"`
+	CheckPort   int    `json:"check_port,omitempty"`
+	CheckInter  int    `json:"check_inter_ms,omitempty"`
+	CheckFast   int    `json:"check_fastinter_ms,omitempty"`
+	CheckDown   int    `json:"check_downinter_ms,omitempty"`
+	CheckFall   int    `json:"check_fall,omitempty"`
+	CheckRise   int    `json:"check_rise,omitempty"`
+	CheckSNI    string `json:"check_sni,omitempty"`
+	CheckVerify string `json:"check_verify,omitempty"`
+	CheckCA     string `json:"check_ca,omitempty"`
 }
 
 // Entrance is one client listen port routed to a HAProxy backend.
@@ -39,11 +51,11 @@ type ProtectProfile struct {
 
 // State is the on-disk agent state restored across reloads.
 type State struct {
-	Servers     []Server            `json:"servers"`
-	Balances    map[string]string   `json:"balances,omitempty"` // backend name -> HAProxy balance algorithm
-	Entrances   []Entrance          `json:"entrances,omitempty"`
-	ListenPorts []int               `json:"listen_ports,omitempty"` // derived from Entrances; kept for older agents/tools
-	Protect     *ProtectProfile     `json:"protect,omitempty"`
+	Servers     []Server          `json:"servers"`
+	Balances    map[string]string `json:"balances,omitempty"` // backend name -> HAProxy balance algorithm
+	Entrances   []Entrance        `json:"entrances,omitempty"`
+	ListenPorts []int             `json:"listen_ports,omitempty"` // derived from Entrances; kept for older agents/tools
+	Protect     *ProtectProfile   `json:"protect,omitempty"`
 }
 
 // DefaultEntrance is used when nothing is configured.
@@ -137,9 +149,9 @@ func (s *Store) loadUnlocked() (State, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return State{
-				Servers:   []Server{},
-				Balances:  map[string]string{},
-				Entrances: []Entrance{DefaultEntrance},
+				Servers:     []Server{},
+				Balances:    map[string]string{},
+				Entrances:   []Entrance{DefaultEntrance},
 				ListenPorts: []int{DefaultEntrance.Port},
 			}, nil
 		}
@@ -203,6 +215,20 @@ func (s *Store) Balances() (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// Find returns one server by backend and name (stored or sanitized form).
+func (s *Store) Find(backend, name string) (Server, bool, error) {
+	list, err := s.List()
+	if err != nil {
+		return Server{}, false, err
+	}
+	for _, existing := range list {
+		if existing.Backend == backend && serverNameMatch(existing.Name, name) {
+			return existing, true, nil
+		}
+	}
+	return Server{}, false, nil
 }
 
 // Upsert adds or updates a server and persists.

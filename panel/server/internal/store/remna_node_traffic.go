@@ -33,14 +33,41 @@ func (s *Store) AppendRemnaNodeTrafficSample(panelID, remnaUUID string, at time.
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var prevDown, prevUp float64
+	var replaced bool
+	err = tx.QueryRow(`
+SELECT down_bps, up_bps FROM remna_node_traffic_samples
+WHERE panel_id = ? AND remna_uuid = ? AND ts = ?`, panelID, remnaUUID, ts).Scan(&prevDown, &prevUp)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	replaced = err == nil
 	if _, err := tx.Exec(`
 INSERT OR REPLACE INTO remna_node_traffic_samples (panel_id, remna_uuid, ts, down_bps, up_bps)
 VALUES (?, ?, ?, ?, ?)`, panelID, remnaUUID, ts, downBps, upBps); err != nil {
 		return err
 	}
+	if err := adjustRemnaTrafficDay(tx, panelID, remnaUUID, mskDayNumber(ts), prevDown+prevUp, replaced, downBps+upBps); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT INTO remna_node_traffic_latest (panel_id, remna_uuid, ts, down_bps, up_bps)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(panel_id, remna_uuid) DO UPDATE SET
+  ts = excluded.ts,
+  down_bps = excluded.down_bps,
+  up_bps = excluded.up_bps
+WHERE excluded.ts >= remna_node_traffic_latest.ts`, panelID, remnaUUID, ts, downBps, upBps); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`
 DELETE FROM remna_node_traffic_samples
 WHERE panel_id = ? AND remna_uuid = ? AND ts < ?`, panelID, remnaUUID, cutoff); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+DELETE FROM remna_node_traffic_day
+WHERE panel_id = ? AND remna_uuid = ? AND day < ?`, panelID, remnaUUID, mskDayNumber(cutoff)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -84,16 +111,33 @@ ORDER BY ts DESC LIMIT 1`, panelID, remnaUUID)
 	return &p, nil
 }
 
+// ListAllRemnaNodeTrafficSince returns every node sample at or after since, oldest first.
+func (s *Store) ListAllRemnaNodeTrafficSince(since time.Time) ([]RemnaNodeTrafficSample, error) {
+	rows, err := s.db.Query(`
+SELECT panel_id, remna_uuid, ts, down_bps, up_bps
+FROM remna_node_traffic_samples
+WHERE ts >= ?
+ORDER BY panel_id, remna_uuid, ts ASC`, since.UTC().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RemnaNodeTrafficSample, 0, 256)
+	for rows.Next() {
+		var p RemnaNodeTrafficSample
+		if err := rows.Scan(&p.PanelID, &p.RemnaUUID, &p.TS, &p.DownBps, &p.UpBps); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // MapLatestRemnaNodeTraffic returns the newest sample per node across all panels.
 func (s *Store) MapLatestRemnaNodeTraffic() (map[string]RemnaTrafficSample, error) {
 	rows, err := s.db.Query(`
-SELECT t.panel_id, t.remna_uuid, t.ts, t.down_bps, t.up_bps
-FROM remna_node_traffic_samples t
-INNER JOIN (
-  SELECT panel_id, remna_uuid, MAX(ts) AS ts
-  FROM remna_node_traffic_samples
-  GROUP BY panel_id, remna_uuid
-) m ON t.panel_id = m.panel_id AND t.remna_uuid = m.remna_uuid AND t.ts = m.ts`)
+SELECT panel_id, remna_uuid, ts, down_bps, up_bps
+FROM remna_node_traffic_latest`)
 	if err != nil {
 		return nil, err
 	}

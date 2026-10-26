@@ -32,3 +32,17 @@ func TestSetHAProxyPublishPorts(t *testing.T) {
 		t.Fatalf("expected 2 ports sections:\n%s", out)
 	}
 }
+
+func TestSetHAProxyPublishPortsKeepsLoggingAndFlowStyle(t *testing.T) {
+	in := "services:\n  haproxy:\n    image: haproxy:3.0\n    ports: [\"8443:8443\"]\n    logging:\n      driver: none\n    restart: unless-stopped\n"
+	out, err := SetHAProxyPublishPorts(in, []int{2053})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"2053:2053"`) {
+		t.Fatalf("port not replaced:\n%s", out)
+	}
+	if !strings.Contains(out, "driver: none") || !strings.Contains(out, "unless-stopped") {
+		t.Fatalf("unrelated haproxy settings dropped:\n%s", out)
+	}
+}

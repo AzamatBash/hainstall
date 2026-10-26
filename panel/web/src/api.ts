@@ -63,6 +63,9 @@ export interface BackendServer {
   weight?: number
   balance?: string
   status?: string
+  client_ip?: string
+  check?: string
+  check_port?: number
   [key: string]: unknown
 }
 
@@ -206,6 +209,8 @@ export interface StatsSummary {
     req_rate: number
     bytes_in?: number
     bytes_out?: number
+    limit?: number
+    rate?: number
   }>
   backends?: Array<{
     name: string
@@ -214,6 +219,9 @@ export interface StatsSummary {
     servers_up: number
     bytes_in?: number
     bytes_out?: number
+    limit?: number
+    queue?: number
+    queue_max?: number
   }>
   [key: string]: unknown
 }
@@ -232,6 +240,31 @@ export interface SystemMetrics {
   net_rx_bytes?: number
   /** Host NIC TX bytes (cumulative). */
   net_tx_bytes?: number
+  mem_available_bytes?: number
+  conntrack_count?: number
+  conntrack_max?: number
+  conntrack_percent?: number
+  conntrack_stat?: boolean
+  conntrack_insert_failed?: number
+  conntrack_drop?: number
+  conntrack_early_drop?: number
+  fd_allocated?: number
+  fd_max?: number
+  tcp_stat?: boolean
+  tcp_inuse?: number
+  tcp_time_wait?: number
+  swap_used_bytes?: number
+  swap_total_bytes?: number
+  swap_percent?: number
+  disk_inodes_used?: number
+  disk_inodes_total?: number
+  psi?: boolean
+  psi_memory_some_avg10?: number
+  psi_io_some_avg10?: number
+  psi_cpu_some_avg10?: number
+  net_rx_drops?: number
+  net_tx_drops?: number
+  scope?: string
   timestamp: string
 }
 

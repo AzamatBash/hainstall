@@ -3,6 +3,7 @@ package protect
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -38,8 +39,9 @@ func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *doc
 		ents = []store.Entrance{store.DefaultEntrance}
 	}
 
-	body := haproxy.BaseConfigBody(ents, ToHAProxy(p))
 	path := filepath.Join(backendsDir, haproxy.BaseConfigFile)
+	prev, _ := os.ReadFile(path)
+	body := haproxy.BaseConfigBodyKeeping(string(prev), ents, ToHAProxy(p), true)
 	if err := haproxy.AtomicWriteFile(path, body); err != nil {
 		return Profile{}, fmt.Errorf("write base cfg: %w", err)
 	}

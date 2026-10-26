@@ -4,6 +4,7 @@ import { api, setToken } from '../api'
 import { withBase } from '../basePath'
 
 export type BrandNavActive =
+  | 'home'
   | 'panel'
   | 'tasks'
   | 'stats'
@@ -20,6 +21,24 @@ type NavItem = {
 }
 
 type NavGroup = { title: string; items: NavItem[] }
+
+function LogoMark() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden>
+      <rect width="32" height="32" rx="8" fill="#10161e" />
+      <rect x="0.8" y="0.8" width="30.4" height="30.4" rx="7.2" fill="none" stroke="#3b8cff" strokeWidth="1.25" />
+      <path fill="#3b8cff" d="M8 7.5h3.4v6.4h9.2V7.5H24v17h-3.4v-7.2h-9.2V24.5H8V7.5z" />
+    </svg>
+  )
+}
+
+function IconHome() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" strokeLinejoin="round" />
+    </svg>
+  )
+}
 
 function IconGrid() {
   return (
@@ -93,7 +112,8 @@ const GROUPS: NavGroup[] = [
   {
     title: 'Обзор',
     items: [
-      { id: 'panel', to: '/', label: 'Ноды', icon: <IconGrid /> },
+      { id: 'home', to: '/', label: 'Главная', icon: <IconHome /> },
+      { id: 'panel', to: '/nodes', label: 'Ноды', icon: <IconGrid /> },
       { id: 'stats', to: '/stats', label: 'Статистика', icon: <IconChart /> },
       { id: 'kb', to: '/kb', label: 'База знаний', icon: <IconBook /> },
     ],
@@ -113,6 +133,8 @@ const GROUPS: NavGroup[] = [
 ]
 
 function activeFromPath(pathname: string): BrandNavActive {
+  if (pathname === '/') return 'home'
+  if (pathname.startsWith('/nodes')) return 'panel'
   if (pathname.startsWith('/kb')) return 'kb'
   if (pathname.startsWith('/tasks')) return 'tasks'
   if (pathname.startsWith('/stats')) return 'stats'
@@ -136,7 +158,9 @@ export default function BrandNav({ active }: { active?: BrandNavActive }) {
   return (
     <aside className="app-sidebar" aria-label="Разделы">
       <Link to="/" className="sidebar-brand">
-        <span className="sidebar-brand-mark" aria-hidden />
+        <span className="sidebar-brand-mark" aria-hidden>
+          <LogoMark />
+        </span>
         <span className="sidebar-brand-text">
           ha<span>panel</span>
         </span>
@@ -154,7 +178,7 @@ export default function BrandNav({ active }: { active?: BrandNavActive }) {
                     className={`sidebar-link${current === item.id ? ' active' : ''}`}
                   >
                     <span className="sidebar-link-icon">{item.icon}</span>
-                    <span>{item.label}</span>
+                    <span className="sidebar-link-label">{item.label}</span>
                   </Link>
                 </li>
               ))}

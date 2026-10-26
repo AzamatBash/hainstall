@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -685,7 +686,85 @@ func (s *Server) publicRemnaPanelWithOnline(p store.RemnaPanel) map[string]any {
 const (
 	remnaOnlineDefaultHours = 24
 	remnaOnlineMaxHours     = 31 * 24
+	chartMSKOffsetMs        = int64(3 * time.Hour / time.Millisecond)
 )
+
+// chartPayloadBucketMs is how finely the chart API replies.
+// One hour stays raw. 24h and longer are hourly so a month is not a daily blob.
+// raw=1 keeps every sample for the same-time comparison.
+func chartPayloadBucketMs(hours int, raw bool) int64 {
+	if raw || hours <= 1 {
+		return 0
+	}
+	return int64(time.Hour / time.Millisecond)
+}
+
+func aggregateOnline(points []store.RemnaOnlineSample, bucketMs int64) []store.RemnaOnlineSample {
+	if bucketMs <= 0 || len(points) < 2 {
+		return points
+	}
+	type acc struct {
+		sum float64
+		n   int
+	}
+	order := make([]int64, 0, 64)
+	groups := map[int64]*acc{}
+	for _, p := range points {
+		start := ((p.TS+chartMSKOffsetMs)/bucketMs)*bucketMs - chartMSKOffsetMs
+		g := groups[start]
+		if g == nil {
+			g = &acc{}
+			groups[start] = g
+			order = append(order, start)
+		}
+		g.sum += float64(p.Online)
+		g.n++
+	}
+	out := make([]store.RemnaOnlineSample, 0, len(order))
+	for _, start := range order {
+		g := groups[start]
+		out = append(out, store.RemnaOnlineSample{
+			TS:     start + bucketMs/2,
+			Online: int(math.Round(g.sum / float64(g.n))),
+		})
+	}
+	return out
+}
+
+func aggregateTraffic(points []store.RemnaTrafficSample, bucketMs int64) []store.RemnaTrafficSample {
+	if bucketMs <= 0 || len(points) < 2 {
+		return points
+	}
+	type acc struct {
+		down float64
+		up   float64
+		n    int
+	}
+	order := make([]int64, 0, 64)
+	groups := map[int64]*acc{}
+	for _, p := range points {
+		start := ((p.TS+chartMSKOffsetMs)/bucketMs)*bucketMs - chartMSKOffsetMs
+		g := groups[start]
+		if g == nil {
+			g = &acc{}
+			groups[start] = g
+			order = append(order, start)
+		}
+		g.down += p.DownBps
+		g.up += p.UpBps
+		g.n++
+	}
+	out := make([]store.RemnaTrafficSample, 0, len(order))
+	for _, start := range order {
+		g := groups[start]
+		out = append(out, store.RemnaTrafficSample{
+			TS:      start + bucketMs/2,
+			DownBps: g.down / float64(g.n),
+			UpBps:   g.up / float64(g.n),
+		})
+	}
+	return out
+}
 
 func remnaOnlineWindowHours(r *http.Request) int {
 	raw := strings.TrimSpace(r.URL.Query().Get("hours"))
@@ -725,7 +804,7 @@ func (s *Server) handleRemnaPanelOnline(w http.ResponseWriter, r *http.Request) 
 	}
 	hours := remnaOnlineWindowHours(r)
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaOnlineSamples(id, since)
+	points, err := s.store.ListRemnaOnlineSamplesBucketed(id, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna online", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -776,7 +855,7 @@ func (s *Server) handleRemnaPanelTraffic(w http.ResponseWriter, r *http.Request)
 	}
 	hours := remnaOnlineWindowHours(r)
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaTrafficSamples(id, since)
+	points, err := s.store.ListRemnaTrafficSamplesBucketed(id, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna traffic", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -828,6 +907,12 @@ func (s *Server) handleStatsNodes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
 		return
 	}
+	alerts := map[string]trafficAlert{}
+	if built, err := s.loadNodeTrafficAlerts(time.Now().UTC()); err != nil {
+		s.logger.Error("node traffic alerts", "err", err)
+	} else {
+		alerts = built
+	}
 	out := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
 		m := map[string]any{
@@ -845,6 +930,16 @@ func (s *Server) handleStatsNodes(w http.ResponseWriter, r *http.Request) {
 			m["down_bps"] = sample.DownBps
 			m["up_bps"] = sample.UpBps
 			m["traffic_at"] = time.UnixMilli(sample.TS).UTC().Format(time.RFC3339)
+		}
+		if alert, ok := alerts[n.PanelID+"\x00"+n.RemnaUUID]; ok {
+			if alert.drop {
+				m["traffic_drop"] = true
+				m["traffic_drop_hint"] = alert.dropHint
+			}
+			if alert.decline {
+				m["traffic_decline"] = true
+				m["traffic_decline_hint"] = alert.declineHint
+			}
 		}
 		out = append(out, m)
 	}
@@ -866,7 +961,7 @@ func (s *Server) handleRemnaNodeOnline(w http.ResponseWriter, r *http.Request) {
 	}
 	hours := remnaOnlineWindowHours(r)
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaNodeOnlineSamples(panelID, uuid, since)
+	points, err := s.store.ListRemnaNodeOnlineSamplesBucketed(panelID, uuid, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna node online", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -904,7 +999,7 @@ func (s *Server) handleRemnaNodeTraffic(w http.ResponseWriter, r *http.Request) 
 	}
 	hours := remnaOnlineWindowHours(r)
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaNodeTrafficSamples(panelID, uuid, since)
+	points, err := s.store.ListRemnaNodeTrafficSamplesBucketed(panelID, uuid, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna node traffic", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")

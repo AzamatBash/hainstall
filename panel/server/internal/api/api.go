@@ -57,6 +57,18 @@ type Server struct {
 	remnaPanelNodesCache map[string]remnaPanelNodesCacheEntry
 	remnaOnlineByNode    map[string]remnaOnlineCacheEntry
 	remnaRefreshInflight map[string]bool
+
+	homeAlertMu   sync.Mutex
+	homeAlertAt   time.Time
+	homeAlertRows []homeAlertDTO
+
+	trafficAlertMu sync.Mutex
+	trafficAlertAt time.Time
+	trafficAlerts  map[string]trafficAlert
+
+	homeTrafficMu sync.Mutex
+	homeTrafficAt time.Time
+	homeTraffic   *homeTrafficDTO
 }
 
 func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logger, opt Options) *Server {
@@ -170,6 +182,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/remna-panels/{id}/nodes/{uuid}/online", s.requireAuth(s.handleRemnaNodeOnline))
 	s.mux.HandleFunc("GET /api/remna-panels/{id}/nodes/{uuid}/traffic", s.requireAuth(s.handleRemnaNodeTraffic))
 	s.mux.HandleFunc("GET /api/stats/nodes", s.requireAuth(s.handleStatsNodes))
+	s.mux.HandleFunc("GET /api/home", s.requireAuth(s.handleHome))
+	s.mux.HandleFunc("PATCH /api/home/alerts/{panelId}/{uuid}", s.requireAuth(s.handleHomeAlertNote))
 
 	s.mux.HandleFunc("GET /api/analytics/nodes", s.requireAuth(s.handleAnalyticsNodes))
 	s.mux.HandleFunc("PATCH /api/analytics/nodes/{panelId}/{uuid}", s.requireAuth(s.handleAnalyticsNodePatch))

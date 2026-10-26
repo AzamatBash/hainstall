@@ -27,6 +27,12 @@ app,BACKEND,0,0,2,8,20000,50,100,200,0,0,,0,0,0,0,UP,100,1,0,,0,10,0,,1,2,0,,50,
 	if stats.Frontends[0].BytesIn != 1000 || stats.Frontends[0].BytesOut != 2000 {
 		t.Fatalf("frontend bytes: %+v", stats.Frontends[0])
 	}
+	if stats.Frontends[0].Limit != 20000 || stats.Frontends[0].Sessions != 3 || stats.Frontends[0].Rate != 0 {
+		t.Fatalf("frontend limit/rate: %+v", stats.Frontends[0])
+	}
+	if stats.Backends[0].Limit != 20000 || stats.Backends[0].Queue != 0 {
+		t.Fatalf("backend limit: %+v", stats.Backends[0])
+	}
 
 	servers := ParseServersFromStat(raw)
 	if len(servers) != 1 || servers[0].Name != "srv1" || servers[0].Status != "UP" {

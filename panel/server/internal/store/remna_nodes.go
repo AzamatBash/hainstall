@@ -128,8 +128,23 @@ INSERT OR REPLACE INTO remna_node_online_samples (panel_id, remna_uuid, ts, onli
 VALUES (?, ?, ?, ?, ?)`, panelID, remnaUUID, ts, online, ok); err != nil {
 		return err
 	}
+	bucket := (ts / onlineHourMs) * onlineHourMs
+	if _, err := tx.Exec(`
+INSERT INTO remna_node_online_hour (panel_id, remna_uuid, bucket, ts, online)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(panel_id, remna_uuid, bucket) DO UPDATE SET
+  ts = excluded.ts,
+  online = excluded.online
+WHERE excluded.ts >= remna_node_online_hour.ts`, panelID, remnaUUID, bucket, ts, online); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`
 DELETE FROM remna_node_online_samples
+WHERE panel_id = ? AND remna_uuid = ? AND ts < ?`, panelID, remnaUUID, cutoff); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+DELETE FROM remna_node_online_hour
 WHERE panel_id = ? AND remna_uuid = ? AND ts < ?`, panelID, remnaUUID, cutoff); err != nil {
 		return err
 	}
@@ -357,7 +372,16 @@ func (s *Store) PruneRemnaNodeCatalog(panelID string, keepUUIDs []string) (int64
 		if _, err := tx.Exec(`DELETE FROM remna_node_online_samples WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`DELETE FROM remna_node_online_hour WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`DELETE FROM remna_node_traffic_samples WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM remna_node_traffic_latest WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM remna_node_traffic_day WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`DELETE FROM remna_node_catalog WHERE panel_id = ? AND remna_uuid = ?`, panelID, uuid); err != nil {
@@ -469,7 +493,7 @@ func (s *Store) BuildWeekAnalytics(since time.Time) (*WeekAnalytics, error) {
 
 	cutoff := since.UTC().UnixMilli()
 	rows, err := s.db.Query(`
-SELECT panel_id, remna_uuid, ts, online FROM remna_node_online_samples
+SELECT panel_id, remna_uuid, ts, online FROM remna_node_online_hour
 WHERE ts >= ?
 ORDER BY ts ASC`, cutoff)
 	if err != nil {

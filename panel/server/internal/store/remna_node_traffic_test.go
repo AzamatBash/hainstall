@@ -61,4 +61,41 @@ func TestRemnaNodeTrafficSamples(t *testing.T) {
 	if got := m["p1\x00n2"]; got.DownBps != 10 {
 		t.Fatalf("map n2=%v", got)
 	}
+
+	days, err := st.ListRemnaTrafficDayAggs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n1 int
+	var sum float64
+	for _, d := range days {
+		if d.PanelID == "p1" && d.RemnaUUID == "n1" {
+			n1 += d.N
+			sum += d.Sum
+		}
+	}
+	if n1 != 3 || sum != 100+40+200+80+300+90 {
+		t.Fatalf("day rollup n=%d sum=%v days=%+v", n1, sum, days)
+	}
+
+	if err := st.AppendRemnaNodeTrafficSample("p1", "n1", now, 50, 10); err != nil {
+		t.Fatal(err)
+	}
+	days, err = st.ListRemnaTrafficDayAggs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n1, sum = 0, 0
+	for _, d := range days {
+		if d.PanelID == "p1" && d.RemnaUUID == "n1" {
+			n1 += d.N
+			sum += d.Sum
+		}
+	}
+	if n1 != 3 || sum != 50+10+200+80+300+90 {
+		t.Fatalf("replaced sample double-counted: n=%d sum=%v", n1, sum)
+	}
+	if _, err := st.ListRemnaNodeTrafficDropWindows(now.Add(10 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 }

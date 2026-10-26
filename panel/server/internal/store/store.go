@@ -21,23 +21,23 @@ const (
 )
 
 type Node struct {
-	ID                string        `json:"id"`
-	Name              string        `json:"name"`
-	URL               string        `json:"url"`
-	Token             string        `json:"token,omitempty"`
-	Country           string        `json:"country"`
-	SortOrder         int           `json:"sort_order"`
-	RemnaPanelID      string        `json:"remna_panel_id"`
-	ProviderID        string        `json:"provider_id"`
-	ProviderAccountID string        `json:"provider_account_id"`
-	CreatedAt         time.Time     `json:"created_at"`
-	LastSeen          *time.Time    `json:"last_seen,omitempty"`
-	Status            NodeStatus    `json:"status"`
-	TrafficLog        bool             `json:"traffic_log"`
-	ListenPorts       []int            `json:"listen_ports"`
-	Entrances         []Entrance       `json:"entrances"`
-	Protect           protect.Profile  `json:"protect"`
-	Snapshot          *NodeSnapshot    `json:"live,omitempty"`
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	URL               string          `json:"url"`
+	Token             string          `json:"token,omitempty"`
+	Country           string          `json:"country"`
+	SortOrder         int             `json:"sort_order"`
+	RemnaPanelID      string          `json:"remna_panel_id"`
+	ProviderID        string          `json:"provider_id"`
+	ProviderAccountID string          `json:"provider_account_id"`
+	CreatedAt         time.Time       `json:"created_at"`
+	LastSeen          *time.Time      `json:"last_seen,omitempty"`
+	Status            NodeStatus      `json:"status"`
+	TrafficLog        bool            `json:"traffic_log"`
+	ListenPorts       []int           `json:"listen_ports"`
+	Entrances         []Entrance      `json:"entrances"`
+	Protect           protect.Profile `json:"protect"`
+	Snapshot          *NodeSnapshot   `json:"live,omitempty"`
 }
 
 // Entrance is one client listen port routed to a HAProxy backend.
@@ -71,12 +71,22 @@ type Store struct {
 	db *sql.DB
 }
 
+func sqliteDSN(path string) string {
+	if strings.HasPrefix(path, "file:") || strings.Contains(path, "?") {
+		return path
+	}
+	// WAL plus a busy timeout lets a chart read proceed while another
+	// request is writing. The pragma runs on every pooled connection.
+	return "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"
+}
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
@@ -281,6 +291,30 @@ CREATE TABLE IF NOT EXISTS remna_node_traffic_samples (
   PRIMARY KEY (panel_id, remna_uuid, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_remna_node_traffic_ts ON remna_node_traffic_samples(ts);
+CREATE TABLE IF NOT EXISTS remna_node_traffic_latest (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  down_bps REAL NOT NULL,
+  up_bps REAL NOT NULL,
+  PRIMARY KEY (panel_id, remna_uuid)
+);
+CREATE TABLE IF NOT EXISTS remna_node_traffic_day (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  sum_bps REAL NOT NULL,
+  n INTEGER NOT NULL,
+  PRIMARY KEY (panel_id, remna_uuid, day)
+);
+CREATE TABLE IF NOT EXISTS remna_node_online_hour (
+  panel_id TEXT NOT NULL,
+  remna_uuid TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  PRIMARY KEY (panel_id, remna_uuid, bucket)
+);
 CREATE TABLE IF NOT EXISTS olcrtc_nodes (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -349,6 +383,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 	if err := s.ensureColumn("remna_node_catalog", "role_cdn_back", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("remna_node_catalog", "alert_note", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := s.ensureColumn("tasks", "title", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
@@ -365,6 +402,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 		return err
 	}
 	if err := s.migrateRemnaTrafficSamplesToRates(); err != nil {
+		return err
+	}
+	if err := s.backfillRemnaRollups(); err != nil {
 		return err
 	}
 	// Backfill empty titles from the first line of description (legacy tasks).
@@ -1113,7 +1153,10 @@ func (s *Store) DeleteRemnaPanel(id string) (bool, error) {
 	}
 	for _, q := range []string{
 		`DELETE FROM remna_node_online_samples WHERE panel_id = ?`,
+		`DELETE FROM remna_node_online_hour WHERE panel_id = ?`,
 		`DELETE FROM remna_node_traffic_samples WHERE panel_id = ?`,
+		`DELETE FROM remna_node_traffic_latest WHERE panel_id = ?`,
+		`DELETE FROM remna_node_traffic_day WHERE panel_id = ?`,
 		`DELETE FROM remna_node_catalog WHERE panel_id = ?`,
 		`DELETE FROM remna_online_samples WHERE panel_id = ?`,
 		`DELETE FROM remna_traffic_samples WHERE panel_id = ?`,

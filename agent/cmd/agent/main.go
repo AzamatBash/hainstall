@@ -76,7 +76,7 @@ func main() {
 	for _, e := range entrances {
 		ensure = append(ensure, e.Backend)
 	}
-	if err := cfgWriter.Write(servers, balances, ensure...); err != nil {
+	if err := cfgWriter.WriteStartup(servers, balances, ensure...); err != nil {
 		log.Warn("initial config write failed", "err", err)
 	}
 
@@ -160,10 +160,10 @@ type config struct {
 
 func loadConfig() config {
 	return config{
-		ListenAddr:       getenv("HAPANEL_LISTEN", "0.0.0.0:9100"),
-		Token:            os.Getenv("HAPANEL_TOKEN"),
+		ListenAddr: getenv("HAPANEL_LISTEN", "0.0.0.0:9100"),
+		Token:      os.Getenv("HAPANEL_TOKEN"),
 		// Prefer TCP runtime API on the docker network (avoids flaky unix socket volumes).
-		HAProxySocket: getenv("HAPROXY_SOCKET", "tcp://haproxy:9999"),
+		HAProxySocket:    getenv("HAPROXY_SOCKET", "tcp://haproxy:9999"),
 		BackendsDir:      getenv("HAPROXY_BACKENDS_DIR", "/etc/haproxy/backends.d"),
 		StatePath:        getenv("HAPANEL_STATE_PATH", "/var/lib/hapanel/state.json"),
 		DockerHost:       getenv("DOCKER_HOST", "unix:///var/run/docker.sock"),

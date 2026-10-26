@@ -46,11 +46,22 @@ func NewConfigWriter(dir string) *ConfigWriter {
 	return &ConfigWriter{Dir: dir, FileName: "managed.cfg"}
 }
 
-// Write regenerates one `{backend}.cfg` per backend with a full backend section.
-// Frontends live in 00-hapanel-base.cfg (written by the agent).
-// balances maps backend name → HAProxy balance algorithm (empty → leastconn).
-// ensureBackends forces empty backend sections so entrances can reference them.
+// Write regenerates one `{backend}.cfg` per backend from the panel state,
+// including weight. balances maps backend name → HAProxy balance algorithm
+// (empty → leastconn). ensureBackends forces empty backend sections so
+// entrances can reference them.
 func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string, ensureBackends ...string) error {
+	return w.write(servers, balances, false, ensureBackends...)
+}
+
+// WriteStartup syncs backends after an agent restart. A local watcher may keep
+// a different weight than state.json; rewriting the file wakes that watcher
+// and reloads HAProxy. Name and address still have to match.
+func (w *ConfigWriter) WriteStartup(servers []store.Server, balances map[string]string, ensureBackends ...string) error {
+	return w.write(servers, balances, true, ensureBackends...)
+}
+
+func (w *ConfigWriter) write(servers []store.Server, balances map[string]string, keepFileWeight bool, ensureBackends ...string) error {
 	if w.Dir == "" {
 		return fmt.Errorf("backends dir is empty")
 	}
@@ -85,7 +96,16 @@ func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string,
 		if balances != nil {
 			bal = balances[backend]
 		}
-		body := renderBackendSection(backend, list, bal)
+		prev, _ := os.ReadFile(path)
+		body, err := renderBackendSection(backend, list, bal)
+		if err != nil {
+			return err
+		}
+		body = mergeBackendDirectives(string(prev), body, keepFileWeight)
+		if string(prev) == body {
+			written[backend+".cfg"] = struct{}{}
+			continue
+		}
 		if err := atomicWrite(path, body); err != nil {
 			return err
 		}
@@ -106,17 +126,25 @@ func (w *ConfigWriter) Write(servers []store.Server, balances map[string]string,
 		if _, ok := written[e.Name()]; ok {
 			continue
 		}
+		raw, rerr := os.ReadFile(filepath.Join(w.Dir, e.Name()))
+		if rerr == nil && !strings.Contains(string(raw), "Managed by hapanel agent") {
+			continue
+		}
 		_ = os.Remove(filepath.Join(w.Dir, e.Name()))
 	}
 
-	index := "# Managed by hapanel agent — do not edit by hand\n"
-	if err := atomicWrite(filepath.Join(w.Dir, w.FileName), index); err != nil {
+	// managed.cfg is only an index marker. Rewriting identical bytes still
+	// updates mtime, and host watchers treat that as a config change and
+	// SIGUSR2 HAProxy.
+	if _, err := writeIfChanged(filepath.Join(w.Dir, w.FileName), managedIndexBody); err != nil {
 		return err
 	}
 	return nil
 }
 
-func renderBackendSection(backend string, servers []store.Server, balance string) string {
+const managedIndexBody = "# Managed by hapanel agent — do not edit by hand\n"
+
+func renderBackendSection(backend string, servers []store.Server, balance string) (string, error) {
 	bal, err := NormalizeBalance(balance)
 	if err != nil {
 		bal = DefaultBalance
@@ -133,10 +161,196 @@ func renderBackendSection(backend string, servers []store.Server, balance string
 		if weight <= 0 {
 			weight = 100
 		}
-		fmt.Fprintf(&b, "    server %s %s:%d weight %d\n",
+		line := fmt.Sprintf("    server %s %s:%d weight %d",
 			SanitizeName(s.Name), s.Address, s.Port, weight)
+		if SendProxyV2(s.ClientIP) {
+			line += " send-proxy-v2"
+		}
+		suffix, err := CheckSuffix(s)
+		if err != nil {
+			return "", fmt.Errorf("backend %s server %s: %w", backend, s.Name, err)
+		}
+		line += suffix
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
-	return b.String()
+	return b.String(), nil
+}
+
+// mergeBackendDirectives keeps timeout, retries and other non-server lines
+// from the previous file, and keeps a server's extra tokens (maxconn, …)
+// when the panel did not change that server's address, port or weight.
+func mergeBackendDirectives(prev, generated string, keepFileWeight bool) string {
+	if strings.TrimSpace(prev) == "" {
+		return generated
+	}
+	// Watcher-owned health checks sit before `weight`. On startup the file
+	// weight can also differ from state.json (watcher keeps 25, state says
+	// 100). Rewriting either one wakes systemd.path.
+	if sameBackendServers(prev, generated, keepFileWeight) {
+		return prev
+	}
+	var extra []string
+	oldServers := map[string]string{}
+	for _, line := range strings.Split(prev, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") || trim == "backend" || strings.HasPrefix(trim, "backend ") {
+			continue
+		}
+		if strings.HasPrefix(trim, "server ") {
+			name := serverName(trim)
+			if name != "" {
+				oldServers[name] = "    " + trim
+			}
+			continue
+		}
+		if strings.HasPrefix(trim, "mode ") || strings.HasPrefix(trim, "balance ") {
+			continue
+		}
+		extra = append(extra, "    "+trim)
+	}
+	if len(extra) == 0 && len(oldServers) == 0 {
+		return generated
+	}
+	var out []string
+	for _, line := range strings.Split(generated, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "server ") {
+			name := serverName(trim)
+			if old, ok := oldServers[name]; ok && keepOldServer(old, "    "+trim, keepFileWeight) {
+				out = append(out, old)
+				continue
+			}
+		}
+		if strings.HasPrefix(trim, "balance ") && len(extra) > 0 {
+			out = append(out, line)
+			out = append(out, extra...)
+			extra = nil
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func sameBackendServers(prev, generated string, keepFileWeight bool) bool {
+	if balanceOf(prev) != balanceOf(generated) {
+		return false
+	}
+	oldLines := serverLines(prev)
+	newLines := serverLines(generated)
+	if len(oldLines) != len(newLines) {
+		return false
+	}
+	oldByName := make(map[string]string, len(oldLines))
+	for _, line := range oldLines {
+		name := serverName(line)
+		if name == "" {
+			return false
+		}
+		if _, dup := oldByName[name]; dup {
+			return false
+		}
+		oldByName[name] = line
+	}
+	for _, line := range newLines {
+		old, ok := oldByName[serverName(line)]
+		if !ok || !keepOldServer(old, line, keepFileWeight) {
+			return false
+		}
+	}
+	return true
+}
+
+func serverLines(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "server ") {
+			out = append(out, trim)
+		}
+	}
+	return out
+}
+
+func balanceOf(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "balance" {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+func serverName(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "server" {
+		return ""
+	}
+	return fields[1]
+}
+
+func keepOldServer(oldLine, newLine string, keepFileWeight bool) bool {
+	old, okOld := parseServerLine(oldLine)
+	neu, okNew := parseServerLine(newLine)
+	if !okOld || !okNew {
+		return false
+	}
+	if old.name != neu.name || old.addr != neu.addr {
+		return false
+	}
+	if !keepFileWeight && neu.weight != "" && old.weight != neu.weight {
+		return false
+	}
+	if neu.sendProxy && !old.sendProxy {
+		return false
+	}
+	if neu.check && !old.check {
+		return false
+	}
+	return true
+}
+
+type parsedServer struct {
+	name      string
+	addr      string
+	weight    string
+	check     bool
+	sendProxy bool
+}
+
+func parseServerLine(line string) (parsedServer, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != "server" {
+		return parsedServer{}, false
+	}
+	s := parsedServer{name: fields[1], addr: fields[2]}
+	for i := 3; i < len(fields); i++ {
+		switch fields[i] {
+		case "weight":
+			if i+1 < len(fields) {
+				s.weight = fields[i+1]
+				i++
+			}
+		case "check":
+			s.check = true
+		case "send-proxy", "send-proxy-v2":
+			s.sendProxy = true
+		}
+	}
+	return s, true
+}
+
+func writeIfChanged(path, body string) (bool, error) {
+	prev, err := os.ReadFile(path)
+	if err == nil && string(prev) == body {
+		return false, nil
+	}
+	if err := atomicWrite(path, body); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func atomicWrite(path, body string) error {

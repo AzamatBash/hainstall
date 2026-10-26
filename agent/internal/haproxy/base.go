@@ -101,8 +101,14 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 		return false, err
 	}
 	path := filepath.Join(backendsDir, BaseConfigFile)
-	body := BaseConfigBody(entrances, protect)
 	prev, _ := os.ReadFile(path)
+	// Same ports already bound: leave operator timeouts, retries, maxconn and
+	// TLS filters alone. A newer agent must not reload HAProxy just to stamp
+	// the template.
+	if EntrancesSatisfied(string(prev), entrances) {
+		return false, nil
+	}
+	body := BaseConfigBodyKeeping(string(prev), entrances, protect, false)
 	if string(prev) == body {
 		return false, nil
 	}

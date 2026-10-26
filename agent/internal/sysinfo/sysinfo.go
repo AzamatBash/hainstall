@@ -26,9 +26,38 @@ type Metrics struct {
 	DiskTotalBytes uint64    `json:"disk_total_bytes,omitempty"`
 	DiskPercent    float64   `json:"disk_percent,omitempty"`
 	// Host NIC counters (sum of non-virtual ifaces). For a transit proxy RX≈TX.
-	NetRxBytes uint64    `json:"net_rx_bytes,omitempty"`
-	NetTxBytes uint64    `json:"net_tx_bytes,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	NetRxBytes uint64 `json:"net_rx_bytes,omitempty"`
+	NetTxBytes uint64 `json:"net_tx_bytes,omitempty"`
+	// MemAvailable is what the kernel can give without swapping. Used is total minus this.
+	MemAvailableBytes uint64 `json:"mem_available_bytes,omitempty"`
+	// Conntrack is omitted when the host has no nf_conntrack table.
+	// A full table is a known limit. TIME-WAIT is not reported as a fault.
+	ConntrackCount        uint64  `json:"conntrack_count,omitempty"`
+	ConntrackMax          uint64  `json:"conntrack_max,omitempty"`
+	ConntrackPercent      float64 `json:"conntrack_percent,omitempty"`
+	ConntrackStat         bool    `json:"conntrack_stat,omitempty"`
+	ConntrackInsertFailed uint64  `json:"conntrack_insert_failed,omitempty"`
+	ConntrackDrop         uint64  `json:"conntrack_drop,omitempty"`
+	ConntrackEarlyDrop    uint64  `json:"conntrack_early_drop,omitempty"`
+	FdAllocated           uint64  `json:"fd_allocated,omitempty"`
+	FdMax                 uint64  `json:"fd_max,omitempty"`
+	TCPStat               bool    `json:"tcp_stat,omitempty"`
+	TCPInUse              uint64  `json:"tcp_inuse,omitempty"`
+	TCPTimeWait           uint64  `json:"tcp_time_wait,omitempty"`
+	SwapUsedBytes         uint64  `json:"swap_used_bytes,omitempty"`
+	SwapTotalBytes        uint64  `json:"swap_total_bytes,omitempty"`
+	SwapPercent           float64 `json:"swap_percent,omitempty"`
+	DiskInodesUsed        uint64  `json:"disk_inodes_used,omitempty"`
+	DiskInodesTotal       uint64  `json:"disk_inodes_total,omitempty"`
+	PSIStat               bool    `json:"psi,omitempty"`
+	PSIMemorySomeAvg10    float64 `json:"psi_memory_some_avg10,omitempty"`
+	PSIIOSomeAvg10        float64 `json:"psi_io_some_avg10,omitempty"`
+	PSICpuSomeAvg10       float64 `json:"psi_cpu_some_avg10,omitempty"`
+	NetRxDrops            uint64  `json:"net_rx_drops,omitempty"`
+	NetTxDrops            uint64  `json:"net_tx_drops,omitempty"`
+	// Scope is "host": readings come from the host proc mount, not the HAProxy netns.
+	Scope     string    `json:"scope,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Collect gathers CPU, memory, load, uptime and optional root disk usage.
@@ -48,9 +77,58 @@ func Collect() (Metrics, error) {
 	}
 	m.MemUsedBytes = used
 	m.MemTotalBytes = total
+	if total > used {
+		m.MemAvailableBytes = total - used
+	}
 	if total > 0 {
 		m.MemPercent = float64(used) * 100 / float64(total)
 	}
+	if count, max, ok := conntrack(proc); ok && max > 0 {
+		m.ConntrackCount = count
+		m.ConntrackMax = max
+		m.ConntrackPercent = float64(count) * 100 / float64(max)
+	}
+	if failed, drop, early, ok := conntrackStat(proc); ok {
+		m.ConntrackStat = true
+		m.ConntrackInsertFailed = failed
+		m.ConntrackDrop = drop
+		m.ConntrackEarlyDrop = early
+	}
+	if alloc, max, ok := fileNr(proc); ok && max > 0 {
+		m.FdAllocated = alloc
+		m.FdMax = max
+	}
+	if inuse, tw, ok := tcpSockstat(proc); ok {
+		m.TCPStat = true
+		m.TCPInUse = inuse
+		m.TCPTimeWait = tw
+	}
+	if used, total, ok := swapInfo(proc); ok && total > 0 {
+		m.SwapUsedBytes = used
+		m.SwapTotalBytes = total
+		m.SwapPercent = float64(used) * 100 / float64(total)
+	}
+	if some, ok := pressureSome(proc, "memory"); ok {
+		m.PSIStat = true
+		m.PSIMemorySomeAvg10 = some
+	}
+	if some, ok := pressureSome(proc, "io"); ok {
+		m.PSIStat = true
+		m.PSIIOSomeAvg10 = some
+	}
+	if some, ok := pressureSome(proc, "cpu"); ok {
+		m.PSIStat = true
+		m.PSICpuSomeAvg10 = some
+	}
+	if rxDrop, txDrop, ok := netDrops(proc); ok {
+		m.NetRxDrops = rxDrop
+		m.NetTxDrops = txDrop
+	}
+	if used, total, ok := diskInodes(hostRoot()); ok && total > 0 {
+		m.DiskInodesUsed = used
+		m.DiskInodesTotal = total
+	}
+	m.Scope = "host"
 
 	if load, err := loadAvg(proc); err == nil {
 		m.LoadAvg = load
@@ -77,6 +155,30 @@ func hostProc() string {
 		return v
 	}
 	return "/proc"
+}
+
+func conntrack(proc string) (count, max uint64, ok bool) {
+	max, ok = readUintFile(filepath.Join(proc, "sys/net/netfilter/nf_conntrack_max"))
+	if !ok || max == 0 {
+		return 0, 0, false
+	}
+	count, ok = readUintFile(filepath.Join(proc, "sys/net/netfilter/nf_conntrack_count"))
+	if !ok {
+		return 0, max, false
+	}
+	return count, max, true
+}
+
+func readUintFile(path string) (uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func hostRoot() string {

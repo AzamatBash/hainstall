@@ -76,6 +76,49 @@ ORDER BY ts ASC`, panelID, cutoff)
 	return out, rows.Err()
 }
 
+// RemnaTrafficDay is the average TX and RX rate for one panel on one Moscow day.
+// Down is host TX (отдача), Up is host RX (загрузка).
+type RemnaTrafficDay struct {
+	PanelID string
+	Day     int64
+	Down    float64
+	Up      float64
+	N       int
+}
+
+// ListRemnaTrafficDaily averages panel samples into Moscow calendar days since the cutoff.
+func (s *Store) ListRemnaTrafficDaily(since time.Time) ([]RemnaTrafficDay, error) {
+	const off = int64(3 * time.Hour / time.Millisecond)
+	const day = int64(24 * time.Hour / time.Millisecond)
+	rows, err := s.db.Query(`
+SELECT panel_id,
+       ((ts + ?) / ?) * ? - ?,
+       AVG(down_bps),
+       AVG(up_bps),
+       COUNT(*)
+FROM remna_traffic_samples
+WHERE ts >= ?
+GROUP BY panel_id, (ts + ?) / ?
+ORDER BY 2 ASC`,
+		off, day, day, off,
+		since.UTC().UnixMilli(),
+		off, day,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RemnaTrafficDay, 0, 32)
+	for rows.Next() {
+		var d RemnaTrafficDay
+		if err := rows.Scan(&d.PanelID, &d.Day, &d.Down, &d.Up, &d.N); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // LatestRemnaTrafficSample returns the newest sample for a panel, if any.
 func (s *Store) LatestRemnaTrafficSample(panelID string) (*RemnaTrafficSample, error) {
 	row := s.db.QueryRow(`

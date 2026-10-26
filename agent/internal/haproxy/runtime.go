@@ -66,9 +66,15 @@ func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl
 	}
 
 	// Base config already declares the TCP stats socket — do not add a second one.
+	// A failed probe on agent startup is usually the container network coming
+	// up. Reload only when this function actually removed a conflicting file.
 	basePath := filepath.Join(backendsDir, BaseConfigFile)
 	if raw, err := os.ReadFile(basePath); err == nil && strings.Contains(string(raw), "0.0.0.0:9999") {
-		_ = os.Remove(filepath.Join(backendsDir, RuntimeTCPFile))
+		runtimePath := filepath.Join(backendsDir, RuntimeTCPFile)
+		if _, statErr := os.Stat(runtimePath); os.IsNotExist(statErr) {
+			return fmt.Errorf("haproxy TCP runtime not ready")
+		}
+		_ = os.Remove(runtimePath)
 		if docker != nil {
 			_ = docker.Reload(ctx)
 			if err := ha.WaitReadyTimeout(ctx, 8*time.Second); err == nil {
@@ -86,10 +92,11 @@ func EnsureRuntimeTCP(ctx context.Context, backendsDir string, docker *dockerctl
 
 	path := filepath.Join(backendsDir, RuntimeTCPFile)
 	prev, _ := os.ReadFile(path)
-	if string(prev) != runtimeTCPBody {
-		if err := atomicWrite(path, runtimeTCPBody); err != nil {
-			return err
-		}
+	if string(prev) == runtimeTCPBody {
+		return fmt.Errorf("haproxy TCP runtime not ready")
+	}
+	if err := atomicWrite(path, runtimeTCPBody); err != nil {
+		return err
 	}
 
 	if docker == nil {

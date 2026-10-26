@@ -178,13 +178,24 @@ func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 		if st == "" {
 			st = "unknown"
 		}
+		mode, err := haproxy.NormalizeClientIP(s.ClientIP)
+		if err != nil {
+			mode = haproxy.ClientIPOff
+		}
+		checkMode, cerr := haproxy.NormalizeCheck(s.Check)
+		if cerr != nil {
+			checkMode = haproxy.CheckOff
+		}
 		servers = append(servers, haproxy.ServerInfo{
-			Backend: s.Backend,
-			Name:    s.Name,
-			Address: s.Address,
-			Port:    s.Port,
-			Weight:  s.Weight,
-			Status:  st,
+			Backend:   s.Backend,
+			Name:      s.Name,
+			Address:   s.Address,
+			Port:      s.Port,
+			Weight:    s.Weight,
+			Status:    st,
+			ClientIP:  mode,
+			Check:     checkMode,
+			CheckPort: s.CheckPort,
 		})
 	}
 
@@ -231,12 +242,23 @@ func (d Deps) handleListBackends(w http.ResponseWriter, _ *http.Request) {
 }
 
 type addBackendRequest struct {
-	Backend string `json:"backend"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Weight  int    `json:"weight"`
-	Balance string `json:"balance"`
+	Backend     string  `json:"backend"`
+	Name        string  `json:"name"`
+	Address     string  `json:"address"`
+	Port        int     `json:"port"`
+	Weight      int     `json:"weight"`
+	Balance     string  `json:"balance"`
+	ClientIP    *string `json:"client_ip"`
+	Check       *string `json:"check"`
+	CheckPort   int     `json:"check_port"`
+	CheckInter  int     `json:"check_inter_ms"`
+	CheckFast   int     `json:"check_fastinter_ms"`
+	CheckDown   int     `json:"check_downinter_ms"`
+	CheckFall   int     `json:"check_fall"`
+	CheckRise   int     `json:"check_rise"`
+	CheckSNI    string  `json:"check_sni"`
+	CheckVerify string  `json:"check_verify"`
+	CheckCA     string  `json:"check_ca"`
 }
 
 func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
@@ -264,12 +286,59 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 	// is parsed as unknown keyword OUT and the backend ends up with zero servers).
 	req.Name = haproxy.SanitizeName(req.Name)
 
+	prev, found, err := d.Store.Find(req.Backend, req.Name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	srv := store.Server{
 		Backend: req.Backend,
 		Name:    req.Name,
 		Address: req.Address,
 		Port:    req.Port,
 		Weight:  req.Weight,
+	}
+	if found {
+		srv.ClientIP = prev.ClientIP
+		srv.Check = prev.Check
+		srv.CheckPort = prev.CheckPort
+		srv.CheckInter = prev.CheckInter
+		srv.CheckFast = prev.CheckFast
+		srv.CheckDown = prev.CheckDown
+		srv.CheckFall = prev.CheckFall
+		srv.CheckRise = prev.CheckRise
+		srv.CheckSNI = prev.CheckSNI
+		srv.CheckVerify = prev.CheckVerify
+		srv.CheckCA = prev.CheckCA
+	}
+	rawIP := ""
+	if req.ClientIP != nil {
+		rawIP = *req.ClientIP
+	} else if found {
+		rawIP = prev.ClientIP
+	}
+	clientIP, err := haproxy.NormalizeClientIP(rawIP)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	srv.ClientIP = clientIP
+	if req.Check != nil {
+		mode, err := haproxy.NormalizeCheck(*req.Check)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		srv.Check = mode
+		srv.CheckPort = req.CheckPort
+		srv.CheckInter = req.CheckInter
+		srv.CheckFast = req.CheckFast
+		srv.CheckDown = req.CheckDown
+		srv.CheckFall = req.CheckFall
+		srv.CheckRise = req.CheckRise
+		srv.CheckSNI = req.CheckSNI
+		srv.CheckVerify = req.CheckVerify
+		srv.CheckCA = req.CheckCA
 	}
 	if err := d.Store.UpsertWithBalance(srv, balance); err != nil {
 		writeErr(w, http.StatusInternalServerError, "persist: "+err.Error())
@@ -282,7 +351,7 @@ func (d Deps) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort runtime add before reload (may fail if dynamic servers unsupported).
-	if err := d.HA.AddServerRuntime(req.Backend, req.Name, req.Address, req.Port, req.Weight); err != nil {
+	if err := d.HA.AddServerRuntime(req.Backend, req.Name, req.Address, req.Port, req.Weight, clientIP, srv.Check); err != nil {
 		d.Log.Info("runtime add skipped/failed, will reload", "err", err)
 	}
 	if err := d.Docker.Reload(r.Context()); err != nil {

@@ -9,6 +9,7 @@ import {
   formatBitrateShort,
   formatBytes,
   formatUptime,
+  isInternalBackend,
   Node,
   ProtectProfile,
   Provider,
@@ -36,6 +37,18 @@ const AGENT_FETCH_MS = 10000
 const TRAFFIC_HOURS_OPTIONS = [1, 2, 3, 6, 12, 24] as const
 const TRAFFIC_HISTORY_MAX = (24 * 60 * 60) / 5
 const MSK = 'Europe/Moscow'
+
+function limitColor(pct?: number): string | undefined {
+  if (pct == null || !Number.isFinite(pct)) return undefined
+  if (pct >= 95) return 'var(--danger)'
+  if (pct >= 70) return 'var(--warn)'
+  return undefined
+}
+
+function fmtAvg(n?: number): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toFixed(2)
+}
 
 /** Timed fetch so a hung /stats cannot freeze the detail page. */
 async function apiTimed<T = unknown>(path: string, ms = AGENT_FETCH_MS): Promise<T> {
@@ -257,6 +270,13 @@ export default function NodeDetailPage() {
   const [backends, setBackends] = useState<BackendServer[]>([])
   const histResetRef = useRef(id)
   const trafficRef = useRef<{ t: number; inn: number; out: number } | null>(null)
+  const proxySampleRef = useRef<{
+    id: string
+    byBackend: Record<string, { t: number; bin: number; bout: number }>
+  }>({ id: '', byBackend: {} })
+  const [proxyRates, setProxyRates] = useState<
+    Record<string, { rx: number; tx: number } | null>
+  >({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [connecting, setConnecting] = useState(false)
@@ -297,6 +317,8 @@ export default function NodeDetailPage() {
     port: '8443',
     weight: '100',
     balance: 'leastconn',
+    client_ip: 'off',
+    check: 'off',
   })
 
   const [remnaPanels, setRemnaPanels] = useState<RemnaPanel[]>([])
@@ -309,6 +331,83 @@ export default function NodeDetailPage() {
   const [remnaBusyKey, setRemnaBusyKey] = useState('')
 
   const facing = useMemo(() => userFacingStats(stats), [stats])
+
+  // HAProxy bin/bout are cumulative and both point at the client side:
+  // bout is bytes sent to clients, bin is bytes received from them.
+  // ↓ shows bout, ↑ shows bin.
+  useEffect(() => {
+    if (proxySampleRef.current.id !== id) {
+      proxySampleRef.current = { id, byBackend: {} }
+      setProxyRates({})
+    }
+    const rows = stats?.backends
+    if (!id || !rows) return
+    const now = Date.now()
+    const prev = proxySampleRef.current.byBackend
+    const nextSamples = { ...prev }
+    const rates: Record<string, { rx: number; tx: number }> = {}
+    let known = false
+    for (const row of rows) {
+      if (isInternalBackend(row.name)) continue
+      if (row.bytes_in == null && row.bytes_out == null) continue
+      const bin = Number(row.bytes_in) || 0
+      const bout = Number(row.bytes_out) || 0
+      const old = prev[row.name]
+      nextSamples[row.name] = { t: now, bin, bout }
+      known = true
+      if (!old || now <= old.t) continue
+      const dt = (now - old.t) / 1000
+      if (dt < 0.5) continue
+      if (bin < old.bin || bout < old.bout) continue
+      rates[row.name] = {
+        rx: (bout - old.bout) / dt,
+        tx: (bin - old.bin) / dt,
+      }
+    }
+    proxySampleRef.current = { id, byBackend: nextSamples }
+    if (!known) return
+    setProxyRates((cur) => {
+      const merged = { ...cur }
+      for (const name of Object.keys(nextSamples)) {
+        if (!(name in merged)) merged[name] = null
+      }
+      for (const [name, rate] of Object.entries(rates)) merged[name] = rate
+      return merged
+    })
+  }, [id, stats])
+  const haproxyRows = useMemo(() => {
+    const fronts = (stats?.frontends ?? []).filter((f) => !isInternalBackend(f.name))
+    const rows: Array<{
+      key: string
+      name: string
+      status: string
+      sessions: number
+      limit?: number
+      queue?: number
+      rate?: number
+    }> = fronts.map((f) => ({
+      key: `fe-${f.name}`,
+      name: f.name,
+      status: f.status,
+      sessions: f.sessions,
+      limit: f.limit,
+      rate: f.rate ?? f.req_rate,
+    }))
+    for (const b of facing.backends) {
+      rows.push({
+        key: `be-${b.name}`,
+        name: b.name,
+        status: b.status,
+        sessions: b.sessions,
+        limit: b.limit,
+        queue: b.queue,
+        rate: undefined,
+      })
+    }
+    return rows
+  }, [stats, facing.backends])
+  const haproxyShowLimit = haproxyRows.some((row) => (row.limit ?? 0) > 0)
+  const haproxyShowQueue = haproxyRows.some((row) => row.queue != null)
 
   /** One HAProxy backend per listen port — used for NEW multi-port isolation only. */
   function backendForPort(port: number) {
@@ -1070,6 +1169,8 @@ export default function NodeDetailPage() {
       port: '8443',
       weight: '100',
       balance: existing?.balance ? String(existing.balance) : 'leastconn',
+      client_ip: 'off',
+      check: 'off',
     })
     setShowAddBackend(true)
   }
@@ -1088,6 +1189,8 @@ export default function NodeDetailPage() {
           port: Number(form.port),
           weight: Number(form.weight),
           balance: form.balance,
+          client_ip: form.client_ip,
+          check: form.check,
         }),
       })
       setForm((f) => ({ ...f, name: '', address: '' }))
@@ -1104,6 +1207,79 @@ export default function NodeDetailPage() {
   function closeAddBackend() {
     if (busy) return
     setShowAddBackend(false)
+  }
+
+  async function onClientIP(server: BackendServer, clientIP: string) {
+    const prev = server.client_ip || 'off'
+    if (clientIP === prev) return
+    if (clientIP === 'proxy-ng') {
+      if (!confirm('Включить proxy-ng? Nginx на цели должен принимать PROXY protocol на этом порту. Иначе соединения оборвутся.')) return
+    }
+    if (clientIP === 'proxy-vl') {
+      if (!confirm('Включить proxy-vl? Xray на цели должен принимать PROXY protocol. Конфиг nginx сюда не подходит. Иначе соединения оборвутся.')) return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await api(`/api/nodes/${id}/backends`, {
+        method: 'POST',
+        body: JSON.stringify({
+          backend: server.backend,
+          name: server.name,
+          address: server.address,
+          port: server.port,
+          weight: server.weight || 100,
+          balance: server.balance || '',
+          client_ip: clientIP,
+          check: server.check || 'off',
+          check_port: server.check_port || 0,
+        }),
+      })
+      setToast({ kind: 'ok', text: `${server.name}: ${clientIP === 'off' ? 'выкл' : clientIP}` })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сменить режим IP')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onCheck(server: BackendServer, check: string) {
+    const prev = server.check || 'off'
+    if (check === prev) return
+    if (check !== 'off') {
+      if (
+        !confirm(
+          'Включить проверку? Она смотрит только открытый порт. Для Reality слепой ssl-hello помечает сервер как DOWN, и клиенты перестают попадать на него.',
+        )
+      ) {
+        return
+      }
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await api(`/api/nodes/${id}/backends`, {
+        method: 'POST',
+        body: JSON.stringify({
+          backend: server.backend,
+          name: server.name,
+          address: server.address,
+          port: server.port,
+          weight: server.weight || 100,
+          balance: server.balance || '',
+          client_ip: server.client_ip || 'off',
+          check,
+          check_port: server.check_port || 0,
+        }),
+      })
+      setToast({ kind: 'ok', text: `${server.name}: проверка ${check === 'off' ? 'выкл' : check}` })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сменить проверку')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function onDeleteBackend(backend: string, name: string) {
@@ -1246,7 +1422,7 @@ export default function NodeDetailPage() {
     if (!ok) return
     try {
       await api(`/api/nodes/${id}`, { method: 'DELETE' })
-      navigate('/')
+      navigate('/nodes')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось удалить')
     }
@@ -1330,6 +1506,31 @@ export default function NodeDetailPage() {
     }
   }
 
+  function proxyTraffic(backend: string) {
+    if (!(backend in proxyRates)) return null
+    const rate = proxyRates[backend]
+    return (
+      <span
+        className="backend-proxy-net"
+        title="Трафик клиентов через этот HAProxy. ↓ отдано клиентам, ↑ принято от клиентов."
+      >
+        <span className="label">прокси</span>
+        <span className="node-live-net down" title="Отдано клиентам через этот прокси">
+          <span className="node-live-arrow" aria-hidden>
+            ↓
+          </span>
+          {formatBitrateShort(rate?.rx)}
+        </span>
+        <span className="node-live-net up" title="Принято от клиентов через этот прокси">
+          <span className="node-live-arrow" aria-hidden>
+            ↑
+          </span>
+          {formatBitrateShort(rate?.tx)}
+        </span>
+      </span>
+    )
+  }
+
   async function copyText(label: string, text: string) {
     const ok = await copyToClipboard(text)
     if (ok) {
@@ -1345,7 +1546,7 @@ export default function NodeDetailPage() {
     <div className="shell">
       <header className="topbar node-detail-topbar">
         <div className="node-detail-title-row">
-          <Link to="/" className="btn btn-sm btn-ghost back-btn">
+          <Link to="/nodes" className="btn btn-sm btn-ghost back-btn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path
                 d="M15 6L9 12l6 6"
@@ -1702,6 +1903,8 @@ export default function NodeDetailPage() {
                             <th>Адрес</th>
                             <th>Порт цели</th>
                             <th>Вес</th>
+                            <th>IP клиента</th>
+                            <th>Проверка</th>
                             <th>Статус</th>
                             <th />
                           </tr>
@@ -1725,6 +1928,30 @@ export default function NodeDetailPage() {
                                   <td className="mono">{b.address}</td>
                                   <td className="mono">{b.port}</td>
                                   <td className="mono">{b.weight ?? '—'}</td>
+                                  <td>
+                                    <select
+                                      aria-label={`IP клиента ${b.name}`}
+                                      value={b.client_ip || 'off'}
+                                      disabled={busy || st !== 'online'}
+                                      onChange={(e) => void onClientIP(b, e.target.value)}
+                                    >
+                                      <option value="off">выкл</option>
+                                      <option value="proxy-ng">proxy-ng</option>
+                                      <option value="proxy-vl">proxy-vl</option>
+                                    </select>
+                                  </td>
+                                  <td>
+                                    <select
+                                      aria-label={`Проверка ${b.name}`}
+                                      value={b.check || 'off'}
+                                      disabled={busy || st !== 'online'}
+                                      onChange={(e) => void onCheck(b, e.target.value)}
+                                    >
+                                      <option value="off">выкл</option>
+                                      <option value="tcp">tcp</option>
+                                      <option value="tls">tls</option>
+                                    </select>
+                                  </td>
                                   <td>{b.status ?? '—'}</td>
                                   <td>
                                     <button
@@ -1738,10 +1965,11 @@ export default function NodeDetailPage() {
                                   </td>
                                 </tr>
                                 <tr className="backend-remna-row">
-                                  <td colSpan={6}>
+                                  <td colSpan={8}>
                                     <div className="backend-remna">
                                       {!linked ? (
                                         <div className="backend-remna-bind">
+                                          {proxyTraffic(b.backend)}
                                           <select
                                             value={rf.panelId}
                                             aria-label="Панель Remnawave"
@@ -1786,6 +2014,7 @@ export default function NodeDetailPage() {
                                           >
                                             {panelName}
                                           </span>
+                                          {proxyTraffic(b.backend)}
                                           {!stRow ? (
                                             <span className="muted">…</span>
                                           ) : stRow.error || stRow.missing ? (
@@ -2135,7 +2364,7 @@ export default function NodeDetailPage() {
                 Метрики хоста ноды. Графики обновляются каждые {POLL_MS / 1000} с, пока страница
                 открыта.
               </p>
-              <div className="stats-grid" style={{ marginBottom: '0.85rem' }}>
+              <div className="stats-grid cols-5" style={{ marginBottom: '0.75rem' }}>
                 <div className="stat">
                   <div className="label">CPU</div>
                   <div className="value">
@@ -2147,7 +2376,7 @@ export default function NodeDetailPage() {
                   <div className="value">
                     {system ? `${system.mem_percent.toFixed(1)}%` : '—'}
                   </div>
-                  <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                  <div className="sub">
                     {system
                       ? `${formatBytes(system.mem_used_bytes)} / ${formatBytes(system.mem_total_bytes)}`
                       : ''}
@@ -2171,12 +2400,112 @@ export default function NodeDetailPage() {
                   <div className="stat">
                     <div className="label">Диск /</div>
                     <div className="value">{(system.disk_percent ?? 0).toFixed(1)}%</div>
-                    <div className="muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                    <div className="sub">
                       {formatBytes(system.disk_used_bytes)} / {formatBytes(system.disk_total_bytes)}
+                      {system.disk_inodes_total
+                        ? ` · inode ${system.disk_inodes_used ?? 0}/${system.disk_inodes_total}`
+                        : ''}
                     </div>
                   </div>
                 ) : null}
               </div>
+              <div className="stats-grid cols-5" style={{ marginBottom: '0.85rem' }}>
+                <div className="stat">
+                  <div className="label">Conntrack</div>
+                  <div className="value" style={{ color: limitColor(system?.conntrack_percent) }}>
+                    {system?.conntrack_max ? `${Math.round(system.conntrack_percent ?? 0)}%` : '—'}
+                  </div>
+                  {system?.conntrack_max ? (
+                    <div className="sub">
+                      {`${system.conntrack_count ?? 0} / ${system.conntrack_max}`}
+                      {system.conntrack_stat
+                        ? ` · fail ${system.conntrack_insert_failed ?? 0}`
+                        : ''}
+                    </div>
+                  ) : (
+                    <div className="sub">нет данных</div>
+                  )}
+                </div>
+                <div className="stat">
+                  <div className="label">Дескрипторы</div>
+                  <div
+                    className="value"
+                    style={{
+                      color: limitColor(
+                        system?.fd_max ? ((system.fd_allocated ?? 0) * 100) / system.fd_max : undefined,
+                      ),
+                    }}
+                  >
+                    {system?.fd_max ? `${system.fd_allocated ?? 0}` : '—'}
+                  </div>
+                  <div className="sub">{system?.fd_max ? `из ${system.fd_max}` : 'нет данных'}</div>
+                </div>
+                <div className="stat">
+                  <div className="label">TCP</div>
+                  <div className="value">{system?.tcp_stat ? `${system.tcp_inuse ?? 0}` : '—'}</div>
+                  <div className="sub">
+                    {system?.tcp_stat ? `time-wait ${system.tcp_time_wait ?? 0}` : 'нет данных'}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">Доступно</div>
+                  <div className="value" style={{ fontSize: '1rem' }}>
+                    {system?.mem_available_bytes != null ? formatBytes(system.mem_available_bytes) : '—'}
+                  </div>
+                  <div className="sub">
+                    {system?.swap_total_bytes
+                      ? `swap ${formatBytes(system.swap_used_bytes)} / ${formatBytes(system.swap_total_bytes)}`
+                      : system?.scope === 'host'
+                        ? 'без swap'
+                        : 'нет данных'}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">Давление</div>
+                  <div className="value" style={{ fontSize: '1rem' }}>
+                    {system?.psi ? fmtAvg(system.psi_memory_some_avg10 ?? 0) : '—'}
+                  </div>
+                  <div className="sub">
+                    {system?.psi
+                      ? `cpu ${fmtAvg(system.psi_cpu_some_avg10 ?? 0)} · io ${fmtAvg(system.psi_io_some_avg10 ?? 0)}`
+                      : system?.scope === 'host'
+                        ? `drop rx ${system.net_rx_drops ?? 0} · tx ${system.net_tx_drops ?? 0}`
+                        : 'нет данных'}
+                  </div>
+                </div>
+              </div>
+              {haproxyRows.length > 0 ? (
+                <div className="table-wrap" style={{ marginBottom: '0.85rem' }}>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>HAProxy</th>
+                        <th>Статус</th>
+                        <th>Сессии</th>
+                        {haproxyShowLimit ? <th>Лимит</th> : null}
+                        {haproxyShowQueue ? <th>Очередь</th> : null}
+                        <th>Новые/с</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {haproxyRows.map((row) => (
+                        <tr key={row.key}>
+                          <td className="mono">{row.name}</td>
+                          <td>{row.status}</td>
+                          <td className="mono">{row.sessions}</td>
+                          {haproxyShowLimit ? (
+                            <td className="mono">{row.limit ? row.limit : '—'}</td>
+                          ) : null}
+                          {haproxyShowQueue ? (
+                            <td className="mono">{row.queue == null ? '—' : row.queue}</td>
+                          ) : null}
+                          <td className="mono">{row.rate == null ? '—' : row.rate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
               <div className="charts-grid">
                 <SparklineChart
                   label="CPU"
@@ -2419,6 +2748,39 @@ export default function NodeDetailPage() {
                   />
                 </div>
               ))}
+              <div className="field">
+                <label htmlFor="add-client-ip">IP клиента</label>
+                <select
+                  id="add-client-ip"
+                  value={form.client_ip}
+                  disabled={busy}
+                  onChange={(e) => setForm((f) => ({ ...f, client_ip: e.target.value }))}
+                >
+                  <option value="off">выкл — цель видит адрес этого фронта</option>
+                  <option value="proxy-ng">proxy-ng — nginx на цели принимает PROXY protocol</option>
+                  <option value="proxy-vl">proxy-vl — Xray на цели принимает PROXY protocol</option>
+                </select>
+                {form.client_ip !== 'off' && (
+                  <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.8rem' }}>
+                    {form.client_ip === 'proxy-ng'
+                      ? 'Nginx должен слушать этот порт с proxy_protocol. Без этого новые соединения оборвутся.'
+                      : 'Xray должен принимать PROXY protocol сам. Настройка nginx сюда не переносится.'}
+                  </p>
+                )}
+              </div>
+              <div className="field">
+                <label htmlFor="add-check">Проверка</label>
+                <select
+                  id="add-check"
+                  value={form.check}
+                  disabled={busy}
+                  onChange={(e) => setForm((f) => ({ ...f, check: e.target.value }))}
+                >
+                  <option value="off">выкл</option>
+                  <option value="tcp">tcp — открыт ли порт</option>
+                  <option value="tls">tls — рукопожатие, verify none</option>
+                </select>
+              </div>
               <div className="field">
                 <label htmlFor="add-balance">Балансировка</label>
                 <select

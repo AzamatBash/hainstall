@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { createPortal } from 'react-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import TrafficMarks from '../components/TrafficMarks'
 import {
   api,
   formatBitrateShort,
@@ -29,6 +31,10 @@ type StatsNode = {
   down_bps?: number
   up_bps?: number
   traffic_at?: string
+  traffic_drop?: boolean
+  traffic_drop_hint?: string
+  traffic_decline?: boolean
+  traffic_decline_hint?: string
   last_seen_at?: number
 }
 
@@ -53,6 +59,128 @@ const PROTO_OPTS: { value: string; label: string }[] = [
   { value: 'other', label: 'Other' },
   { value: 'unknown', label: 'Unknown' },
 ]
+
+const HISTORY_HOURS = 744
+const SAME_TIME_TOLERANCE_MIN = 10
+
+type CompareSource = 'online' | 'traffic'
+
+type CompareRow = {
+  key: string
+  label: string
+  selected: boolean
+  online: number | null
+  down: number | null
+  up: number | null
+}
+
+function mskClock(ts: number) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ts))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  let hour = Number(get('hour'))
+  if (hour === 24) hour = 0
+  return {
+    key: `${get('year')}-${get('month')}-${get('day')}`,
+    minutes: hour * 60 + Number(get('minute')),
+  }
+}
+
+function minuteDelta(a: number, b: number) {
+  const d = Math.abs(a - b)
+  return Math.min(d, 1440 - d)
+}
+
+function indexByDay<T extends { t: number }>(points: T[]) {
+  const map = new Map<string, { p: T; minutes: number }[]>()
+  for (const p of points) {
+    const clock = mskClock(p.t)
+    const row = { p, minutes: clock.minutes }
+    const list = map.get(clock.key)
+    if (list) list.push(row)
+    else map.set(clock.key, [row])
+  }
+  return map
+}
+
+function closestInDay<T extends { t: number }>(
+  map: Map<string, { p: T; minutes: number }[]>,
+  day: string,
+  minutes: number,
+): T | null {
+  const list = map.get(day)
+  if (!list) return null
+  let best: T | null = null
+  let bestD = SAME_TIME_TOLERANCE_MIN + 1
+  for (const row of list) {
+    const d = minuteDelta(row.minutes, minutes)
+    if (d < bestD) {
+      best = row.p
+      bestD = d
+    }
+  }
+  return bestD <= SAME_TIME_TOLERANCE_MIN ? best : null
+}
+
+function dayLabel(key: string) {
+  const [y, m, d] = key.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d, 12))
+  const weekday = date.toLocaleDateString('ru-RU', { weekday: 'short', timeZone: 'UTC' })
+  return `${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')} ${weekday}`
+}
+
+function mskTimeLabel(ts: number) {
+  return new Date(ts).toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function buildCompareRows(
+  anchor: number,
+  online: OnlinePoint[],
+  traffic: TrafficPoint[],
+): CompareRow[] {
+  const target = mskClock(anchor)
+  const onlineDays = indexByDay(online)
+  const trafficDays = indexByDay(traffic)
+  const days = new Set<string>([...onlineDays.keys(), ...trafficDays.keys()])
+  const older = [...days].filter((key) => key < target.key).sort((a, b) => b.localeCompare(a))
+  const ordered = days.has(target.key) ? [target.key, ...older] : older
+  return ordered
+    .map((key) => {
+      const sample = closestInDay(onlineDays, key, target.minutes)
+      const rate = closestInDay(trafficDays, key, target.minutes)
+      return {
+        key,
+        label: dayLabel(key),
+        selected: key === target.key,
+        online: sample ? sample.online : null,
+        down: rate ? rate.down_bps : null,
+        up: rate ? rate.up_bps : null,
+      }
+    })
+    .filter((row) => row.online != null || row.down != null || row.up != null)
+}
+
+function perUserRate(down: number | null, online: number | null) {
+  if (down == null || online == null) return null
+  if (!Number.isFinite(down) || !Number.isFinite(online) || online <= 0) return null
+  return down / online
+}
+
+function onlineDelta(value: number | null, base: number | null) {
+  if (value == null || base == null) return null
+  return Math.round(value - base)
+}
 
 function formatAt(iso: string) {
   if (!iso) return ''
@@ -149,6 +277,19 @@ export default function StatsPage() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [savingKey, setSavingKey] = useState('')
+  const [pointMenu, setPointMenu] = useState<{
+    t: number
+    x: number
+    y: number
+    source: CompareSource
+  } | null>(null)
+  const [compare, setCompare] = useState<{
+    anchor: number
+    source: CompareSource
+    loading: boolean
+    error: string
+    rows: CompareRow[]
+  } | null>(null)
 
   const activeRef = useRef(activeId)
   activeRef.current = activeId
@@ -160,6 +301,15 @@ export default function StatsPage() {
   onlineHoursRef.current = onlineHours
   const trafficHoursRef = useRef(trafficHours)
   trafficHoursRef.current = trafficHours
+
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const node = searchParams.get('node')
+    if (!node || !node.includes(':')) return
+    setMode('stats')
+    setStatsScope('nodes')
+    setSelectedNodeKey(node)
+  }, [searchParams])
 
   const loadPanels = useCallback(async () => {
     setError('')
@@ -321,6 +471,29 @@ export default function StatsPage() {
   }, [loadPanels, loadStatsNodes])
 
   useEffect(() => {
+    setPointMenu(null)
+    setCompare(null)
+  }, [activeId, selectedNodeKey, statsScope])
+
+  useEffect(() => {
+    if (!pointMenu) return
+    function close() {
+      setPointMenu(null)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setPointMenu(null)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [pointMenu])
+
+  useEffect(() => {
     setZoom(null)
     if (mode !== 'stats') return
     if (statsScope === 'panel' && activeId) {
@@ -462,6 +635,121 @@ export default function StatsPage() {
     [nodes],
   )
 
+  function openPointMenu(source: CompareSource, at: { t: number; clientX: number; clientY: number }) {
+    const menuW = 168
+    const menuH = 44
+    setPointMenu({
+      t: at.t,
+      source,
+      x: Math.max(8, Math.min(at.clientX, window.innerWidth - menuW - 8)),
+      y: Math.max(8, Math.min(at.clientY, window.innerHeight - menuH - 8)),
+    })
+  }
+
+  async function runCompare(anchor: number, source: CompareSource) {
+    setPointMenu(null)
+    const panelId = statsScope === 'nodes' ? selectedNode?.panel_id || '' : activeId
+    const uuid = statsScope === 'nodes' ? selectedNode?.remna_uuid : undefined
+    setCompare({ anchor, source, loading: true, error: '', rows: [] })
+    if (!panelId || (statsScope === 'nodes' && !uuid)) {
+      setCompare({ anchor, source, loading: false, error: 'Нет данных для сравнения', rows: [] })
+      return
+    }
+    const onlinePath = uuid
+      ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(uuid)}/online?hours=${HISTORY_HOURS}&raw=1`
+      : `/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${HISTORY_HOURS}&raw=1`
+    const trafficPath = uuid
+      ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(uuid)}/traffic?hours=${HISTORY_HOURS}&raw=1`
+      : `/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${HISTORY_HOURS}&raw=1`
+    try {
+      const [onlineRes, trafficRes] = await Promise.all([
+        api<{ points: OnlinePoint[] }>(onlinePath),
+        api<{ points: TrafficPoint[] }>(trafficPath),
+      ])
+      setCompare({
+        anchor,
+        source,
+        loading: false,
+        error: '',
+        rows: buildCompareRows(
+          anchor,
+          Array.isArray(onlineRes.points) ? onlineRes.points : [],
+          Array.isArray(trafficRes.points) ? trafficRes.points : [],
+        ),
+      })
+    } catch (err) {
+      setCompare({
+        anchor,
+        source,
+        loading: false,
+        error: err instanceof Error ? err.message : translateError(String(err)),
+        rows: [],
+      })
+    }
+  }
+
+  function compareTable(source: CompareSource) {
+    if (!compare || compare.source !== source) return null
+    const base = compare.rows.find((row) => row.selected)?.online ?? null
+    const others = compare.rows.filter((row) => !row.selected).length
+    return (
+      <div className="same-time">
+        <div className="same-time-head">
+          <strong>То же время · {mskTimeLabel(compare.anchor)} МСК</strong>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setCompare(null)}>
+            Закрыть
+          </button>
+        </div>
+        {compare.loading ? <p className="muted">Считаю по всем дням…</p> : null}
+        {compare.error ? <p className="error">{compare.error}</p> : null}
+        {!compare.loading && !compare.error && compare.rows.length === 0 ? (
+          <p className="muted">На это время в истории ничего нет.</p>
+        ) : null}
+        {!compare.loading && compare.rows.length > 0 ? (
+          <>
+            <div className="same-time-scroll">
+              <table className="same-time-table">
+                <thead>
+                  <tr>
+                    <th>День</th>
+                    <th>Онлайн</th>
+                    <th>Δ</th>
+                    <th>Отдача TX</th>
+                    <th>Загрузка RX</th>
+                    <th title="Отдача TX на одного онлайн">На юзера</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {compare.rows.map((row) => {
+                    const delta = row.selected ? null : onlineDelta(row.online, base)
+                    return (
+                      <tr key={row.key} className={row.selected ? 'is-selected' : ''}>
+                        <td>
+                          {row.label}
+                          {row.selected ? <span className="same-time-mark">эта точка</span> : null}
+                        </td>
+                        <td className="mono">{row.online == null ? '—' : Math.round(row.online)}</td>
+                        <td className={`mono${delta != null && delta > 0 ? ' up' : ''}${delta != null && delta < 0 ? ' down' : ''}`}>
+                          {row.selected || delta == null ? '—' : delta > 0 ? `+${delta}` : String(delta)}
+                        </td>
+                        <td className="mono">{formatBitrateShort(row.down)}</td>
+                        <td className="mono">{formatBitrateShort(row.up)}</td>
+                        <td className="mono" title="Отдача TX / онлайн">
+                          {formatBitrateShort(perUserRate(row.down, row.online))}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {others === 0 ? <p className="muted">Других дней на это время в истории пока нет.</p> : null}
+          </>
+        ) : null}
+      </div>
+    )
+  }
+
   async function syncNodes() {
     setSyncing(true)
     setError('')
@@ -505,6 +793,25 @@ export default function StatsPage() {
 
   return (
     <div className="shell">
+      {pointMenu
+        ? createPortal(
+            <div
+              className="chart-context"
+              style={{ left: pointMenu.x, top: pointMenu.y }}
+              role="menu"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void runCompare(pointMenu.t, pointMenu.source)}
+              >
+                Сравнить
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       <header className="page-toolbar">
         <div className="page-toolbar-title">
           <h1>Статистика</h1>
@@ -551,7 +858,7 @@ export default function StatsPage() {
               <p className="muted">Загрузка…</p>
             ) : panels.length === 0 ? (
               <p className="muted">
-                Панелей Remnawave пока нет — добавьте на <Link to="/">главной</Link> во вкладке
+                Панелей Remnawave пока нет — добавьте на <Link to="/nodes">нодах</Link> во вкладке
                 «Панели Remnawave».
               </p>
             ) : (
@@ -640,7 +947,15 @@ export default function StatsPage() {
                               aria-hidden
                             />
                             <span className="stats-node-main">
-                              <span className="stats-node-title">{n.name}</span>
+                              <span className="stats-node-title">
+                                <span className="stats-node-title-text">{n.name}</span>
+                                <TrafficMarks
+                                  drop={n.traffic_drop}
+                                  decline={n.traffic_decline}
+                                  dropHint={n.traffic_drop_hint}
+                                  declineHint={n.traffic_decline_hint}
+                                />
+                              </span>
                               <span className="muted mono stats-node-meta">
                                 {n.panel_name || '—'}
                                 {n.address ? ` · ${n.address}` : ''}
@@ -672,6 +987,12 @@ export default function StatsPage() {
                         </button>
                         <div className="stats-node-detail-title">
                           <strong>{selectedNode.name}</strong>
+                          <TrafficMarks
+                            drop={selectedNode.traffic_drop}
+                            decline={selectedNode.traffic_decline}
+                            dropHint={selectedNode.traffic_drop_hint}
+                            declineHint={selectedNode.traffic_decline_hint}
+                          />
                           <span className="muted mono" style={{ marginLeft: '0.5rem', fontSize: '0.85rem' }}>
                             {selectedNode.panel_name || ''}
                             {selectedNode.address ? ` · ${selectedNode.address}` : ''}
@@ -724,6 +1045,7 @@ export default function StatsPage() {
                         points={displayPoints}
                         hours={onlineHours}
                         onZoom={(from, to) => setZoom({ from, to })}
+                        onContextPoint={(at) => openPointMenu('online', at)}
                         valueLabel="Онлайн"
                         ariaLabel="Онлайн пользователей"
                         tapHint="Нажмите на график, чтобы увидеть дату и онлайн"
@@ -731,8 +1053,9 @@ export default function StatsPage() {
                         showLegend
                       />
                     )}
+                    {compareTable('online')}
                     <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
-                      На телефоне: тап по графику. На ПК: наведение. Протяните пальцем/мышью — зум.
+                      На ПК: наведение, правый клик — сравнить это время с другими днями. Протяните мышью — зум.
                     </p>
 
                     <div className="stats-traffic-block">
@@ -781,12 +1104,14 @@ export default function StatsPage() {
                           hours={trafficHours}
                           size="stats"
                           onZoom={(from, to) => setTrafficZoom({ from, to })}
+                          onContextPoint={(at) => openPointMenu('traffic', at)}
                           currentDownBps={trafficDown}
                           currentUpBps={trafficUp}
                         />
                       )}
+                      {compareTable('traffic')}
                       <p className="muted stats-zoom-hint" style={{ margin: 0, fontSize: '0.8rem' }}>
-                        На телефоне: тап по графику. На ПК: наведение. Протяните пальцем/мышью — зум.
+                        На ПК: наведение, правый клик — сравнить это время с другими днями. Протяните мышью — зум.
                       </p>
                     </div>
                   </div>
