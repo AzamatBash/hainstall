@@ -235,4 +235,64 @@ curl -sS -H "X-API-Key: $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes/
 
 Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. No node tokens or management URLs.
 
+### Права ключей и выгрузка настроек (`GET /api/v1/config`)
+
+У API-ключа может быть набор прав (`scopes`). Любой действующий ключ, как и раньше, читает `GET /api/v1/hanodes` и `/api/v1/hanodes/{id}`. Ключ с правом `config` дополнительно читает `GET /api/v1/config`. Ключи из интерфейса (**api** → **Сгенерировать**) и ключ из `PANEL_API_KEY` прав не имеют: на `/api/v1/config` они получают `403 {"error":"у ключа нет права config"}`. Сессия администратора (JWT) открывает и этот маршрут.
+
+Как выпустить ключ с правом `config`:
+
+- API (сессия администратора): `POST /api/settings/api-keys` с телом `{"name":"vpn-expert","scopes":["config"]}`. Без `scopes` создаётся прежний ключ, неизвестное право — `400`. `GET /api/settings/api-keys` показывает `scopes` у каждого ключа.
+- CLI в том же бинарнике, без пароля, можно рядом с работающей панелью:
+
+```bash
+docker exec hapanel-panel /app/panel apikey create --name vpn-expert --scope config
+docker exec hapanel-panel /app/panel apikey list
+```
+
+`create` печатает в stdout только сам ключ (одну строку), в stderr — id, префикс и права. `list` показывает id, имя, префикс, права, даты создания, последнего использования и отзыва; ключи и хеши не печатает. CLI открывает существующую базу из `PANEL_DB_PATH` (или `--db <путь>`), не создаёт её, не запускает HTTP-сервер, опросчики и миграции. Если новая версия панели ещё не запускалась на этой базе (нет колонки `api_keys.scopes`), команда завершается с ошибкой. Запускайте от пользователя контейнера (`panel`), без `-u root`. Без аргументов бинарник, как и раньше, запускает сервер. Отзыв и удаление ключей — в интерфейсе (**api**).
+
+Колонка `api_keys.scopes TEXT NOT NULL DEFAULT ''` добавляется при старте: схема только расширяется, образ 0.1.75 колонку игнорирует, откат возможен.
+
+`GET /api/v1/config` — снимок настроек только из SQLite панели: без обращений к агентам нод и Remnawave, без записи в БД (кроме `last_used_at` ключа).
+
+```bash
+curl -sS -H "X-API-Key: $HAPANEL_CONFIG_KEY" "https://panel.example/<PANEL_BASE_PATH>/api/v1/config"
+```
+
+Ответ `200`, `Content-Type: application/json`, заголовок `ETag: "<snapshot_hash>"`:
+
+```json
+{
+  "schema": "hapanel.config.v1",
+  "version": "0.1.76",
+  "generated_at": "2026-10-26T12:00:00Z",
+  "snapshot_hash": "sha256:…",
+  "sections": {
+    "hanodes": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "links": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "remna_panels": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "remna_nodes": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "providers": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "provider_accounts": {"status": "error", "items": []}
+  }
+}
+```
+
+- `version` — версия сборки: `--build-arg PANEL_VERSION=0.1.76` в `deploy/panel/Dockerfile`, без аргумента `dev`. Время — RFC3339 UTC с точностью до секунды.
+- Если запрос секции к БД не удался, у неё `"status":"error"`, `"items":[]` и нет `content_hash`, остальные секции отдаются. `links` получает `error` и при сбое `hanodes` или `remna_nodes`: без них не посчитать `active` и `match`.
+- `content_hash` — SHA-256 канонического JSON массива `items`, `snapshot_hash` — канонического JSON объекта `sections`. Канонический JSON: ключи объектов отсортированы на всех уровнях, без пробелов, UTF-8 без экранирования HTML; в Python это `json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. `generated_at` в хеш не входит. `backends_observed_at` обновляется с каждым опросом агента (раз в 5 с), поэтому хеш `hanodes` и `snapshot_hash` меняются, пока ноды онлайн.
+
+Поля элементов:
+
+| Секция | Сортировка | Поля |
+|---|---|---|
+| `hanodes` | `id` | `id`, `name`, `country`, `host` (только хост или IP из адреса управления; `""`, если адрес не разобрать), `sort_order`, `created_at`, `listen_ports`, `entrances` (`[{port, backend}]`), `protect` — действующий профиль, как в панели (`client_hello`, `client_hello_delay_sec`, `rate_limit`, `max_conn_per_ip`, `max_rate_per_ip`, `rate_window_sec`, `ru_only`, `synproxy`), `protect_default` (профиль не сохранялся, действует профиль по умолчанию), `remna_panel_id`, `provider_id`, `provider_account_id` (строка или `null`), `traffic_log`, `has_token`, `backends` (`[{backend, name, address, port}]` из последнего снимка агента, без служебных, по `backend`, `name`), `backends_observed_at` (время снимка или `null`) |
+| `links` | `node_id`, `backend`, `server_name` | `node_id`, `backend`, `server_name`, `remna_panel_id`, `remna_address`, `remna_uuid` (нода каталога той же панели с тем же адресом без учёта регистра и пробелов по краям, как в панели; иначе `null`), `match` (`unique`, `none` или `ambiguous`), `active` (сервер есть в снимке бэкендов ноды; если снимка нет, активны все связи ноды, как в панели; связь удалённой ноды неактивна) |
+| `remna_panels` | `id` | `id`, `name`, `has_api_key`, `created_at` |
+| `remna_nodes` | `panel_id`, `uuid` | `panel_id`, `uuid`, `name`, `address`, `config_profile_uuid`, `inbound_uuids`, `inbound_tags`, `protocol` (переопределённый или вычисленный), `protocol_derived`, `protocol_override`, `roles` (`rn_front`, `rn_back`, `hp_front`, `hp_back`, `cdn_back`), `enabled_in_analytics`, `notes`, `alert_note` |
+| `providers` | `id` | `id`, `name`, `created_at` |
+| `provider_accounts` | `id` | `id`, `provider_id`, `created_at` |
+
+Никогда не выгружаются: токены агентов и полный адрес управления нод (схема, порт, путь); статус, `last_seen`, CPU и трафик нод (они в `/api/v1/hanodes`); `base_url` и API-ключи панелей Remnawave; `login` аккаунтов; `login_url` и `favicon_url` провайдеров; `users_online`, `node_ok`, `last_seen_at`, `updated_at` каталога; задачи, команда, olcRTC, API-ключи и история метрик. Пример ответа на тестовых данных: `panel/server/internal/api/testdata/config_v1_example.json`.
+
 Do not commit real secrets (`.env`, tokens, passwords).

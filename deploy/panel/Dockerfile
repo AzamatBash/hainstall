@@ -15,9 +15,11 @@ COPY panel/server/go.mod panel/server/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY panel/server/ ./
+# Panel version reported by GET /api/v1/config, e.g. --build-arg PANEL_VERSION=0.1.76.
+ARG PANEL_VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/panel ./cmd/panel
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/azabash/hapanel/panel/internal/buildinfo.Version=${PANEL_VERSION}" -o /out/panel ./cmd/panel
 
 FROM golang:1.22-alpine AS olcnode
 WORKDIR /src
