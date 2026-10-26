@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/azabash/hapanel/panel/internal/buildinfo"
+	"github.com/azabash/hapanel/panel/internal/remna"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
 
@@ -249,8 +250,12 @@ func (s *Server) configSection(name string, err error, items func() any) configS
 }
 
 // canonicalJSON encodes v with object keys sorted at every level, no
-// insignificant whitespace and no HTML escaping (UTF-8 as is). Hashes in the
-// config export are SHA-256 of this form.
+// insignificant whitespace and no HTML escaping: strings are UTF-8 as is,
+// except that '"' and '\\' are escaped, control characters below U+0020 are
+// \b \f \n \r \t or \u00xx (lowercase hex), and U+2028 / U+2029 are written as
+// the escapes \u2028 / \u2029 (Go's encoder always does that). Integers are
+// kept as written. Hashes in the config export are SHA-256 of this form; the
+// README gives the byte-identical Python recipe (TestCanonicalJSON_DocumentedForm).
 func canonicalJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -354,12 +359,17 @@ func configHanodeItems(nodes []store.NodeConfig) []configHanode {
 	return out
 }
 
-// remnaAddressKey is the address comparison of remna.FindNodeByAddress
-// (trimmed, case-insensitive), applied to the stored catalog.
-func remnaAddressKey(address string) string {
-	return strings.ToLower(strings.TrimSpace(address))
-}
-
+// configLinkItems builds the links section.
+//
+//   - remna_uuid/match: catalog nodes of the link's panel whose address has the
+//     same remna.AddressKey as the link (the key remna.FindNodeByAddress uses);
+//     one → "unique", none → "none", several → "ambiguous".
+//   - active: activeRemnaLinks over the node's saved snapshot, as the panel
+//     does for online counts: a link is active when (backend, server_name)
+//     equals (backend, name) of a backend in the saved snapshot, management
+//     backends included; when the saved snapshot has no backends at all (no
+//     snapshot or an empty list) every link of that node is active; a link of a
+//     node that no longer exists is never active.
 func configLinkItems(links []store.BackendRemnaLink, nodes []store.NodeConfig, catalog []store.RemnaNodeConfig) []configLink {
 	type linkKey struct {
 		node, backend, server string
@@ -384,7 +394,7 @@ func configLinkItems(links []store.BackendRemnaLink, nodes []store.NodeConfig, c
 	}
 	byPanelAddr := map[string][]string{}
 	for _, c := range catalog {
-		key := remnaAddressKey(c.Address)
+		key := remna.AddressKey(c.Address)
 		if key == "" {
 			continue
 		}
@@ -403,7 +413,7 @@ func configLinkItems(links []store.BackendRemnaLink, nodes []store.NodeConfig, c
 			Match:        "none",
 			Active:       active[linkKey{l.NodeID, l.Backend, l.ServerName}],
 		}
-		if key := remnaAddressKey(l.RemnaAddress); key != "" {
+		if key := remna.AddressKey(l.RemnaAddress); key != "" {
 			switch uuids := byPanelAddr[l.RemnaPanelID+"\x00"+key]; len(uuids) {
 			case 0:
 			case 1:

@@ -54,12 +54,22 @@ func TestListNodeConfigs(t *testing.T) {
 	if _, err := st.SetNodeProtect(noToken.ID, custom); err != nil {
 		t.Fatal(err)
 	}
+	// Provisioning stores the default profile explicitly (api.go, opsagent):
+	// the column is not empty, so protect_default is false although the
+	// profile equals the default.
+	provisioned, err := st.CreateNode("c", "https://203.0.113.12:47893", "token-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetNodeProtect(provisioned.ID, protect.Default()); err != nil {
+		t.Fatal(err)
+	}
 
 	list, err := st.ListNodeConfigs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[0].ID > list[1].ID {
+	if len(list) != 3 || list[0].ID > list[1].ID || list[1].ID > list[2].ID {
 		t.Fatalf("list=%+v", list)
 	}
 	byID := map[string]NodeConfig{}
@@ -79,5 +89,9 @@ func TestListNodeConfigs(t *testing.T) {
 	b := byID[noToken.ID]
 	if b.HasToken || b.ProtectDefault || b.Protect != custom {
 		t.Fatalf("b=%+v", b)
+	}
+	c := byID[provisioned.ID]
+	if c.Protect != protect.Default() || c.ProtectDefault {
+		t.Fatalf("explicit default profile: protect=%+v protect_default=%v (must be false)", c.Protect, c.ProtectDefault)
 	}
 }

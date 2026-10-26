@@ -162,6 +162,20 @@ func TestAPIKeyCLI_Errors(t *testing.T) {
 		t.Fatal("CLI must not create a database")
 	}
 
+	// "file:" URIs and "?" parameters would bypass mode=rw and busy_timeout.
+	for _, p := range []string{"file:" + missing, "file:" + missing + "?mode=rwc", "file:" + path, path + "?_pragma=busy_timeout(1)"} {
+		if code, out, errOut := runCLI("create", "--db", p, "--scope", "config"); code != 1 || out != "" || !strings.Contains(errOut, "не поддерживается") {
+			t.Fatalf("db %q code=%d out=%q stderr=%q", p, code, out, errOut)
+		}
+	}
+	t.Setenv("PANEL_DB_PATH", "file:"+missing)
+	if code, out, errOut := runCLI("list"); code != 1 || out != "" || !strings.Contains(errOut, "не поддерживается") {
+		t.Fatalf("env file: URI code=%d out=%q stderr=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("CLI must not create a database from a file: URI")
+	}
+
 	// A database the new panel has not started on yet (0.1.75 schema).
 	old := filepath.Join(t.TempDir(), "old.db")
 	db, err := sql.Open("sqlite", old)

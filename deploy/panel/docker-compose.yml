@@ -8,6 +8,8 @@ services:
     # build:
     #   context: ../..
     #   dockerfile: deploy/panel/Dockerfile
+    #   args:
+    #     PANEL_VERSION: ${PANEL_VERSION:-dev}  # reported by GET /api/v1/config
     container_name: hapanel-panel
     environment:
       PANEL_PASSWORD: ${PANEL_PASSWORD:-changeme}
