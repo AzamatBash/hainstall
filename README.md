@@ -239,7 +239,7 @@ curl -sS -H "Authorization: Bearer $HAPANEL_API_KEY" "https://panel.example/api/
 curl -sS -H "X-API-Key: $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes/<id>?hours=24"
 ```
 
-Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. No node tokens or management URLs.
+Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `agent_version`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. `net_rx_bytes`, `net_tx_bytes` and other empty optional fields are omitted when zero or unknown; `cpu`, `down_bps`, `up_bps` and `sessions` are sent even when 0. No node tokens or management URLs.
 
 ### Права ключей и выгрузка настроек (`GET /api/v1/config`)
 
