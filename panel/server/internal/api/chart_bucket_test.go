@@ -27,8 +27,8 @@ func TestAggregateOnlineHour(t *testing.T) {
 		t.Fatal("one hour must stay raw")
 	}
 	hour := int64(time.Hour / time.Millisecond)
-	if chartPayloadBucketMs(24, false) != hour || chartPayloadBucketMs(168, false) != hour || chartPayloadBucketMs(744, false) != hour {
-		t.Fatal("24h and longer must be hourly")
+	if chartPayloadBucketMs(6, false) != hour || chartPayloadBucketMs(12, false) != hour || chartPayloadBucketMs(24, false) != hour || chartPayloadBucketMs(168, false) != hour || chartPayloadBucketMs(744, false) != hour {
+		t.Fatal("spans longer than one hour must be hourly")
 	}
 	if chartPayloadBucketMs(744, true) != 0 {
 		t.Fatal("raw=1 keeps every sample")

@@ -14,7 +14,7 @@ import OnlineUsersChart, { type MetricPoint, type OnlinePoint } from '../compone
 import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
 import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
 
-type HoursPreset = 1 | 24 | 168 | 744
+type HoursPreset = 1 | 6 | 12 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
 type AnalyticsTab = 'week' | 'nodes'
 type StatsScope = 'panel' | 'nodes'
@@ -44,6 +44,8 @@ function nodeKey(n: { panel_id: string; remna_uuid: string }) {
 
 const PRESETS: { hours: HoursPreset; label: string }[] = [
   { hours: 1, label: '1 час' },
+  { hours: 6, label: '6 часов' },
+  { hours: 12, label: '12 часов' },
   { hours: 24, label: '24 часа' },
   { hours: 168, label: '7 дней' },
   { hours: 744, label: '30 дней' },
