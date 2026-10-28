@@ -17,7 +17,9 @@ PROD_HUB_DIGEST="sha256:d9ab58773cfd1e9faf4b440094443b11d49727e89ac78b34cb35ff20
 
 if [[ "${REBUILD_PANEL:-}" == "1" ]]; then
   echo "==> REBUILD_PANEL=1 — building from sources (will NOT match prod digest)"
+  # PANEL_VERSION is also stamped into the binary (GET /api/v1/config "version").
   docker build \
+    --build-arg PANEL_VERSION="${PANEL_VERSION}" \
     -t "${PANEL_IMAGE}:${PANEL_VERSION}" \
     -t "${PANEL_IMAGE}:latest" \
     -f deploy/panel/Dockerfile \

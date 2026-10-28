@@ -39,9 +39,9 @@ type Node struct {
 	System            *NodeSystem `json:"system"`
 
 	// Config profile / inbound attachment (field names vary by Remnawave version).
-	ConfigProfile            *NodeConfigProfile `json:"configProfile"`
-	ActiveConfigProfileUUID  string             `json:"activeConfigProfileUuid"`
-	ConfigProfileInbounds    []string           `json:"configProfileInbounds"`
+	ConfigProfile           *NodeConfigProfile `json:"configProfile"`
+	ActiveConfigProfileUUID string             `json:"activeConfigProfileUuid"`
+	ConfigProfileInbounds   []string           `json:"configProfileInbounds"`
 }
 
 // NodeSystem is live host metrics embedded in newer Remnawave node payloads.
@@ -56,9 +56,9 @@ type NodeSystemInfo struct {
 }
 
 type NodeSystemStats struct {
-	MemoryUsed float64          `json:"memoryUsed"`
-	LoadAvg    []float64        `json:"loadAvg"`
-	Interface  *NetworkIface    `json:"interface"`
+	MemoryUsed float64       `json:"memoryUsed"`
+	LoadAvg    []float64     `json:"loadAvg"`
+	Interface  *NetworkIface `json:"interface"`
 }
 
 type NetworkIface struct {
@@ -76,17 +76,17 @@ type UsageRealtime struct {
 
 // LiveStats combines Remnawave node + system metrics for the UI strip.
 type LiveStats struct {
-	Found           bool
-	Online          bool
-	UsersOnline     *int
-	DownBps         *float64 // RX (↓) bytes/s
-	UpBps           *float64 // TX (↑) bytes/s
-	RAMPercent      *float64
-	LoadAvg         []float64
-	CPUCount        *int
-	TrafficUsed     *float64
-	TrafficLimit    *float64
-	Error           string
+	Found        bool
+	Online       bool
+	UsersOnline  *int
+	DownBps      *float64 // RX (↓) bytes/s
+	UpBps        *float64 // TX (↑) bytes/s
+	RAMPercent   *float64
+	LoadAvg      []float64
+	CPUCount     *int
+	TrafficUsed  *float64
+	TrafficLimit *float64
+	Error        string
 }
 
 type nodesResponse struct {
@@ -185,14 +185,21 @@ func (c *Client) ListRealtimeUsage(ctx context.Context, baseURL, apiKey string) 
 	return []UsageRealtime{}, nil
 }
 
+// AddressKey is the comparison key of a Remnawave node address: trimmed and
+// case-insensitive. FindNodeByAddress and the config export (/api/v1/config)
+// both match addresses by it; "" never matches.
+func AddressKey(address string) string {
+	return strings.ToLower(strings.TrimSpace(address))
+}
+
 // FindNodeByAddress returns the first node whose address matches (case-insensitive).
 func FindNodeByAddress(nodes []Node, address string) *Node {
-	want := strings.ToLower(strings.TrimSpace(address))
+	want := AddressKey(address)
 	if want == "" {
 		return nil
 	}
 	for i := range nodes {
-		if strings.ToLower(strings.TrimSpace(nodes[i].Address)) == want {
+		if AddressKey(nodes[i].Address) == want {
 			n := nodes[i]
 			return &n
 		}
