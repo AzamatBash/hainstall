@@ -48,6 +48,24 @@ func TestRemnaOnlineSamples(t *testing.T) {
 	if latest == nil || latest.Online != 55 {
 		t.Fatalf("latest=%v", latest)
 	}
+
+	weekAgo := now.Add(-7 * 24 * time.Hour)
+	if err := st.AppendRemnaOnlineSample("p1", weekAgo, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendRemnaOnlineSample("p1", weekAgo.Add(-30*time.Minute), 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendRemnaOnlineSample("p1", weekAgo.Add(-2*time.Hour), 9); err != nil {
+		t.Fatal(err)
+	}
+	window, err := st.ListRemnaOnlineSamplesBucketed("p1", weekAgo.Add(-time.Hour), weekAgo, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(window) != 2 || window[0].Online != 8 || window[1].Online != 7 {
+		t.Fatalf("week window=%+v", window)
+	}
 	missing, err := st.LatestRemnaOnlineSample("nope")
 	if err != nil || missing != nil {
 		t.Fatalf("missing=%v err=%v", missing, err)

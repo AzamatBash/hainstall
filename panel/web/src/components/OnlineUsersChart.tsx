@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { bucketBySpan, seriesPath } from './chartCurve'
+import { WEEK_MS, formatWeekWhen, nearestByTime, signedDelta, weekSlackMs } from './weekOverlay'
 
 export type MetricPoint = { t: number; value: number }
 
@@ -28,6 +29,8 @@ type Props = {
   /** Current value for the compact legend (defaults to last point). */
   current?: number | null
   showLegend?: boolean
+  /** Same span one week earlier, still on its original timestamps. */
+  prior?: MetricPoint[]
 }
 
 type PointInfo = {
@@ -37,9 +40,13 @@ type PointInfo = {
   time: string
   value: number
   valueText: string
+  priorText?: string
+  priorWhen?: string
+  deltaText?: string
 }
 
 const TAP_SLOP = 14
+const NO_PRIOR: MetricPoint[] = []
 
 function formatTick(ts: number, hours: number) {
   const d = new Date(ts)
@@ -89,6 +96,17 @@ function Plaque({
       <div className="online-chart-plaque-online">
         {valueLabel}: <span className="mono">{info.valueText}</span>
       </div>
+      {info.priorText ? (
+        <div className="online-chart-plaque-online prior">
+          Неделю назад: <span className="mono">{info.priorText}</span>
+          {info.priorWhen ? <span className="online-chart-plaque-prior-when"> {info.priorWhen}</span> : null}
+        </div>
+      ) : null}
+      {info.deltaText ? (
+        <div className="online-chart-plaque-online prior">
+          Разница: <span className="mono">{info.deltaText}</span>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -111,6 +129,7 @@ export default function OnlineUsersChart({
   tapHint = 'Нажмите на график, чтобы увидеть дату и значение',
   current = null,
   showLegend = false,
+  prior = NO_PRIOR,
 }: Props) {
   const width = 720
   const height = 260
@@ -139,11 +158,25 @@ export default function OnlineUsersChart({
 
   useEffect(() => {
     setActive(null)
-  }, [points, hours])
+  }, [points, hours, prior])
 
-  const { path, area, maxY, xLabels, xAt, yAt, tAt } = useMemo(() => {
+  const priorDrawn = useMemo(
+    () =>
+      bucketBySpan(
+        prior.map((p) => ({ ...p, t: p.t + WEEK_MS })),
+        (group, center) => {
+          let sum = 0
+          for (const p of group) sum += p.value
+          return { t: center, value: sum / group.length }
+        },
+      ),
+    [prior],
+  )
+
+  const { path, priorPath, area, maxY, xLabels, xAt, yAt, tAt } = useMemo(() => {
     const empty = {
       path: '',
+      priorPath: '',
       area: '',
       maxY: 1,
       xLabels: [] as { x: number; label: string }[],
@@ -155,7 +188,7 @@ export default function OnlineUsersChart({
     const t0 = points[0]?.t ?? drawPoints[0].t
     const t1 = points[points.length - 1]?.t ?? drawPoints[drawPoints.length - 1].t
     const span = Math.max(t1 - t0, 1)
-    const maxVal = Math.max(1, ...drawPoints.map((p) => p.value))
+    const maxVal = Math.max(1, ...drawPoints.map((p) => p.value), ...priorDrawn.map((p) => p.value))
     const niceMax = Math.max(1, maxVal * 1.1)
     const plotW = width - padL - padR
     const plotH = height - padT - padB
@@ -163,7 +196,9 @@ export default function OnlineUsersChart({
     const yAtFn = (v: number) => padT + plotH - (Math.min(v, niceMax) / niceMax) * plotH
     const tAtFn = (x: number) => t0 + ((x - padL) / plotW) * span
     const xy = drawPoints.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
+    const priorXY = priorDrawn.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
     const d = seriesPath(xy)
+    const priorD = priorXY.length ? seriesPath(priorXY) : ''
     const xClose0 = xy[0].x.toFixed(1)
     const xClose1 = xy[xy.length - 1].x.toFixed(1)
     const areaD = `${d} L${xClose1},${(padT + plotH).toFixed(1)} L${xClose0},${(padT + plotH).toFixed(1)} Z`
@@ -173,8 +208,17 @@ export default function OnlineUsersChart({
       const t = t0 + (span * i) / Math.max(n - 1, 1)
       labels.push({ x: xAtFn(t), label: formatTick(t, hours) })
     }
-    return { path: d, area: areaD, maxY: niceMax, xLabels: labels, xAt: xAtFn, yAt: yAtFn, tAt: tAtFn }
-  }, [drawPoints, points, hours, padL])
+    return {
+      path: d,
+      priorPath: priorD,
+      area: areaD,
+      maxY: niceMax,
+      xLabels: labels,
+      xAt: xAtFn,
+      yAt: yAtFn,
+      tAt: tAtFn,
+    }
+  }, [drawPoints, priorDrawn, points, hours, padL])
 
   function nearest(t: number): MetricPoint | null {
     if (!points.length) return null
@@ -193,7 +237,15 @@ export default function OnlineUsersChart({
   function infoAtX(svgX: number): PointInfo | null {
     const p = nearest(tAt(svgX))
     if (!p) return null
-    return { x: xAt(p.t), y: yAt(p.value), ...formatHover(p.t, p.value, formatValue) }
+    const prev = nearestByTime(prior, p.t - WEEK_MS, weekSlackMs(hours))
+    return {
+      x: xAt(p.t),
+      y: yAt(p.value),
+      ...formatHover(p.t, p.value, formatValue),
+      priorText: prev ? formatValue(prev.value) : undefined,
+      priorWhen: prev ? formatWeekWhen(prev.t) : undefined,
+      deltaText: prev ? signedDelta(p.value, prev.value, formatValue) : undefined,
+    }
   }
 
   function svgXFromEvent(e: ReactPointerEvent<SVGSVGElement>) {
@@ -302,6 +354,12 @@ export default function OnlineUsersChart({
               <span className="traffic-legend-val">{formatValue(legendValue)}</span>
             ) : null}
           </span>
+          {prior.length ? (
+            <span className="traffic-legend-item prior">
+              <span className="traffic-legend-swatch" aria-hidden />
+              Прошлая неделя
+            </span>
+          ) : null}
           <span className="traffic-chart-window muted">{windowLabel}</span>
         </div>
       ) : null}
@@ -349,6 +407,7 @@ export default function OnlineUsersChart({
             />
           ) : null}
           {area ? <path d={area} className="online-chart-area" /> : null}
+          {priorPath ? <path d={priorPath} className="online-chart-line prior" /> : null}
           {path ? <path d={path} className="online-chart-line" /> : null}
           {!points.length ? (
             <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
@@ -398,6 +457,19 @@ export default function OnlineUsersChart({
             <div className="online-chart-plaque-online">
               {valueLabel}: <span className="mono">{active.valueText}</span>
             </div>
+            {active.priorText ? (
+              <div className="online-chart-plaque-online prior">
+                Неделю назад: <span className="mono">{active.priorText}</span>
+                {active.priorWhen ? (
+                  <span className="online-chart-plaque-prior-when"> {active.priorWhen}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {active.deltaText ? (
+              <div className="online-chart-plaque-online prior">
+                Разница: <span className="mono">{active.deltaText}</span>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

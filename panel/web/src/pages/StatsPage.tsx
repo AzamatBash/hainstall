@@ -13,6 +13,7 @@ import {
 import OnlineUsersChart, { type MetricPoint, type OnlinePoint } from '../components/OnlineUsersChart'
 import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
 import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
+import { WEEK_MS } from '../components/weekOverlay'
 
 type HoursPreset = 1 | 6 | 12 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
@@ -63,6 +64,7 @@ const PROTO_OPTS: { value: string; label: string }[] = [
 ]
 
 const HISTORY_HOURS = 744
+const WEEK_AGO_HOURS = 168
 const SAME_TIME_TOLERANCE_MIN = 10
 
 type CompareSource = 'online' | 'traffic'
@@ -258,12 +260,14 @@ export default function StatsPage() {
   const [onlineHours, setOnlineHours] = useState<HoursPreset>(24)
   const [trafficHours, setTrafficHours] = useState<HoursPreset>(24)
   const [points, setPoints] = useState<OnlinePoint[]>([])
+  const [priorPoints, setPriorPoints] = useState<OnlinePoint[]>([])
   const [current, setCurrent] = useState<number | null>(null)
   const [onlineAt, setOnlineAt] = useState('')
   const [onlineError, setOnlineError] = useState('')
   const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null)
   const [trafficZoom, setTrafficZoom] = useState<{ from: number; to: number } | null>(null)
   const [trafficPoints, setTrafficPoints] = useState<TrafficPoint[]>([])
+  const [priorTrafficPoints, setPriorTrafficPoints] = useState<TrafficPoint[]>([])
   const [trafficDown, setTrafficDown] = useState<number | null>(null)
   const [trafficUp, setTrafficUp] = useState<number | null>(null)
   const [trafficAt, setTrafficAt] = useState('')
@@ -334,6 +338,7 @@ export default function StatsPage() {
     async (panelId: string, windowHours: number, remnaUUID?: string) => {
       if (!panelId || (remnaUUID !== undefined && !remnaUUID)) {
         setPoints([])
+        setPriorPoints([])
         setCurrent(null)
         setOnlineAt('')
         setOnlineError('')
@@ -345,13 +350,19 @@ export default function StatsPage() {
         const path = remnaUUID
           ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/online?hours=${windowHours}`
           : `/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`
-        const onlineRes = await api<{
-          points: OnlinePoint[]
-          current?: number
-          online_at?: string
-          online_error?: string
-        }>(path)
+        const [onlineRes, priorRes] = await Promise.all([
+          api<{
+            points: OnlinePoint[]
+            current?: number
+            online_at?: string
+            online_error?: string
+          }>(path),
+          api<{ points: OnlinePoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
+            points: [] as OnlinePoint[],
+          })),
+        ])
         setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
+        setPriorPoints(Array.isArray(priorRes.points) ? priorRes.points : [])
         setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
         setOnlineAt(onlineRes.online_at || '')
         setOnlineError(onlineRes.online_error || '')
@@ -382,6 +393,7 @@ export default function StatsPage() {
     async (panelId: string, windowHours: number, remnaUUID?: string) => {
       if (!panelId || (remnaUUID !== undefined && !remnaUUID)) {
         setTrafficPoints([])
+        setPriorTrafficPoints([])
         setTrafficDown(null)
         setTrafficUp(null)
         setTrafficAt('')
@@ -394,14 +406,20 @@ export default function StatsPage() {
         const path = remnaUUID
           ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/traffic?hours=${windowHours}`
           : `/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`
-        const trafficRes = await api<{
-          points: TrafficPoint[]
-          current_down_bps?: number
-          current_up_bps?: number
-          traffic_at?: string
-          traffic_error?: string
-        }>(path)
+        const [trafficRes, priorRes] = await Promise.all([
+          api<{
+            points: TrafficPoint[]
+            current_down_bps?: number
+            current_up_bps?: number
+            traffic_at?: string
+            traffic_error?: string
+          }>(path),
+          api<{ points: TrafficPoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
+            points: [] as TrafficPoint[],
+          })),
+        ])
         setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
+        setPriorTrafficPoints(Array.isArray(priorRes.points) ? priorRes.points : [])
         setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
         setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
         setTrafficAt(trafficRes.traffic_at || '')
@@ -578,6 +596,13 @@ export default function StatsPage() {
     return src.map((p) => ({ t: p.t, value: p.online }))
   }, [points, zoom])
 
+  const displayPriorPoints = useMemo((): MetricPoint[] => {
+    const src = !zoom
+      ? priorPoints
+      : priorPoints.filter((p) => p.t + WEEK_MS >= zoom.from && p.t + WEEK_MS <= zoom.to)
+    return src.map((p) => ({ t: p.t, value: p.online }))
+  }, [priorPoints, zoom])
+
   const displayTrafficPoints = useMemo((): TrafficPoint[] => {
     const src = !trafficZoom
       ? trafficPoints
@@ -588,6 +613,17 @@ export default function StatsPage() {
       up_bps: Number(p.up_bps) || 0,
     }))
   }, [trafficPoints, trafficZoom])
+
+  const displayPriorTraffic = useMemo((): TrafficPoint[] => {
+    const src = !trafficZoom
+      ? priorTrafficPoints
+      : priorTrafficPoints.filter((p) => p.t + WEEK_MS >= trafficZoom.from && p.t + WEEK_MS <= trafficZoom.to)
+    return src.map((p) => ({
+      t: p.t,
+      down_bps: Number(p.down_bps) || 0,
+      up_bps: Number(p.up_bps) || 0,
+    }))
+  }, [priorTrafficPoints, trafficZoom])
 
   const segmentSeries = useMemo(() => {
     const now = new Map<string, number>()
@@ -1007,8 +1043,8 @@ export default function StatsPage() {
                       title="Онлайн пользователей"
                       help={[
                         statsScope === 'nodes'
-                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней.'
-                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней. Пунктир — тот же день недели неделю назад.'
+                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Пунктир — тот же день недели неделю назад.',
                         chartSubject,
                         onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
                       ]
@@ -1053,6 +1089,7 @@ export default function StatsPage() {
                         tapHint="Нажмите на график, чтобы увидеть дату и онлайн"
                         current={current}
                         showLegend
+                        prior={displayPriorPoints}
                       />
                     )}
                     {compareTable('online')}
@@ -1065,8 +1102,8 @@ export default function StatsPage() {
                         title={statsScope === 'nodes' ? 'Трафик ноды' : 'Общий трафик'}
                         help={[
                           statsScope === 'nodes'
-                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней.'
-                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня.',
+                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней. Пунктир — тот же день недели неделю назад.'
+                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Пунктир — тот же день недели неделю назад.',
                           chartSubject,
                           trafficAt ? `Опрос: ${formatAt(trafficAt)}.` : '',
                         ]
@@ -1109,6 +1146,7 @@ export default function StatsPage() {
                           onContextPoint={(at) => openPointMenu('traffic', at)}
                           currentDownBps={trafficDown}
                           currentUpBps={trafficUp}
+                          prior={displayPriorTraffic}
                         />
                       )}
                       {compareTable('traffic')}

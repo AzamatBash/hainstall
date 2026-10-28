@@ -767,27 +767,56 @@ func aggregateTraffic(points []store.RemnaTrafficSample, bucketMs int64) []store
 }
 
 func remnaOnlineWindowHours(r *http.Request) int {
-	raw := strings.TrimSpace(r.URL.Query().Get("hours"))
-	if raw == "" {
-		return remnaOnlineDefaultHours
-	}
-	n := 0
-	for _, c := range raw {
-		if c < '0' || c > '9' {
-			return remnaOnlineDefaultHours
-		}
-		n = n*10 + int(c-'0')
-		if n > remnaOnlineMaxHours {
-			return remnaOnlineMaxHours
-		}
-	}
-	if n <= 0 {
+	n, ok := parseHourQuery(r.URL.Query().Get("hours"))
+	if !ok || n <= 0 {
 		return remnaOnlineDefaultHours
 	}
 	if n > remnaOnlineMaxHours {
 		return remnaOnlineMaxHours
 	}
 	return n
+}
+
+// remnaAgoHours is how far before now the requested window ends.
+// Zero means the window ends now. Used to load the same span a week earlier.
+func remnaAgoHours(r *http.Request) int {
+	n, ok := parseHourQuery(r.URL.Query().Get("ago"))
+	if !ok || n <= 0 {
+		return 0
+	}
+	if n > remnaOnlineMaxHours {
+		return remnaOnlineMaxHours
+	}
+	return n
+}
+
+func parseHourQuery(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	n := 0
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+		if n > remnaOnlineMaxHours {
+			return remnaOnlineMaxHours, true
+		}
+	}
+	return n, true
+}
+
+// remnaChartBounds is [since, until] for a chart window of hours ending ago hours before now.
+// A zero until means the query stays open through the newest sample.
+func remnaChartBounds(now time.Time, hours, ago int) (since, until time.Time) {
+	end := now.UTC()
+	if ago > 0 {
+		end = end.Add(-time.Duration(ago) * time.Hour)
+		until = end
+	}
+	return end.Add(-time.Duration(hours) * time.Hour), until
 }
 
 func (s *Server) handleRemnaPanelOnline(w http.ResponseWriter, r *http.Request) {
@@ -803,8 +832,8 @@ func (s *Server) handleRemnaPanelOnline(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	hours := remnaOnlineWindowHours(r)
-	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaOnlineSamplesBucketed(id, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
+	since, until := remnaChartBounds(time.Now(), hours, remnaAgoHours(r))
+	points, err := s.store.ListRemnaOnlineSamplesBucketed(id, since, until, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna online", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -854,8 +883,8 @@ func (s *Server) handleRemnaPanelTraffic(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	hours := remnaOnlineWindowHours(r)
-	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaTrafficSamplesBucketed(id, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
+	since, until := remnaChartBounds(time.Now(), hours, remnaAgoHours(r))
+	points, err := s.store.ListRemnaTrafficSamplesBucketed(id, since, until, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna traffic", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -960,8 +989,8 @@ func (s *Server) handleRemnaNodeOnline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hours := remnaOnlineWindowHours(r)
-	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaNodeOnlineSamplesBucketed(panelID, uuid, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
+	since, until := remnaChartBounds(time.Now(), hours, remnaAgoHours(r))
+	points, err := s.store.ListRemnaNodeOnlineSamplesBucketed(panelID, uuid, since, until, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna node online", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
@@ -998,8 +1027,8 @@ func (s *Server) handleRemnaNodeTraffic(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	hours := remnaOnlineWindowHours(r)
-	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-	points, err := s.store.ListRemnaNodeTrafficSamplesBucketed(panelID, uuid, since, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
+	since, until := remnaChartBounds(time.Now(), hours, remnaAgoHours(r))
+	points, err := s.store.ListRemnaNodeTrafficSamplesBucketed(panelID, uuid, since, until, chartPayloadBucketMs(hours, r.URL.Query().Get("raw") == "1"))
 	if err != nil {
 		s.logger.Error("list remna node traffic", "err", err)
 		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")

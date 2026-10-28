@@ -34,3 +34,24 @@ func TestAggregateOnlineHour(t *testing.T) {
 		t.Fatal("raw=1 keeps every sample")
 	}
 }
+
+func TestRemnaChartBoundsWeekAgo(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	since, until := remnaChartBounds(now, 24, 168)
+	if !until.Equal(now.Add(-168 * time.Hour)) {
+		t.Fatalf("until=%s", until)
+	}
+	if !since.Equal(now.Add(-192 * time.Hour)) {
+		t.Fatalf("since=%s", since)
+	}
+	since, until = remnaChartBounds(now, 1, 0)
+	if !until.IsZero() {
+		t.Fatal("a live window must stay open")
+	}
+	if !since.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("since=%s", since)
+	}
+	if chartPayloadBucketMs(1, false) != 0 {
+		t.Fatal("the same hour last week stays raw")
+	}
+}

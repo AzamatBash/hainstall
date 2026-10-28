@@ -3917,6 +3917,51 @@ button.task-image-open {
   stroke-linecap: round;
 }
 
+.online-chart-line.prior {
+  stroke: color-mix(in srgb, var(--accent) 42%, var(--muted));
+  stroke-width: 1.35;
+  stroke-dasharray: 5 4;
+}
+
+.traffic-line.prior {
+  stroke-width: 1.35;
+  stroke-dasharray: 5 4;
+}
+
+.traffic-line.prior.tx {
+  stroke: color-mix(in srgb, var(--accent) 40%, var(--muted));
+}
+
+.traffic-line.prior.rx {
+  stroke: color-mix(in srgb, var(--ok) 42%, var(--muted));
+}
+
+.traffic-legend-item.prior .traffic-legend-swatch {
+  width: 0.95rem;
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-top: 2px dashed color-mix(in srgb, var(--muted) 25%, var(--text));
+}
+
+.online-chart-plaque-online.prior {
+  color: var(--muted);
+}
+
+.online-chart-plaque-online.prior .mono {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.online-chart-plaque-online.prior .mono.rx {
+  color: var(--ok);
+}
+
+.online-chart-plaque-prior-when {
+  font-weight: 400;
+  color: var(--muted);
+}
+
 .online-chart-cross {
   stroke: color-mix(in srgb, var(--muted) 55%, transparent);
   stroke-width: 1;
