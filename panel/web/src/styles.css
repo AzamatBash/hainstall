@@ -3936,6 +3936,16 @@ button.task-image-open {
   stroke: color-mix(in srgb, var(--ok) 42%, var(--muted));
 }
 
+.stats-week-toggle {
+  margin-left: 0.35rem;
+}
+
+.stats-week-toggle.is-on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .traffic-legend-item.prior .traffic-legend-swatch {
   width: 0.95rem;
   height: 0;

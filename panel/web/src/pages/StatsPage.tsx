@@ -65,6 +65,24 @@ const PROTO_OPTS: { value: string; label: string }[] = [
 
 const HISTORY_HOURS = 744
 const WEEK_AGO_HOURS = 168
+const WEEK_ONLINE_KEY = 'hapanel_week_online'
+const WEEK_TRAFFIC_KEY = 'hapanel_week_traffic'
+
+function readWeekPref(key: string) {
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeWeekPref(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? '1' : '0')
+  } catch {
+    /* private mode */
+  }
+}
 const SAME_TIME_TOLERANCE_MIN = 10
 
 type CompareSource = 'online' | 'traffic'
@@ -259,6 +277,8 @@ export default function StatsPage() {
   const [nodeQuery, setNodeQuery] = useState('')
   const [onlineHours, setOnlineHours] = useState<HoursPreset>(24)
   const [trafficHours, setTrafficHours] = useState<HoursPreset>(24)
+  const [onlineWeek, setOnlineWeek] = useState(() => readWeekPref(WEEK_ONLINE_KEY))
+  const [trafficWeek, setTrafficWeek] = useState(() => readWeekPref(WEEK_TRAFFIC_KEY))
   const [points, setPoints] = useState<OnlinePoint[]>([])
   const [priorPoints, setPriorPoints] = useState<OnlinePoint[]>([])
   const [current, setCurrent] = useState<number | null>(null)
@@ -307,6 +327,10 @@ export default function StatsPage() {
   onlineHoursRef.current = onlineHours
   const trafficHoursRef = useRef(trafficHours)
   trafficHoursRef.current = trafficHours
+  const onlineWeekRef = useRef(onlineWeek)
+  onlineWeekRef.current = onlineWeek
+  const trafficWeekRef = useRef(trafficWeek)
+  trafficWeekRef.current = trafficWeek
 
   const [searchParams] = useSearchParams()
   useEffect(() => {
@@ -350,6 +374,7 @@ export default function StatsPage() {
         const path = remnaUUID
           ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/online?hours=${windowHours}`
           : `/api/remna-panels/${encodeURIComponent(panelId)}/online?hours=${windowHours}`
+        const wantWeek = onlineWeekRef.current
         const [onlineRes, priorRes] = await Promise.all([
           api<{
             points: OnlinePoint[]
@@ -357,12 +382,14 @@ export default function StatsPage() {
             online_at?: string
             online_error?: string
           }>(path),
-          api<{ points: OnlinePoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
-            points: [] as OnlinePoint[],
-          })),
+          wantWeek
+            ? api<{ points: OnlinePoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
+                points: [] as OnlinePoint[],
+              }))
+            : Promise.resolve({ points: [] as OnlinePoint[] }),
         ])
         setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
-        setPriorPoints(Array.isArray(priorRes.points) ? priorRes.points : [])
+        setPriorPoints(onlineWeekRef.current && Array.isArray(priorRes.points) ? priorRes.points : [])
         setCurrent(typeof onlineRes.current === 'number' ? onlineRes.current : null)
         setOnlineAt(onlineRes.online_at || '')
         setOnlineError(onlineRes.online_error || '')
@@ -406,6 +433,7 @@ export default function StatsPage() {
         const path = remnaUUID
           ? `/api/remna-panels/${encodeURIComponent(panelId)}/nodes/${encodeURIComponent(remnaUUID)}/traffic?hours=${windowHours}`
           : `/api/remna-panels/${encodeURIComponent(panelId)}/traffic?hours=${windowHours}`
+        const wantWeek = trafficWeekRef.current
         const [trafficRes, priorRes] = await Promise.all([
           api<{
             points: TrafficPoint[]
@@ -414,12 +442,16 @@ export default function StatsPage() {
             traffic_at?: string
             traffic_error?: string
           }>(path),
-          api<{ points: TrafficPoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
-            points: [] as TrafficPoint[],
-          })),
+          wantWeek
+            ? api<{ points: TrafficPoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => ({
+                points: [] as TrafficPoint[],
+              }))
+            : Promise.resolve({ points: [] as TrafficPoint[] }),
         ])
         setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
-        setPriorTrafficPoints(Array.isArray(priorRes.points) ? priorRes.points : [])
+        setPriorTrafficPoints(
+          trafficWeekRef.current && Array.isArray(priorRes.points) ? priorRes.points : [],
+        )
         setTrafficDown(typeof trafficRes.current_down_bps === 'number' ? trafficRes.current_down_bps : null)
         setTrafficUp(typeof trafficRes.current_up_bps === 'number' ? trafficRes.current_up_bps : null)
         setTrafficAt(trafficRes.traffic_at || '')
@@ -529,6 +561,22 @@ export default function StatsPage() {
   }, [mode, statsScope, activeId, selectedNodeKey, onlineHours, loadOnlineSeries])
 
   useEffect(() => {
+    if (!onlineWeek) {
+      setPriorPoints([])
+      return
+    }
+    if (statsScopeRef.current === 'panel' && activeRef.current) {
+      void loadOnlineSeries(activeRef.current, onlineHoursRef.current)
+      return
+    }
+    const key = selectedNodeKeyRef.current
+    const sep = key.indexOf(':')
+    const panelId = sep >= 0 ? key.slice(0, sep) : ''
+    const remnaUUID = sep >= 0 ? key.slice(sep + 1) : ''
+    if (panelId && remnaUUID) void loadOnlineSeries(panelId, onlineHoursRef.current, remnaUUID)
+  }, [onlineWeek, loadOnlineSeries])
+
+  useEffect(() => {
     setTrafficZoom(null)
     if (mode !== 'stats') return
     if (statsScope === 'panel' && activeId) {
@@ -542,6 +590,22 @@ export default function StatsPage() {
       if (panelId && remnaUUID) void loadTrafficSeries(panelId, trafficHours, remnaUUID)
     }
   }, [mode, statsScope, activeId, selectedNodeKey, trafficHours, loadTrafficSeries])
+
+  useEffect(() => {
+    if (!trafficWeek) {
+      setPriorTrafficPoints([])
+      return
+    }
+    if (statsScopeRef.current === 'panel' && activeRef.current) {
+      void loadTrafficSeries(activeRef.current, trafficHoursRef.current)
+      return
+    }
+    const key = selectedNodeKeyRef.current
+    const sep = key.indexOf(':')
+    const panelId = sep >= 0 ? key.slice(0, sep) : ''
+    const remnaUUID = sep >= 0 ? key.slice(sep + 1) : ''
+    if (panelId && remnaUUID) void loadTrafficSeries(panelId, trafficHoursRef.current, remnaUUID)
+  }, [trafficWeek, loadTrafficSeries])
 
   useEffect(() => {
     if (mode === 'analytics') void loadAnalytics()
@@ -1043,8 +1107,8 @@ export default function StatsPage() {
                       title="Онлайн пользователей"
                       help={[
                         statsScope === 'nodes'
-                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней. Пунктир — тот же день недели неделю назад.'
-                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Пунктир — тот же день недели неделю назад.',
+                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней. Кнопка «Прошлая неделя» рисует пунктир за тот же день недели.'
+                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Кнопка «Прошлая неделя» рисует пунктир за тот же день недели.',
                         chartSubject,
                         onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
                       ]
@@ -1065,6 +1129,20 @@ export default function StatsPage() {
                           {p.label}
                         </button>
                       ))}
+                      <button
+                        type="button"
+                        className={`btn btn-sm stats-week-toggle${onlineWeek ? ' is-on' : ''}`}
+                        aria-pressed={onlineWeek}
+                        onClick={() =>
+                          setOnlineWeek((on) => {
+                            const next = !on
+                            writeWeekPref(WEEK_ONLINE_KEY, next)
+                            return next
+                          })
+                        }
+                      >
+                        Прошлая неделя
+                      </button>
                       {zoom && (
                         <button
                           className="btn btn-sm btn-ghost"
@@ -1102,8 +1180,8 @@ export default function StatsPage() {
                         title={statsScope === 'nodes' ? 'Трафик ноды' : 'Общий трафик'}
                         help={[
                           statsScope === 'nodes'
-                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней. Пунктир — тот же день недели неделю назад.'
-                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Пунктир — тот же день недели неделю назад.',
+                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней. Кнопка «Прошлая неделя» рисует пунктир за тот же день недели.'
+                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Кнопка «Прошлая неделя» рисует пунктир за тот же день недели.',
                           chartSubject,
                           trafficAt ? `Опрос: ${formatAt(trafficAt)}.` : '',
                         ]
@@ -1124,6 +1202,20 @@ export default function StatsPage() {
                             {p.label}
                           </button>
                         ))}
+                        <button
+                          type="button"
+                          className={`btn btn-sm stats-week-toggle${trafficWeek ? ' is-on' : ''}`}
+                          aria-pressed={trafficWeek}
+                          onClick={() =>
+                            setTrafficWeek((on) => {
+                              const next = !on
+                              writeWeekPref(WEEK_TRAFFIC_KEY, next)
+                              return next
+                            })
+                          }
+                        >
+                          Прошлая неделя
+                        </button>
                         {trafficZoom && (
                           <button
                             className="btn btn-sm btn-ghost"
