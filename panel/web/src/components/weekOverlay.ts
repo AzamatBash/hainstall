@@ -1,8 +1,8 @@
-/** Earlier-week samples, shifted onto the same weekday and clock time. */
+/** Earlier samples, shifted onto the same clock time. */
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000
-/** Two weeks earlier — same weekday two weeks ago. */
-export const TWO_WEEKS_MS = 2 * WEEK_MS
+/** One day earlier — same clock time yesterday. */
+export const DAY_MS = 24 * 60 * 60 * 1000
 
 export function nearestByTime<T extends { t: number }>(points: T[], t: number, slackMs: number): T | null {
   if (!points.length) return null

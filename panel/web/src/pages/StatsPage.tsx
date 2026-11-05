@@ -13,7 +13,7 @@ import {
 import OnlineUsersChart, { type MetricPoint, type OnlinePoint } from '../components/OnlineUsersChart'
 import SegmentWeekChart, { seriesFromBuckets } from '../components/SegmentWeekChart'
 import TrafficMirrorChart, { type TrafficPoint } from '../components/TrafficMirrorChart'
-import { TWO_WEEKS_MS, WEEK_MS } from '../components/weekOverlay'
+import { DAY_MS, WEEK_MS } from '../components/weekOverlay'
 
 type HoursPreset = 1 | 6 | 12 | 24 | 168 | 744
 type Mode = 'stats' | 'analytics'
@@ -65,11 +65,11 @@ const PROTO_OPTS: { value: string; label: string }[] = [
 
 const HISTORY_HOURS = 744
 const WEEK_AGO_HOURS = 168
-const TWO_WEEKS_AGO_HOURS = 336
+const DAY_AGO_HOURS = 24
 const WEEK_ONLINE_KEY = 'hapanel_week_online'
 const WEEK_TRAFFIC_KEY = 'hapanel_week_traffic'
-const WEEK2_ONLINE_KEY = 'hapanel_week2_online'
-const WEEK2_TRAFFIC_KEY = 'hapanel_week2_traffic'
+const DAY_ONLINE_KEY = 'hapanel_day_online'
+const DAY_TRAFFIC_KEY = 'hapanel_day_traffic'
 
 function readWeekPref(key: string) {
   try {
@@ -282,8 +282,8 @@ export default function StatsPage() {
   const [trafficHours, setTrafficHours] = useState<HoursPreset>(24)
   const [onlineWeek, setOnlineWeek] = useState(() => readWeekPref(WEEK_ONLINE_KEY))
   const [trafficWeek, setTrafficWeek] = useState(() => readWeekPref(WEEK_TRAFFIC_KEY))
-  const [onlineWeek2, setOnlineWeek2] = useState(() => readWeekPref(WEEK2_ONLINE_KEY))
-  const [trafficWeek2, setTrafficWeek2] = useState(() => readWeekPref(WEEK2_TRAFFIC_KEY))
+  const [onlineWeek2, setOnlineWeek2] = useState(() => readWeekPref(DAY_ONLINE_KEY))
+  const [trafficWeek2, setTrafficWeek2] = useState(() => readWeekPref(DAY_TRAFFIC_KEY))
   const [points, setPoints] = useState<OnlinePoint[]>([])
   const [priorPoints, setPriorPoints] = useState<OnlinePoint[]>([])
   const [prior2Points, setPrior2Points] = useState<OnlinePoint[]>([])
@@ -400,7 +400,7 @@ export default function StatsPage() {
             ? api<{ points: OnlinePoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => emptyOnline)
             : Promise.resolve(emptyOnline),
           wantWeek2
-            ? api<{ points: OnlinePoint[] }>(`${path}&ago=${TWO_WEEKS_AGO_HOURS}`).catch(() => emptyOnline)
+            ? api<{ points: OnlinePoint[] }>(`${path}&ago=${DAY_AGO_HOURS}`).catch(() => emptyOnline)
             : Promise.resolve(emptyOnline),
         ])
         setPoints(Array.isArray(onlineRes.points) ? onlineRes.points : [])
@@ -465,7 +465,7 @@ export default function StatsPage() {
             ? api<{ points: TrafficPoint[] }>(`${path}&ago=${WEEK_AGO_HOURS}`).catch(() => emptyTraffic)
             : Promise.resolve(emptyTraffic),
           wantWeek2
-            ? api<{ points: TrafficPoint[] }>(`${path}&ago=${TWO_WEEKS_AGO_HOURS}`).catch(() => emptyTraffic)
+            ? api<{ points: TrafficPoint[] }>(`${path}&ago=${DAY_AGO_HOURS}`).catch(() => emptyTraffic)
             : Promise.resolve(emptyTraffic),
         ])
         setTrafficPoints(Array.isArray(trafficRes.points) ? trafficRes.points : [])
@@ -691,7 +691,7 @@ export default function StatsPage() {
   const displayPrior2Points = useMemo((): MetricPoint[] => {
     const src = !zoom
       ? prior2Points
-      : prior2Points.filter((p) => p.t + TWO_WEEKS_MS >= zoom.from && p.t + TWO_WEEKS_MS <= zoom.to)
+      : prior2Points.filter((p) => p.t + DAY_MS >= zoom.from && p.t + DAY_MS <= zoom.to)
     return src.map((p) => ({ t: p.t, value: p.online }))
   }, [prior2Points, zoom])
 
@@ -721,7 +721,7 @@ export default function StatsPage() {
     const src = !trafficZoom
       ? prior2TrafficPoints
       : prior2TrafficPoints.filter(
-          (p) => p.t + TWO_WEEKS_MS >= trafficZoom.from && p.t + TWO_WEEKS_MS <= trafficZoom.to,
+          (p) => p.t + DAY_MS >= trafficZoom.from && p.t + DAY_MS <= trafficZoom.to,
         )
     return src.map((p) => ({
       t: p.t,
@@ -1148,8 +1148,8 @@ export default function StatsPage() {
                       title="Онлайн пользователей"
                       help={[
                         statsScope === 'nodes'
-                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней. Кнопки «Прошлая неделя» и «Предыдущая неделя» рисуют пунктир за тот же день недели.'
-                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Кнопки «Прошлая неделя» и «Предыдущая неделя» рисуют пунктир за тот же день недели.',
+                          ? 'usersOnline этой ноды Remnawave. Опрос раз в 5 минут, история до 14 дней. «Прошлая неделя» — тот же день недели неделю назад; «Предыдущий день» — вчера в то же время.'
+                          : 'Сумма usersOnline по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. «Прошлая неделя» — тот же день недели неделю назад; «Предыдущий день» — вчера в то же время.',
                         chartSubject,
                         onlineAt ? `Опрос: ${formatAt(onlineAt)}.` : '',
                       ]
@@ -1191,12 +1191,12 @@ export default function StatsPage() {
                         onClick={() =>
                           setOnlineWeek2((on) => {
                             const next = !on
-                            writeWeekPref(WEEK2_ONLINE_KEY, next)
+                            writeWeekPref(DAY_ONLINE_KEY, next)
                             return next
                           })
                         }
                       >
-                        Предыдущая неделя
+                        Предыдущий день
                       </button>
                       {zoom && (
                         <button
@@ -1236,8 +1236,8 @@ export default function StatsPage() {
                         title={statsScope === 'nodes' ? 'Трафик ноды' : 'Общий трафик'}
                         help={[
                           statsScope === 'nodes'
-                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней. Кнопки «Прошлая неделя» и «Предыдущая неделя» рисуют пунктир за тот же день недели.'
-                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. Кнопки «Прошлая неделя» и «Предыдущая неделя» рисуют пунктир за тот же день недели.',
+                            ? 'Загрузка (RX) и отдача (TX) этой ноды. Опрос раз в 5 минут, история до 14 дней. «Прошлая неделя» — тот же день недели неделю назад; «Предыдущий день» — вчера в то же время.'
+                            : 'Сумма загрузки (RX) и отдачи (TX) по нодам Remnawave. Опрос раз в 5 минут, история до 31 дня. «Прошлая неделя» — тот же день недели неделю назад; «Предыдущий день» — вчера в то же время.',
                           chartSubject,
                           trafficAt ? `Опрос: ${formatAt(trafficAt)}.` : '',
                         ]
@@ -1279,12 +1279,12 @@ export default function StatsPage() {
                           onClick={() =>
                             setTrafficWeek2((on) => {
                               const next = !on
-                              writeWeekPref(WEEK2_TRAFFIC_KEY, next)
+                              writeWeekPref(DAY_TRAFFIC_KEY, next)
                               return next
                             })
                           }
                         >
-                          Предыдущая неделя
+                          Предыдущий день
                         </button>
                         {trafficZoom && (
                           <button

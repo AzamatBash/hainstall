@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { bucketBySpan, seriesPath } from './chartCurve'
 import {
-  TWO_WEEKS_MS,
+  DAY_MS,
   WEEK_MS,
   formatWeekWhen,
   nearestByTime,
@@ -119,7 +119,7 @@ function Plaque({
       ) : null}
       {info.prior2Text ? (
         <div className="online-chart-plaque-online prior prior2">
-          2 недели назад: <span className="mono">{info.prior2Text}</span>
+          Вчера: <span className="mono">{info.prior2Text}</span>
           {info.prior2When ? <span className="online-chart-plaque-prior-when"> {info.prior2When}</span> : null}
           {info.delta2Text ? (
             <span className="online-chart-plaque-prior-when"> · {info.delta2Text}</span>
@@ -196,7 +196,7 @@ export default function OnlineUsersChart({
   const prior2Drawn = useMemo(
     () =>
       bucketBySpan(
-        prior2.map((p) => ({ ...p, t: p.t + TWO_WEEKS_MS })),
+        prior2.map((p) => ({ ...p, t: p.t + DAY_MS })),
         (group, center) => {
           let sum = 0
           for (const p of group) sum += p.value
@@ -281,7 +281,7 @@ export default function OnlineUsersChart({
     if (!p) return null
     const slack = weekSlackMs(hours)
     const prev = nearestByTime(prior, p.t - WEEK_MS, slack)
-    const prev2 = nearestByTime(prior2, p.t - TWO_WEEKS_MS, slack)
+    const prev2 = nearestByTime(prior2, p.t - DAY_MS, slack)
     return {
       x: xAt(p.t),
       y: yAt(p.value),
@@ -410,7 +410,7 @@ export default function OnlineUsersChart({
           {prior2.length ? (
             <span className="traffic-legend-item prior prior2">
               <span className="traffic-legend-swatch" aria-hidden />
-              Предыдущая неделя
+              Предыдущий день
             </span>
           ) : null}
           <span className="traffic-chart-window muted">{windowLabel}</span>
@@ -524,7 +524,7 @@ export default function OnlineUsersChart({
             ) : null}
             {active.prior2Text ? (
               <div className="online-chart-plaque-online prior prior2">
-                2 недели назад: <span className="mono">{active.prior2Text}</span>
+                Вчера: <span className="mono">{active.prior2Text}</span>
                 {active.prior2When ? (
                   <span className="online-chart-plaque-prior-when"> {active.prior2When}</span>
                 ) : null}

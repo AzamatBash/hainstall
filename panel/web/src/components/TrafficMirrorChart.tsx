@@ -9,7 +9,7 @@ import {
 import { formatBitrateShort } from '../api'
 import { bucketBySpan, seriesPath } from './chartCurve'
 import {
-  TWO_WEEKS_MS,
+  DAY_MS,
   WEEK_MS,
   formatWeekWhen,
   nearestByTime,
@@ -146,7 +146,7 @@ function Plaque({ info, className }: { info: PointInfo; className?: string }) {
       ) : null}
       {info.prior2DownText ? (
         <div className="online-chart-plaque-online prior prior2">
-          2 недели назад: <span className="mono">{info.prior2DownText}</span>
+          Вчера: <span className="mono">{info.prior2DownText}</span>
           {' / '}
           <span className="mono rx">{info.prior2UpText}</span>
           {info.prior2When ? <span className="online-chart-plaque-prior-when"> {info.prior2When}</span> : null}
@@ -262,7 +262,7 @@ export default function TrafficMirrorChart({
       meanTraffic,
     )
     const prior2Drawn = bucketBySpan(
-      prior2.map((p) => ({ ...p, t: p.t + TWO_WEEKS_MS })),
+      prior2.map((p) => ({ ...p, t: p.t + DAY_MS })),
       meanTraffic,
     )
     const txVals = drawn.map((p) => toMbit(p.down_bps))
@@ -369,7 +369,7 @@ export default function TrafficMirrorChart({
     if (!p) return null
     const slack = weekSlackMs(hours)
     const prev = nearestByTime(prior, p.t - WEEK_MS, slack)
-    const prev2 = nearestByTime(prior2, p.t - TWO_WEEKS_MS, slack)
+    const prev2 = nearestByTime(prior2, p.t - DAY_MS, slack)
     return {
       x: xAt(p.t),
       yTx: yTx(toMbit(p.down_bps)),
@@ -611,7 +611,7 @@ export default function TrafficMirrorChart({
         {prior2.length ? (
           <span className="traffic-legend-item prior prior2">
             <span className="traffic-legend-swatch" aria-hidden />
-            Предыдущая неделя
+            Предыдущий день
           </span>
         ) : null}
         <span className="traffic-chart-window muted">{windowLabel}</span>
@@ -652,7 +652,7 @@ export default function TrafficMirrorChart({
                 ) : null}
                 {active.prior2DownText ? (
                   <div className="online-chart-plaque-online prior prior2">
-                    2 недели назад: <span className="mono">{active.prior2DownText}</span>
+                    Вчера: <span className="mono">{active.prior2DownText}</span>
                     {' / '}
                     <span className="mono rx">{active.prior2UpText}</span>
                     {active.prior2When ? (
