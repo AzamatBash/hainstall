@@ -8,6 +8,14 @@ import {
 } from 'react'
 import { formatBitrateShort } from '../api'
 import { bucketBySpan, seriesPath } from './chartCurve'
+import {
+  DAY_MS,
+  WEEK_MS,
+  formatWeekWhen,
+  nearestByTime,
+  signedDelta,
+  weekSlackMs,
+} from './weekOverlay'
 
 export type TrafficPoint = {
   t: number
@@ -27,6 +35,10 @@ type Props = {
   onContextPoint?: (at: { t: number; clientX: number; clientY: number }) => void
   currentDownBps?: number | null
   currentUpBps?: number | null
+  /** Same span one week earlier, still on its original timestamps. */
+  prior?: TrafficPoint[]
+  /** Same span two weeks earlier. */
+  prior2?: TrafficPoint[]
 }
 
 type PointInfo = {
@@ -37,9 +49,20 @@ type PointInfo = {
   time: string
   downText: string
   upText: string
+  priorDownText?: string
+  priorUpText?: string
+  priorWhen?: string
+  deltaDownText?: string
+  deltaUpText?: string
+  prior2DownText?: string
+  prior2UpText?: string
+  prior2When?: string
+  delta2DownText?: string
+  delta2UpText?: string
 }
 
 const TAP_SLOP = 14
+const NO_PRIOR: TrafficPoint[] = []
 
 function toMbit(bytesPerSec: number): number {
   if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return 0
@@ -107,6 +130,34 @@ function Plaque({ info, className }: { info: PointInfo; className?: string }) {
       <div className="online-chart-plaque-online">
         Загрузка RX: <span className="mono">{info.upText}</span>
       </div>
+      {info.priorDownText ? (
+        <div className="online-chart-plaque-online prior">
+          Неделю назад: <span className="mono">{info.priorDownText}</span>
+          {' / '}
+          <span className="mono rx">{info.priorUpText}</span>
+          {info.priorWhen ? <span className="online-chart-plaque-prior-when"> {info.priorWhen}</span> : null}
+          {info.deltaDownText ? (
+            <span className="online-chart-plaque-prior-when">
+              {' '}
+              · {info.deltaDownText} / {info.deltaUpText}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {info.prior2DownText ? (
+        <div className="online-chart-plaque-online prior prior2">
+          Вчера: <span className="mono">{info.prior2DownText}</span>
+          {' / '}
+          <span className="mono rx">{info.prior2UpText}</span>
+          {info.prior2When ? <span className="online-chart-plaque-prior-when"> {info.prior2When}</span> : null}
+          {info.delta2DownText ? (
+            <span className="online-chart-plaque-prior-when">
+              {' '}
+              · {info.delta2DownText} / {info.delta2UpText}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -121,6 +172,8 @@ export default function TrafficMirrorChart({
   onContextPoint,
   currentDownBps = null,
   currentUpBps = null,
+  prior = NO_PRIOR,
+  prior2 = NO_PRIOR,
 }: Props) {
   const stats = size === 'stats'
   const width = 720
@@ -141,11 +194,15 @@ export default function TrafficMirrorChart({
 
   useEffect(() => {
     setActive(null)
-  }, [points, hours])
+  }, [points, hours, prior, prior2])
 
   const {
     pathUp,
     pathDown,
+    priorUp,
+    priorDown,
+    prior2Up,
+    prior2Down,
     areaUp,
     areaDown,
     maxMbit,
@@ -161,6 +218,10 @@ export default function TrafficMirrorChart({
     const empty = {
       pathUp: '',
       pathDown: '',
+      priorUp: '',
+      priorDown: '',
+      prior2Up: '',
+      prior2Down: '',
       areaUp: '',
       areaDown: '',
       maxMbit: 1,
@@ -186,9 +247,31 @@ export default function TrafficMirrorChart({
     if (!drawn.length) return empty
 
     // down_bps = host TX (outbound), up_bps = host RX (inbound)
+    const meanTraffic = (group: TrafficPoint[], center: number) => {
+      let down = 0
+      let up = 0
+      for (const p of group) {
+        down += p.down_bps
+        up += p.up_bps
+      }
+      const n = group.length
+      return { t: center, down_bps: down / n, up_bps: up / n }
+    }
+    const priorDrawn = bucketBySpan(
+      prior.map((p) => ({ ...p, t: p.t + WEEK_MS })),
+      meanTraffic,
+    )
+    const prior2Drawn = bucketBySpan(
+      prior2.map((p) => ({ ...p, t: p.t + DAY_MS })),
+      meanTraffic,
+    )
     const txVals = drawn.map((p) => toMbit(p.down_bps))
     const rxVals = drawn.map((p) => toMbit(p.up_bps))
-    const peak = Math.max(0.01, ...txVals, ...rxVals)
+    const priorTx = priorDrawn.map((p) => toMbit(p.down_bps))
+    const priorRx = priorDrawn.map((p) => toMbit(p.up_bps))
+    const prior2Tx = prior2Drawn.map((p) => toMbit(p.down_bps))
+    const prior2Rx = prior2Drawn.map((p) => toMbit(p.up_bps))
+    const peak = Math.max(0.01, ...txVals, ...rxVals, ...priorTx, ...priorRx, ...prior2Tx, ...prior2Rx)
     const maxM = niceMax(peak)
     const minT = points[0]?.t ?? drawn[0].t
     const maxT = points[points.length - 1]?.t ?? drawn[drawn.length - 1].t
@@ -204,8 +287,16 @@ export default function TrafficMirrorChart({
 
     const txXY = drawn.map((p) => ({ x: xAtFn(p.t), y: yTxFn(toMbit(p.down_bps)) }))
     const rxXY = drawn.map((p) => ({ x: xAtFn(p.t), y: yRxFn(toMbit(p.up_bps)) }))
+    const priorTxXY = priorDrawn.map((p) => ({ x: xAtFn(p.t), y: yTxFn(toMbit(p.down_bps)) }))
+    const priorRxXY = priorDrawn.map((p) => ({ x: xAtFn(p.t), y: yRxFn(toMbit(p.up_bps)) }))
+    const prior2TxXY = prior2Drawn.map((p) => ({ x: xAtFn(p.t), y: yTxFn(toMbit(p.down_bps)) }))
+    const prior2RxXY = prior2Drawn.map((p) => ({ x: xAtFn(p.t), y: yRxFn(toMbit(p.up_bps)) }))
     const txPath = seriesPath(txXY)
     const rxPath = seriesPath(rxXY)
+    const priorTxPath = priorTxXY.length ? seriesPath(priorTxXY) : ''
+    const priorRxPath = priorRxXY.length ? seriesPath(priorRxXY) : ''
+    const prior2TxPath = prior2TxXY.length ? seriesPath(prior2TxXY) : ''
+    const prior2RxPath = prior2RxXY.length ? seriesPath(prior2RxXY) : ''
 
     const x0 = txXY[0].x
     const x1 = txXY[txXY.length - 1].x
@@ -223,6 +314,10 @@ export default function TrafficMirrorChart({
     return {
       pathUp: txPath,
       pathDown: rxPath,
+      priorUp: priorTxPath,
+      priorDown: priorRxPath,
+      prior2Up: prior2TxPath,
+      prior2Down: prior2RxPath,
       areaUp: areaTx,
       areaDown: areaRx,
       maxMbit: maxM,
@@ -235,7 +330,7 @@ export default function TrafficMirrorChart({
       yRx: yRxFn,
       tAt: tAtFn,
     }
-  }, [points, hours, width, height, padL, padR, padT, padB])
+  }, [points, prior, prior2, hours, width, height, padL, padR, padT, padB])
 
   const innerH = height - padT - padB
   const midY = padT + innerH / 2
@@ -272,11 +367,24 @@ export default function TrafficMirrorChart({
   function infoAtX(svgX: number): PointInfo | null {
     const p = nearest(tAt(svgX))
     if (!p) return null
+    const slack = weekSlackMs(hours)
+    const prev = nearestByTime(prior, p.t - WEEK_MS, slack)
+    const prev2 = nearestByTime(prior2, p.t - DAY_MS, slack)
     return {
       x: xAt(p.t),
       yTx: yTx(toMbit(p.down_bps)),
       yRx: yRx(toMbit(p.up_bps)),
       ...formatHover(p.t, p.down_bps, p.up_bps),
+      priorDownText: prev ? formatBitrateShort(prev.down_bps) : undefined,
+      priorUpText: prev ? formatBitrateShort(prev.up_bps) : undefined,
+      priorWhen: prev ? formatWeekWhen(prev.t) : undefined,
+      deltaDownText: prev ? signedDelta(p.down_bps, prev.down_bps, formatBitrateShort) : undefined,
+      deltaUpText: prev ? signedDelta(p.up_bps, prev.up_bps, formatBitrateShort) : undefined,
+      prior2DownText: prev2 ? formatBitrateShort(prev2.down_bps) : undefined,
+      prior2UpText: prev2 ? formatBitrateShort(prev2.up_bps) : undefined,
+      prior2When: prev2 ? formatWeekWhen(prev2.t) : undefined,
+      delta2DownText: prev2 ? signedDelta(p.down_bps, prev2.down_bps, formatBitrateShort) : undefined,
+      delta2UpText: prev2 ? signedDelta(p.up_bps, prev2.up_bps, formatBitrateShort) : undefined,
     }
   }
 
@@ -431,6 +539,10 @@ export default function TrafficMirrorChart({
       ) : null}
       {areaUp ? <path d={areaUp} className="traffic-area tx" /> : null}
       {areaDown ? <path d={areaDown} className="traffic-area rx" /> : null}
+      {prior2Up ? <path d={prior2Up} className="traffic-line prior prior2 tx" /> : null}
+      {prior2Down ? <path d={prior2Down} className="traffic-line prior prior2 rx" /> : null}
+      {priorUp ? <path d={priorUp} className="traffic-line prior tx" /> : null}
+      {priorDown ? <path d={priorDown} className="traffic-line prior rx" /> : null}
       {pathUp ? <path d={pathUp} className="traffic-line tx" /> : null}
       {pathDown ? <path d={pathDown} className="traffic-line rx" /> : null}
       {!points.length ? (
@@ -490,6 +602,18 @@ export default function TrafficMirrorChart({
             <span className="traffic-legend-val">{formatBitrateShort(legendUp)}</span>
           ) : null}
         </span>
+        {prior.length ? (
+          <span className="traffic-legend-item prior">
+            <span className="traffic-legend-swatch" aria-hidden />
+            Прошлая неделя
+          </span>
+        ) : null}
+        {prior2.length ? (
+          <span className="traffic-legend-item prior prior2">
+            <span className="traffic-legend-swatch" aria-hidden />
+            Предыдущий день
+          </span>
+        ) : null}
         <span className="traffic-chart-window muted">{windowLabel}</span>
       </div>
       {stats ? (
@@ -510,6 +634,38 @@ export default function TrafficMirrorChart({
                 <div className="online-chart-plaque-online">
                   Загрузка RX: <span className="mono">{active.upText}</span>
                 </div>
+                {active.priorDownText ? (
+                  <div className="online-chart-plaque-online prior">
+                    Неделю назад: <span className="mono">{active.priorDownText}</span>
+                    {' / '}
+                    <span className="mono rx">{active.priorUpText}</span>
+                    {active.priorWhen ? (
+                      <span className="online-chart-plaque-prior-when"> {active.priorWhen}</span>
+                    ) : null}
+                    {active.deltaDownText ? (
+                      <span className="online-chart-plaque-prior-when">
+                        {' '}
+                        · {active.deltaDownText} / {active.deltaUpText}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {active.prior2DownText ? (
+                  <div className="online-chart-plaque-online prior prior2">
+                    Вчера: <span className="mono">{active.prior2DownText}</span>
+                    {' / '}
+                    <span className="mono rx">{active.prior2UpText}</span>
+                    {active.prior2When ? (
+                      <span className="online-chart-plaque-prior-when"> {active.prior2When}</span>
+                    ) : null}
+                    {active.delta2DownText ? (
+                      <span className="online-chart-plaque-prior-when">
+                        {' '}
+                        · {active.delta2DownText} / {active.delta2UpText}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

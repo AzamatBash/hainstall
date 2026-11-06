@@ -7,6 +7,14 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { bucketBySpan, seriesPath } from './chartCurve'
+import {
+  DAY_MS,
+  WEEK_MS,
+  formatWeekWhen,
+  nearestByTime,
+  signedDelta,
+  weekSlackMs,
+} from './weekOverlay'
 
 export type MetricPoint = { t: number; value: number }
 
@@ -28,6 +36,10 @@ type Props = {
   /** Current value for the compact legend (defaults to last point). */
   current?: number | null
   showLegend?: boolean
+  /** Same span one week earlier, still on its original timestamps. */
+  prior?: MetricPoint[]
+  /** Same span two weeks earlier. */
+  prior2?: MetricPoint[]
 }
 
 type PointInfo = {
@@ -37,9 +49,16 @@ type PointInfo = {
   time: string
   value: number
   valueText: string
+  priorText?: string
+  priorWhen?: string
+  deltaText?: string
+  prior2Text?: string
+  prior2When?: string
+  delta2Text?: string
 }
 
 const TAP_SLOP = 14
+const NO_PRIOR: MetricPoint[] = []
 
 function formatTick(ts: number, hours: number) {
   const d = new Date(ts)
@@ -89,6 +108,24 @@ function Plaque({
       <div className="online-chart-plaque-online">
         {valueLabel}: <span className="mono">{info.valueText}</span>
       </div>
+      {info.priorText ? (
+        <div className="online-chart-plaque-online prior">
+          Неделю назад: <span className="mono">{info.priorText}</span>
+          {info.priorWhen ? <span className="online-chart-plaque-prior-when"> {info.priorWhen}</span> : null}
+          {info.deltaText ? (
+            <span className="online-chart-plaque-prior-when"> · {info.deltaText}</span>
+          ) : null}
+        </div>
+      ) : null}
+      {info.prior2Text ? (
+        <div className="online-chart-plaque-online prior prior2">
+          Вчера: <span className="mono">{info.prior2Text}</span>
+          {info.prior2When ? <span className="online-chart-plaque-prior-when"> {info.prior2When}</span> : null}
+          {info.delta2Text ? (
+            <span className="online-chart-plaque-prior-when"> · {info.delta2Text}</span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -111,6 +148,8 @@ export default function OnlineUsersChart({
   tapHint = 'Нажмите на график, чтобы увидеть дату и значение',
   current = null,
   showLegend = false,
+  prior = NO_PRIOR,
+  prior2 = NO_PRIOR,
 }: Props) {
   const width = 720
   const height = 260
@@ -139,11 +178,39 @@ export default function OnlineUsersChart({
 
   useEffect(() => {
     setActive(null)
-  }, [points, hours])
+  }, [points, hours, prior, prior2])
 
-  const { path, area, maxY, xLabels, xAt, yAt, tAt } = useMemo(() => {
+  const priorDrawn = useMemo(
+    () =>
+      bucketBySpan(
+        prior.map((p) => ({ ...p, t: p.t + WEEK_MS })),
+        (group, center) => {
+          let sum = 0
+          for (const p of group) sum += p.value
+          return { t: center, value: sum / group.length }
+        },
+      ),
+    [prior],
+  )
+
+  const prior2Drawn = useMemo(
+    () =>
+      bucketBySpan(
+        prior2.map((p) => ({ ...p, t: p.t + DAY_MS })),
+        (group, center) => {
+          let sum = 0
+          for (const p of group) sum += p.value
+          return { t: center, value: sum / group.length }
+        },
+      ),
+    [prior2],
+  )
+
+  const { path, priorPath, prior2Path, area, maxY, xLabels, xAt, yAt, tAt } = useMemo(() => {
     const empty = {
       path: '',
+      priorPath: '',
+      prior2Path: '',
       area: '',
       maxY: 1,
       xLabels: [] as { x: number; label: string }[],
@@ -155,7 +222,12 @@ export default function OnlineUsersChart({
     const t0 = points[0]?.t ?? drawPoints[0].t
     const t1 = points[points.length - 1]?.t ?? drawPoints[drawPoints.length - 1].t
     const span = Math.max(t1 - t0, 1)
-    const maxVal = Math.max(1, ...drawPoints.map((p) => p.value))
+    const maxVal = Math.max(
+      1,
+      ...drawPoints.map((p) => p.value),
+      ...priorDrawn.map((p) => p.value),
+      ...prior2Drawn.map((p) => p.value),
+    )
     const niceMax = Math.max(1, maxVal * 1.1)
     const plotW = width - padL - padR
     const plotH = height - padT - padB
@@ -163,7 +235,11 @@ export default function OnlineUsersChart({
     const yAtFn = (v: number) => padT + plotH - (Math.min(v, niceMax) / niceMax) * plotH
     const tAtFn = (x: number) => t0 + ((x - padL) / plotW) * span
     const xy = drawPoints.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
+    const priorXY = priorDrawn.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
+    const prior2XY = prior2Drawn.map((p) => ({ x: xAtFn(p.t), y: yAtFn(p.value) }))
     const d = seriesPath(xy)
+    const priorD = priorXY.length ? seriesPath(priorXY) : ''
+    const prior2D = prior2XY.length ? seriesPath(prior2XY) : ''
     const xClose0 = xy[0].x.toFixed(1)
     const xClose1 = xy[xy.length - 1].x.toFixed(1)
     const areaD = `${d} L${xClose1},${(padT + plotH).toFixed(1)} L${xClose0},${(padT + plotH).toFixed(1)} Z`
@@ -173,8 +249,18 @@ export default function OnlineUsersChart({
       const t = t0 + (span * i) / Math.max(n - 1, 1)
       labels.push({ x: xAtFn(t), label: formatTick(t, hours) })
     }
-    return { path: d, area: areaD, maxY: niceMax, xLabels: labels, xAt: xAtFn, yAt: yAtFn, tAt: tAtFn }
-  }, [drawPoints, points, hours, padL])
+    return {
+      path: d,
+      priorPath: priorD,
+      prior2Path: prior2D,
+      area: areaD,
+      maxY: niceMax,
+      xLabels: labels,
+      xAt: xAtFn,
+      yAt: yAtFn,
+      tAt: tAtFn,
+    }
+  }, [drawPoints, priorDrawn, prior2Drawn, points, hours, padL])
 
   function nearest(t: number): MetricPoint | null {
     if (!points.length) return null
@@ -193,7 +279,20 @@ export default function OnlineUsersChart({
   function infoAtX(svgX: number): PointInfo | null {
     const p = nearest(tAt(svgX))
     if (!p) return null
-    return { x: xAt(p.t), y: yAt(p.value), ...formatHover(p.t, p.value, formatValue) }
+    const slack = weekSlackMs(hours)
+    const prev = nearestByTime(prior, p.t - WEEK_MS, slack)
+    const prev2 = nearestByTime(prior2, p.t - DAY_MS, slack)
+    return {
+      x: xAt(p.t),
+      y: yAt(p.value),
+      ...formatHover(p.t, p.value, formatValue),
+      priorText: prev ? formatValue(prev.value) : undefined,
+      priorWhen: prev ? formatWeekWhen(prev.t) : undefined,
+      deltaText: prev ? signedDelta(p.value, prev.value, formatValue) : undefined,
+      prior2Text: prev2 ? formatValue(prev2.value) : undefined,
+      prior2When: prev2 ? formatWeekWhen(prev2.t) : undefined,
+      delta2Text: prev2 ? signedDelta(p.value, prev2.value, formatValue) : undefined,
+    }
   }
 
   function svgXFromEvent(e: ReactPointerEvent<SVGSVGElement>) {
@@ -302,6 +401,18 @@ export default function OnlineUsersChart({
               <span className="traffic-legend-val">{formatValue(legendValue)}</span>
             ) : null}
           </span>
+          {prior.length ? (
+            <span className="traffic-legend-item prior">
+              <span className="traffic-legend-swatch" aria-hidden />
+              Прошлая неделя
+            </span>
+          ) : null}
+          {prior2.length ? (
+            <span className="traffic-legend-item prior prior2">
+              <span className="traffic-legend-swatch" aria-hidden />
+              Предыдущий день
+            </span>
+          ) : null}
           <span className="traffic-chart-window muted">{windowLabel}</span>
         </div>
       ) : null}
@@ -349,6 +460,8 @@ export default function OnlineUsersChart({
             />
           ) : null}
           {area ? <path d={area} className="online-chart-area" /> : null}
+          {prior2Path ? <path d={prior2Path} className="online-chart-line prior prior2" /> : null}
+          {priorPath ? <path d={priorPath} className="online-chart-line prior" /> : null}
           {path ? <path d={path} className="online-chart-line" /> : null}
           {!points.length ? (
             <text x={width / 2} y={height / 2} textAnchor="middle" className="traffic-empty">
@@ -398,6 +511,28 @@ export default function OnlineUsersChart({
             <div className="online-chart-plaque-online">
               {valueLabel}: <span className="mono">{active.valueText}</span>
             </div>
+            {active.priorText ? (
+              <div className="online-chart-plaque-online prior">
+                Неделю назад: <span className="mono">{active.priorText}</span>
+                {active.priorWhen ? (
+                  <span className="online-chart-plaque-prior-when"> {active.priorWhen}</span>
+                ) : null}
+                {active.deltaText ? (
+                  <span className="online-chart-plaque-prior-when"> · {active.deltaText}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {active.prior2Text ? (
+              <div className="online-chart-plaque-online prior prior2">
+                Вчера: <span className="mono">{active.prior2Text}</span>
+                {active.prior2When ? (
+                  <span className="online-chart-plaque-prior-when"> {active.prior2When}</span>
+                ) : null}
+                {active.delta2Text ? (
+                  <span className="online-chart-plaque-prior-when"> · {active.delta2Text}</span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
