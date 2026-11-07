@@ -140,6 +140,8 @@ func (s *Server) routes() {
 	// Read-only export for external panels (API key or admin JWT).
 	s.mux.HandleFunc("GET /api/v1/hanodes", s.requireAPIKeyOrAuth(s.handleExportHanodes))
 	s.mux.HandleFunc("GET /api/v1/hanodes/{id}", s.requireAPIKeyOrAuth(s.handleExportHanode))
+	// Read-only configuration snapshot (key with scope "config" or admin JWT).
+	s.mux.HandleFunc("GET /api/v1/config", s.requireAPIKeyScope(store.APIKeyScopeConfig, s.handleExportConfig))
 
 	// Manage export API keys (admin session only).
 	s.mux.HandleFunc("GET /api/settings/api-keys", s.requireAuth(s.handleListAPIKeys))

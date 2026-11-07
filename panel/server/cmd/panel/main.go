@@ -23,6 +23,11 @@ import (
 )
 
 func main() {
+	// Operator CLI (`panel apikey ...`): no HTTP server, no pollers, no migrations.
+	if len(os.Args) > 1 && os.Args[1] == "apikey" {
+		os.Exit(runAPIKeyCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg := config.Load()
 

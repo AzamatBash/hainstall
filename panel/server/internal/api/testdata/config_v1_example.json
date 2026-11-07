@@ -1,0 +1,345 @@
+{
+  "schema": "hapanel.config.v1",
+  "version": "dev",
+  "generated_at": "2026-10-26T12:00:00Z",
+  "snapshot_hash": "sha256:9b60f457c1d032a83551352ca306b7f1385b7a358160ce2ccc997b6052c9c9f5",
+  "sections": {
+    "hanodes": {
+      "status": "ok",
+      "content_hash": "sha256:01928b4e0fe97b7cf917428753bc5909fc8e249b617f0d83cbf1852535e0ccf8",
+      "items": [
+        {
+          "id": "1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f52",
+          "name": "msk-front-2",
+          "country": "RU",
+          "host": "2001:db8::10",
+          "sort_order": 1,
+          "created_at": "2026-10-02T08:30:00Z",
+          "listen_ports": [
+            8443
+          ],
+          "entrances": [
+            {
+              "port": 8443,
+              "backend": "app"
+            }
+          ],
+          "protect": {
+            "client_hello": false,
+            "client_hello_delay_sec": 3,
+            "rate_limit": true,
+            "max_conn_per_ip": 50,
+            "max_rate_per_ip": 60,
+            "rate_window_sec": 20,
+            "ru_only": true,
+            "synproxy": true
+          },
+          "protect_default": false,
+          "remna_panel_id": "b1b2c3d4-0000-4000-8000-00000000000b",
+          "provider_id": null,
+          "provider_account_id": null,
+          "traffic_log": false,
+          "has_token": true,
+          "backends": [],
+          "backends_observed_at": null
+        },
+        {
+          "id": "6b0c1f3e-2a4d-4e5f-8a9b-0c1d2e3f4a51",
+          "name": "fra-front-1",
+          "country": "DE",
+          "host": "203.0.113.10",
+          "sort_order": 0,
+          "created_at": "2026-10-01T10:00:00Z",
+          "listen_ports": [
+            443,
+            8443
+          ],
+          "entrances": [
+            {
+              "port": 443,
+              "backend": "app"
+            },
+            {
+              "port": 8443,
+              "backend": "reserve"
+            }
+          ],
+          "protect": {
+            "client_hello": true,
+            "client_hello_delay_sec": 5,
+            "rate_limit": true,
+            "max_conn_per_ip": 100,
+            "max_rate_per_ip": 60,
+            "rate_window_sec": 10,
+            "ru_only": false,
+            "synproxy": false
+          },
+          "protect_default": true,
+          "remna_panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "provider_id": "5a000000-0000-4000-8000-000000000001",
+          "provider_account_id": "7c000000-0000-4000-8000-000000000001",
+          "traffic_log": true,
+          "has_token": true,
+          "backends": [
+            {
+              "backend": "app",
+              "name": "de-exit-2",
+              "address": "198.51.100.22",
+              "port": 8443
+            },
+            {
+              "backend": "app",
+              "name": "nl-exit-1",
+              "address": "198.51.100.21",
+              "port": 443
+            }
+          ],
+          "backends_observed_at": "2026-10-26T11:59:55Z"
+        },
+        {
+          "id": "9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a553",
+          "name": "ams-front-3",
+          "country": "NL",
+          "host": "",
+          "sort_order": 2,
+          "created_at": "2026-10-03T09:15:00Z",
+          "listen_ports": [
+            8443
+          ],
+          "entrances": [
+            {
+              "port": 8443,
+              "backend": "app"
+            }
+          ],
+          "protect": {
+            "client_hello": true,
+            "client_hello_delay_sec": 5,
+            "rate_limit": true,
+            "max_conn_per_ip": 100,
+            "max_rate_per_ip": 60,
+            "rate_window_sec": 10,
+            "ru_only": false,
+            "synproxy": false
+          },
+          "protect_default": true,
+          "remna_panel_id": null,
+          "provider_id": null,
+          "provider_account_id": null,
+          "traffic_log": false,
+          "has_token": false,
+          "backends": [],
+          "backends_observed_at": "2026-10-26T11:59:50Z"
+        }
+      ]
+    },
+    "links": {
+      "status": "ok",
+      "content_hash": "sha256:f17a8f3dedfd3cd1e0c5cc8d13dcdc11e3e5da7ecd5831052877cf190336de68",
+      "items": [
+        {
+          "node_id": "1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f52",
+          "backend": "app",
+          "server_name": "ru-exit",
+          "remna_panel_id": "b1b2c3d4-0000-4000-8000-00000000000b",
+          "remna_address": "nl-exit-1.example.net",
+          "remna_uuid": "d0000000-0000-4000-8000-000000000001",
+          "match": "unique",
+          "active": true
+        },
+        {
+          "node_id": "6b0c1f3e-2a4d-4e5f-8a9b-0c1d2e3f4a51",
+          "backend": "app",
+          "server_name": "de-exit-2",
+          "remna_panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "remna_address": "198.51.100.22",
+          "remna_uuid": null,
+          "match": "ambiguous",
+          "active": true
+        },
+        {
+          "node_id": "6b0c1f3e-2a4d-4e5f-8a9b-0c1d2e3f4a51",
+          "backend": "app",
+          "server_name": "nl-exit-1",
+          "remna_panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "remna_address": " NL-Exit-1.example.net ",
+          "remna_uuid": "c0000000-0000-4000-8000-000000000001",
+          "match": "unique",
+          "active": true
+        },
+        {
+          "node_id": "6b0c1f3e-2a4d-4e5f-8a9b-0c1d2e3f4a51",
+          "backend": "reserve",
+          "server_name": "old-exit",
+          "remna_panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "remna_address": "192.0.2.99",
+          "remna_uuid": null,
+          "match": "none",
+          "active": false
+        },
+        {
+          "node_id": "ffffffff-0000-4000-8000-0000000000ff",
+          "backend": "app",
+          "server_name": "gone",
+          "remna_panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "remna_address": "192.0.2.50",
+          "remna_uuid": null,
+          "match": "none",
+          "active": false
+        }
+      ]
+    },
+    "remna_panels": {
+      "status": "ok",
+      "content_hash": "sha256:dd0dd606899770b8c99516c5d74e15e6eb50cecdccb91431055258ce33242872",
+      "items": [
+        {
+          "id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "name": "Panel A",
+          "has_api_key": true,
+          "created_at": "2026-09-01T00:00:00Z"
+        },
+        {
+          "id": "b1b2c3d4-0000-4000-8000-00000000000b",
+          "name": "Panel B",
+          "has_api_key": false,
+          "created_at": "2026-09-02T00:00:00Z"
+        }
+      ]
+    },
+    "remna_nodes": {
+      "status": "ok",
+      "content_hash": "sha256:c0c4fdb3c27ac6539df4e3867b4c40e1ec884d6a603be805619784614a2bb41e",
+      "items": [
+        {
+          "panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "uuid": "c0000000-0000-4000-8000-000000000001",
+          "name": "nl-exit-1",
+          "address": "nl-exit-1.example.net",
+          "config_profile_uuid": "e0000000-0000-4000-8000-00000000000e",
+          "inbound_uuids": [
+            "f0000000-0000-4000-8000-000000000001",
+            "f0000000-0000-4000-8000-000000000002"
+          ],
+          "inbound_tags": [
+            "VLESS_REALITY",
+            "VLESS_XHTTP"
+          ],
+          "protocol": "vless_reality",
+          "protocol_derived": "vless_reality",
+          "protocol_override": "",
+          "roles": {
+            "rn_front": false,
+            "rn_back": true,
+            "hp_front": false,
+            "hp_back": true,
+            "cdn_back": false
+          },
+          "enabled_in_analytics": true,
+          "notes": "Exit behind \u003cHP\u003e front \u0026 CDN",
+          "alert_note": "Провайдер урезал канал"
+        },
+        {
+          "panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "uuid": "c0000000-0000-4000-8000-000000000002",
+          "name": "de-exit-2a",
+          "address": "198.51.100.22",
+          "config_profile_uuid": "",
+          "inbound_uuids": [],
+          "inbound_tags": [
+            "HY2"
+          ],
+          "protocol": "mixed",
+          "protocol_derived": "hysteria2",
+          "protocol_override": "mixed",
+          "roles": {
+            "rn_front": false,
+            "rn_back": false,
+            "hp_front": false,
+            "hp_back": false,
+            "cdn_back": false
+          },
+          "enabled_in_analytics": true,
+          "notes": "",
+          "alert_note": ""
+        },
+        {
+          "panel_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+          "uuid": "c0000000-0000-4000-8000-000000000003",
+          "name": "de-exit-2b",
+          "address": " 198.51.100.22",
+          "config_profile_uuid": "",
+          "inbound_uuids": [],
+          "inbound_tags": [],
+          "protocol": "unknown",
+          "protocol_derived": "",
+          "protocol_override": "",
+          "roles": {
+            "rn_front": false,
+            "rn_back": false,
+            "hp_front": false,
+            "hp_back": false,
+            "cdn_back": true
+          },
+          "enabled_in_analytics": true,
+          "notes": "",
+          "alert_note": ""
+        },
+        {
+          "panel_id": "b1b2c3d4-0000-4000-8000-00000000000b",
+          "uuid": "d0000000-0000-4000-8000-000000000001",
+          "name": "ru-exit-1",
+          "address": "nl-exit-1.example.net",
+          "config_profile_uuid": "",
+          "inbound_uuids": [],
+          "inbound_tags": [],
+          "protocol": "unknown",
+          "protocol_derived": "unknown",
+          "protocol_override": "",
+          "roles": {
+            "rn_front": true,
+            "rn_back": false,
+            "hp_front": true,
+            "hp_back": false,
+            "cdn_back": false
+          },
+          "enabled_in_analytics": false,
+          "notes": "",
+          "alert_note": ""
+        }
+      ]
+    },
+    "providers": {
+      "status": "ok",
+      "content_hash": "sha256:1e31de748e760d88a346705877e91234ea6099342f04971ba491eb6d71d99df7",
+      "items": [
+        {
+          "id": "4a000000-0000-4000-8000-000000000002",
+          "name": "Other Cloud",
+          "created_at": "2026-08-02T00:00:00Z"
+        },
+        {
+          "id": "5a000000-0000-4000-8000-000000000001",
+          "name": "Example Hosting",
+          "created_at": "2026-08-01T00:00:00Z"
+        }
+      ]
+    },
+    "provider_accounts": {
+      "status": "ok",
+      "content_hash": "sha256:71f8d66537341acad8cef351ca13dfe83f5d5bff8ec43b00c40770dd87cebc68",
+      "items": [
+        {
+          "id": "2c000000-0000-4000-8000-000000000002",
+          "provider_id": "4a000000-0000-4000-8000-000000000002",
+          "created_at": "2026-08-04T00:00:00Z"
+        },
+        {
+          "id": "7c000000-0000-4000-8000-000000000001",
+          "provider_id": "5a000000-0000-4000-8000-000000000001",
+          "created_at": "2026-08-03T00:00:00Z"
+        }
+      ]
+    }
+  }
+}

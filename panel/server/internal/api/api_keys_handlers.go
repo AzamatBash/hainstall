@@ -16,6 +16,7 @@ func publicAPIKeyMeta(m store.APIKeyMeta) map[string]any {
 		"prefix":     m.Prefix,
 		"created_at": m.CreatedAt.UTC().Format(time.RFC3339),
 		"revoked":    m.RevokedAt != nil,
+		"scopes":     apiKeyScopesJSON(m.Scopes),
 	}
 	if m.LastUsedAt != nil {
 		out["last_used_at"] = m.LastUsedAt.UTC().Format(time.RFC3339)
@@ -24,6 +25,14 @@ func publicAPIKeyMeta(m store.APIKeyMeta) map[string]any {
 		out["revoked_at"] = m.RevokedAt.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// apiKeyScopesJSON always returns a list ([] for legacy keys), never null.
+func apiKeyScopesJSON(scopes []string) []string {
+	if scopes == nil {
+		return []string{}
+	}
+	return scopes
 }
 
 func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +52,8 @@ func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
+		// Optional extra rights, e.g. ["config"]; absent = legacy hanodes-only key.
+		Scopes []string `json:"scopes"`
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil && err != io.EOF {
@@ -50,7 +61,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	created, err := s.store.CreateAPIKey(body.Name)
+	created, err := s.store.CreateAPIKeyWithScopes(body.Name, body.Scopes)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

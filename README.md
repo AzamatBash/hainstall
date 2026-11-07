@@ -75,12 +75,18 @@ docker pull azamatbash/hapanel@sha256:29ad6f65637e7086beeda0e582dc5b741ae6fa7137
 ```bash
 docker login
 REBUILD_PANEL=1 ./scripts/push-images.sh
-# optional: VERSION=0.1.2 REBUILD_PANEL=1 ./scripts/push-images.sh
+# optional: PANEL_VERSION=0.1.76 REBUILD_PANEL=1 ./scripts/push-images.sh
 ```
 
 Builds from repo root:
 - panel → `deploy/panel/Dockerfile`
 - agent → `deploy/node/agent/Dockerfile`
+
+`PANEL_VERSION` (default in the script) is both the panel tag and, with `REBUILD_PANEL=1`, the version stamped into the binary (`--build-arg PANEL_VERSION=...`, shown as `version` in `GET /api/v1/config`). Without `REBUILD_PANEL=1` the script only re-tags an image built elsewhere, which keeps the version it was built with. A panel build without `--build-arg PANEL_VERSION` reports `dev`:
+
+```bash
+docker build --build-arg PANEL_VERSION=0.1.76 -t azamatbash/hapanel:0.1.76 -f deploy/panel/Dockerfile .
+```
 
 ### Как развернуть панель (Docker Hub)
 
@@ -125,7 +131,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Локальная пересборка того же тега из исходников: `docker compose up -d --build`.
+Локальная пересборка того же тега из исходников: `docker compose up -d --build` (раскомментируйте блок `build:` вместе с `args: PANEL_VERSION` в `docker-compose.yml` и задайте `PANEL_VERSION`, иначе `version` в `GET /api/v1/config` будет `dev`).
 
 ### Nodes from the panel wizard
 
@@ -233,6 +239,82 @@ curl -sS -H "Authorization: Bearer $HAPANEL_API_KEY" "https://panel.example/api/
 curl -sS -H "X-API-Key: $HAPANEL_API_KEY" "https://panel.example/api/v1/hanodes/<id>?hours=24"
 ```
 
-Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. No node tokens or management URLs.
+Fields per node: `id`, `name`, `country`, `status`, `last_seen`, `cpu`, `load_avg`, `down_bps`, `up_bps`, `sessions`, `net_rx_bytes`, `net_tx_bytes`, `agent_version`, `updated_at`, and with `?hours=` also `period_rx_bytes` / `period_tx_bytes`. `net_rx_bytes`, `net_tx_bytes` and other empty optional fields are omitted when zero or unknown; `cpu`, `down_bps`, `up_bps` and `sessions` are sent even when 0. No node tokens or management URLs.
+
+### Права ключей и выгрузка настроек (`GET /api/v1/config`)
+
+У API-ключа может быть набор прав (`scopes`). Любой действующий ключ, как и раньше, читает `GET /api/v1/hanodes` и `/api/v1/hanodes/{id}`. Ключ с правом `config` дополнительно читает `GET /api/v1/config`. Ключи из интерфейса (**api** → **Сгенерировать**) и ключ из `PANEL_API_KEY` прав не имеют: на `/api/v1/config` они получают `403 {"error":"у ключа нет права config"}`. Сессия администратора (JWT) открывает и этот маршрут.
+
+Как выпустить ключ с правом `config`:
+
+- API (сессия администратора): `POST /api/settings/api-keys` с телом `{"name":"vpn-expert","scopes":["config"]}`. Без `scopes` создаётся прежний ключ, неизвестное право — `400`. `GET /api/settings/api-keys` показывает `scopes` у каждого ключа.
+- CLI в том же бинарнике, без пароля, можно рядом с работающей панелью:
+
+```bash
+docker exec hapanel-panel /app/panel apikey create --name vpn-expert --scope config
+docker exec hapanel-panel /app/panel apikey list
+```
+
+`create` печатает в stdout только сам ключ (одну строку), в stderr — id, префикс и права. `list` показывает id, имя, префикс, права, даты создания, последнего использования и отзыва; ключи и хеши не печатает. CLI открывает существующую базу из `PANEL_DB_PATH` (или `--db <путь>`), не создаёт её, не запускает HTTP-сервер, опросчики и миграции. Путь — обычный путь к файлу: значения с префиксом `file:` или с символами `?` и `#` команда отклоняет. Соединение получает те же `busy_timeout` (5 с), `synchronous` и `foreign_keys`, что и сервер, поэтому запись рядом с работающей панелью ждёт блокировку, а не падает с `database is locked`; режим журнала (WAL) не меняется. Если новая версия панели ещё не запускалась на этой базе (нет колонки `api_keys.scopes`), команда завершается с ошибкой. Запускайте от пользователя контейнера (`panel`), без `-u root`. Без аргументов бинарник, как и раньше, запускает сервер. Отзыв и удаление ключей — в интерфейсе (**api**).
+
+Колонка `api_keys.scopes TEXT NOT NULL DEFAULT ''` добавляется при старте: схема только расширяется, образ 0.1.75 колонку игнорирует, откат возможен.
+
+`GET /api/v1/config` — снимок настроек только из SQLite панели: без обращений к агентам нод и Remnawave, без записи в БД (кроме `last_used_at` ключа).
+
+```bash
+curl -sS -H "X-API-Key: $HAPANEL_CONFIG_KEY" "https://panel.example/<PANEL_BASE_PATH>/api/v1/config"
+```
+
+Ответ `200`, `Content-Type: application/json`, заголовок `ETag: "<snapshot_hash>"`:
+
+```json
+{
+  "schema": "hapanel.config.v1",
+  "version": "0.1.76",
+  "generated_at": "2026-10-26T12:00:00Z",
+  "snapshot_hash": "sha256:…",
+  "sections": {
+    "hanodes": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "links": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "remna_panels": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "remna_nodes": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "providers": {"status": "ok", "content_hash": "sha256:…", "items": []},
+    "provider_accounts": {"status": "error", "items": []}
+  }
+}
+```
+
+- `version` — версия сборки: `--build-arg PANEL_VERSION=0.1.76` в `deploy/panel/Dockerfile` (`scripts/push-images.sh` с `REBUILD_PANEL=1` передаёт свой `PANEL_VERSION`), без аргумента `dev`. Время — RFC3339 UTC с точностью до секунды.
+- Если запрос секции к БД не удался, у неё `"status":"error"`, `"items":[]` и нет `content_hash`, остальные секции отдаются. `links` получает `error` и при сбое `hanodes` или `remna_nodes`: без них не посчитать `active` и `match`.
+- `content_hash` — SHA-256 канонического JSON массива `items`, `snapshot_hash` — канонического JSON объекта `sections` (вместе со `status` и `content_hash` секций). Канонический JSON в UTF-8: ключи объектов отсортированы на всех уровнях, без пробелов, целые числа как есть; в строках экранируются только `"` и `\`, управляющие символы (`\b`, `\f`, `\n`, `\r`, `\t`, остальные до U+001F — `\u00xx` строчными), а также U+2028 и U+2029 — как `\u2028` и `\u2029` (так всегда пишет кодировщик Go); HTML (`<`, `>`, `&`) и прочий текст не экранируются. В Python побайтно то же самое:
+
+  ```python
+  import hashlib, json
+
+  def canonical(v):
+      s = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+      return s.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode("utf-8")
+
+  body = json.loads(response_bytes)
+  for sec in body["sections"].values():
+      if sec["status"] == "ok":
+          assert sec["content_hash"] == "sha256:" + hashlib.sha256(canonical(sec["items"])).hexdigest()
+  assert body["snapshot_hash"] == "sha256:" + hashlib.sha256(canonical(body["sections"])).hexdigest()
+  ```
+
+  Без `.replace(...)` хеш не совпадёт, если в тексте (имена, `notes`, `alert_note`) есть U+2028/U+2029. `generated_at` в хеш не входит. `backends_observed_at` обновляется с каждым опросом агента (раз в 5 с), поэтому хеш `hanodes` и `snapshot_hash` меняются, пока ноды онлайн.
+
+Поля элементов:
+
+| Секция | Сортировка | Поля |
+|---|---|---|
+| `hanodes` | `id` | `id`, `name`, `country`, `host` (только хост или IP из адреса управления; `""`, если адрес не разобрать), `sort_order`, `created_at`, `listen_ports`, `entrances` (`[{port, backend}]`), `protect` — действующий профиль, как в панели (`client_hello`, `client_hello_delay_sec`, `rate_limit`, `max_conn_per_ip`, `max_rate_per_ip`, `rate_window_sec`, `ru_only`, `synproxy`), `protect_default` (профиль не сохранялся, действует профиль по умолчанию), `remna_panel_id`, `provider_id`, `provider_account_id` (строка или `null`), `traffic_log`, `has_token`, `backends` (`[{backend, name, address, port}]` из последнего снимка агента, без служебных, по `backend`, `name`), `backends_observed_at` (время снимка или `null`) |
+| `links` | `node_id`, `backend`, `server_name` | `node_id`, `backend`, `server_name`, `remna_panel_id`, `remna_address`, `remna_uuid` (нода каталога той же панели с тем же адресом без учёта регистра и пробелов по краям — тот же ключ `remna.AddressKey`, что у панели; иначе `null`), `match` (`unique` — одна такая нода, `none` — ни одной, `ambiguous` — несколько), `active` — то же правило, что у панели при подсчёте онлайна: `true`, если пара `backend` + `server_name` точно совпадает с `backend` + `name` одного из бэкендов в сохранённом снимке ноды, включая служебные; если в сохранённом снимке нет ни одного бэкенда (снимка нет или список пуст), `true` у всех связей ноды; у связи удалённой ноды всегда `false`. Пересчитать `active` по `hanodes.backends` нельзя: там служебные бэкенды скрыты, и снимок только со служебными бэкендами выглядит как `[]`, хотя связи с другими серверами неактивны |
+| `remna_panels` | `id` | `id`, `name`, `has_api_key`, `created_at` |
+| `remna_nodes` | `panel_id`, `uuid` | `panel_id`, `uuid`, `name`, `address`, `config_profile_uuid`, `inbound_uuids`, `inbound_tags`, `protocol` (переопределённый или вычисленный), `protocol_derived`, `protocol_override`, `roles` (`rn_front`, `rn_back`, `hp_front`, `hp_back`, `cdn_back`), `enabled_in_analytics`, `notes`, `alert_note` |
+| `providers` | `id` | `id`, `name`, `created_at` |
+| `provider_accounts` | `id` | `id`, `provider_id`, `created_at` |
+
+Никогда не выгружаются: токены агентов и полный адрес управления нод (схема, порт, путь); статус, `last_seen`, CPU и трафик нод (они в `/api/v1/hanodes`); `base_url` и API-ключи панелей Remnawave; `login` аккаунтов; `login_url` и `favicon_url` провайдеров; `users_online`, `node_ok`, `last_seen_at`, `updated_at` каталога; задачи, команда, olcRTC, API-ключи и история метрик. Пример ответа на тестовых данных: `panel/server/internal/api/testdata/config_v1_example.json`.
 
 Do not commit real secrets (`.env`, tokens, passwords).
