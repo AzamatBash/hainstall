@@ -56,7 +56,9 @@ func (c *Client) FetchUserStatusCounts(ctx context.Context, baseURL, apiKey, tz 
 		q = "?tz=" + url.QueryEscape(tz)
 	}
 	var stats statsBody
-	if err := c.getJSON(ctx, baseURL, apiKey, "/api/system/stats"+q, &stats); err != nil {
+	// Default remna client is 6s; status digests and Pulse sync need longer.
+	rc := c.withTimeout(45 * time.Second)
+	if err := rc.getJSON(ctx, baseURL, apiKey, "/api/system/stats"+q, &stats); err != nil {
 		return UserStatusCounts{}, err
 	}
 	sc := stats.Response.Users.StatusCounts
