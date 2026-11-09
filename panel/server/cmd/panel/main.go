@@ -17,6 +17,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/api"
 	"github.com/azabash/hapanel/panel/internal/auth"
 	"github.com/azabash/hapanel/panel/internal/config"
+	"github.com/azabash/hapanel/panel/internal/remnapulse"
 	"github.com/azabash/hapanel/panel/internal/remnastats"
 	"github.com/azabash/hapanel/panel/internal/snapshot"
 	"github.com/azabash/hapanel/panel/internal/store"
@@ -69,6 +70,7 @@ func main() {
 		secretsKey = cfg.JWTSecret
 	}
 	remnaStats := remnastats.New(st, secretsKey, logger)
+	pulseSync := remnapulse.New(st, secretsKey, logger)
 
 	apiSrv := api.New(st, au, ag, logger, api.Options{
 		SecretsKey:         secretsKey,
@@ -80,6 +82,7 @@ func main() {
 		LLMProxy:           cfg.LLMHTTPProxy,
 		ImagesDir:          imagesDir,
 		RemnaStats:         remnaStats,
+		PulseSync:          pulseSync,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		KBDir:              cfg.KBDir,
 	})
@@ -108,6 +111,7 @@ func main() {
 
 	snapshot.Start(ctx, st, ag, logger)
 	remnaStats.Start(ctx)
+	pulseSync.Start(ctx)
 
 	go func() {
 		logger.Info("panel listening",

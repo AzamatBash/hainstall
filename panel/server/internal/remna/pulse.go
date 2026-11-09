@@ -1,9 +1,6 @@
 package remna
 
 import (
-	"context"
-	"fmt"
-	"sync"
 	"time"
 )
 
@@ -12,7 +9,7 @@ type PulseBucket struct {
 	Key        string  `json:"key"`
 	Label      string  `json:"label"`
 	Partial    bool    `json:"partial,omitempty"`
-	Base       int     `json:"base"` // always current ACTIVE (same for every column)
+	Base       int     `json:"base"` // ACTIVE at period start (from createdAt/expireAt)
 	Inflow     int     `json:"inflow"`
 	Outflow    int     `json:"outflow"`
 	Net        int     `json:"net"`
@@ -23,21 +20,23 @@ type PulseBucket struct {
 
 // PulseSnapshot is the payload for GET …/pulse.
 type PulseSnapshot struct {
-	ActiveNow   int              `json:"active_now"`
-	DisabledNow int              `json:"disabled_now"`
-	LimitedNow  int              `json:"limited_now"`
-	ExpiredNow  int              `json:"expired_now"`
-	TotalUsers  int              `json:"total_users"`
-	TZ          string           `json:"tz"`
-	AsOf        time.Time        `json:"as_of"`
-	WeekDays    []PulseBucket    `json:"week_days"`
-	WeekTotal   PulseBucket      `json:"week_total"`
-	Months      []PulseBucket    `json:"months"`
-	Note        string           `json:"note"`
-	Statuses    UserStatusCounts `json:"statuses"`
+	ActiveNow     int              `json:"active_now"`
+	ActiveByDates int              `json:"active_by_dates"`
+	DisabledNow   int              `json:"disabled_now"`
+	LimitedNow    int              `json:"limited_now"`
+	ExpiredNow    int              `json:"expired_now"`
+	TotalUsers    int              `json:"total_users"`
+	UsersSampled  int              `json:"users_sampled"`
+	TZ            string           `json:"tz"`
+	AsOf          time.Time        `json:"as_of"`
+	WeekDays      []PulseBucket    `json:"week_days"`
+	WeekTotal     PulseBucket      `json:"week_total"`
+	Months        []PulseBucket    `json:"months"`
+	Note          string           `json:"note"`
+	Statuses      UserStatusCounts `json:"statuses"`
 }
 
-type digestJob struct {
+type pulseRange struct {
 	key     string
 	label   string
 	partial bool
@@ -45,11 +44,9 @@ type digestJob struct {
 	end     time.Time
 }
 
-// FetchPulse builds rolling 7-day and calendar-month pulse tables.
-// Percentages use ONLY current Remnawave ACTIVE as denominator.
-// Historical ACTIVE is not available from Remnawave; we do NOT reconstruct
-// base via created/expired (that pulled expired/disabled mass back into «база»).
-func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, monthCount int) (PulseSnapshot, error) {
+// BuildPulseFromSpans computes week/month tables locally from cached spans.
+// No Remnawave HTTP calls.
+func BuildPulseFromSpans(spans []UserSpan, st UserStatusCounts, tz string, monthCount int, asOf time.Time) PulseSnapshot {
 	if monthCount < 1 {
 		monthCount = 5
 	}
@@ -61,21 +58,18 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		loc = time.FixedZone("MSK", 3*3600)
 		tz = "Europe/Moscow"
 	}
-	now := time.Now().In(loc)
-	asOf := now
-
-	rc := c.withTimeout(20 * time.Second)
-	st, err := rc.FetchUserStatusCounts(ctx, baseURL, apiKey, tz)
-	if err != nil {
-		return PulseSnapshot{}, err
+	if asOf.IsZero() {
+		asOf = time.Now().In(loc)
+	} else {
+		asOf = asOf.In(loc)
 	}
-	active := st.Active
+	now := asOf
 
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	weekJobs := make([]digestJob, 7)
+	week := make([]pulseRange, 7)
 	for i := 0; i < 7; i++ {
 		d := todayStart.AddDate(0, 0, -6+i)
-		weekJobs[i] = digestJob{
+		week[i] = pulseRange{
 			key:   d.Format("2006-01-02"),
 			label: formatDayLabel(d),
 			start: d,
@@ -83,7 +77,7 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		}
 	}
 
-	monthJobs := make([]digestJob, monthCount)
+	months := make([]pulseRange, monthCount)
 	curMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 	for i := 0; i < monthCount; i++ {
 		ms := curMonthStart.AddDate(0, -(monthCount-1-i), 0)
@@ -96,7 +90,7 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 			end = todayStart.AddDate(0, 0, 1)
 			label = ms.Format("2006-01") + " (1–" + now.Format("2") + ")"
 		}
-		monthJobs[i] = digestJob{
+		months[i] = pulseRange{
 			key:     ms.Format("2006-01"),
 			label:   label,
 			partial: partial,
@@ -105,73 +99,40 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		}
 	}
 
-	weekDigests, weekErrs := rc.fetchDigestsParallel(ctx, baseURL, apiKey, weekJobs)
-	if err := firstErr(weekErrs); err != nil {
-		return PulseSnapshot{}, fmt.Errorf("week digest: %w", err)
-	}
-	monthDigests, monthErrs := rc.fetchDigestsParallel(ctx, baseURL, apiKey, monthJobs)
-	if err := firstErr(monthErrs); err != nil {
-		return PulseSnapshot{}, fmt.Errorf("month digest: %w", err)
-	}
-
-	weekBuckets := makeBuckets(weekJobs, weekDigests, active)
-	monthBuckets := makeBuckets(monthJobs, monthDigests, active)
-	weekTotal := sumBuckets("7d", "Итого 7д", weekBuckets, active)
+	weekBuckets := bucketsFromSpans(spans, week)
+	monthBuckets := bucketsFromSpans(spans, months)
+	weekTotal := sumBucketsDate("7d", "Итого 7д", weekBuckets)
+	activeByDates := CountActiveAt(spans, now)
 
 	return PulseSnapshot{
-		ActiveNow:   st.Active,
-		DisabledNow: st.Disabled,
-		LimitedNow:  st.Limited,
-		ExpiredNow:  st.Expired,
-		TotalUsers:  st.Total,
-		Statuses:    st,
-		TZ:          tz,
-		AsOf:        asOf,
-		WeekDays:    weekBuckets,
-		WeekTotal:   weekTotal,
-		Months:      monthBuckets,
-		Note: "База для % = только текущий ACTIVE (без DISABLED/LIMITED/EXPIRED). " +
-			"Историческую ACTIVE Remnawave не отдаёт — прошлую базу через created/expired больше не восстанавливаем. " +
-			"Приток/отток = digest createdCount/expiredCount (триалы в потоке).",
-	}, nil
-}
-
-func (c *Client) fetchDigestsParallel(ctx context.Context, baseURL, apiKey string, jobs []digestJob) ([]DigestUsers, []error) {
-	out := make([]DigestUsers, len(jobs))
-	errs := make([]error, len(jobs))
-	var wg sync.WaitGroup
-	for i := range jobs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			d, err := c.FetchDigest(ctx, baseURL, apiKey, jobs[i].start, jobs[i].end)
-			out[i] = d
-			errs[i] = err
-		}(i)
+		ActiveNow:     st.Active,
+		ActiveByDates: activeByDates,
+		DisabledNow:   st.Disabled,
+		LimitedNow:    st.Limited,
+		ExpiredNow:    st.Expired,
+		TotalUsers:    st.Total,
+		UsersSampled:  len(spans),
+		Statuses:      st,
+		TZ:            tz,
+		AsOf:          asOf,
+		WeekDays:      weekBuckets,
+		WeekTotal:     weekTotal,
+		Months:        monthBuckets,
+		Note: "База/приток/отток из локального кэша юзеров (createdAt/expireAt). " +
+			"Remnawave синкается фоном раз в несколько часов, не при каждом открытии Pulse.",
 	}
-	wg.Wait()
-	return out, errs
 }
 
-func firstErr(errs []error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func makeBuckets(jobs []digestJob, digests []DigestUsers, activeBase int) []PulseBucket {
-	out := make([]PulseBucket, len(jobs))
-	for i, j := range jobs {
+func bucketsFromSpans(spans []UserSpan, ranges []pulseRange) []PulseBucket {
+	out := make([]PulseBucket, len(ranges))
+	for i, r := range ranges {
 		b := PulseBucket{
-			Key:     j.key,
-			Label:   j.label,
-			Partial: j.partial,
-			Base:    activeBase,
-			Inflow:  digests[i].CreatedCount,
-			Outflow: digests[i].ExpiredCount,
+			Key:     r.key,
+			Label:   r.label,
+			Partial: r.partial,
+			Base:    CountActiveAt(spans, r.start),
+			Inflow:  CountCreatedIn(spans, r.start, r.end),
+			Outflow: CountExpiredIn(spans, r.start, r.end),
 		}
 		b.Net = b.Inflow - b.Outflow
 		setPcts(&b)
@@ -190,8 +151,12 @@ func setPcts(b *PulseBucket) {
 	b.NetPct = float64(b.Net) / base
 }
 
-func sumBuckets(key, label string, days []PulseBucket, activeBase int) PulseBucket {
-	out := PulseBucket{Key: key, Label: label, Base: activeBase}
+func sumBucketsDate(key, label string, days []PulseBucket) PulseBucket {
+	out := PulseBucket{Key: key, Label: label}
+	if len(days) == 0 {
+		return out
+	}
+	out.Base = days[0].Base
 	for _, d := range days {
 		out.Inflow += d.Inflow
 		out.Outflow += d.Outflow

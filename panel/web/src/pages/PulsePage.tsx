@@ -18,17 +18,23 @@ type PulseBucket = {
 type PulsePayload = {
   panel_id: string
   panel_name: string
-  active_now: number
+  active_now?: number
+  active_by_dates?: number
   disabled_now?: number
   limited_now?: number
   expired_now?: number
   total_users?: number
-  tz: string
-  as_of: string
-  week_days: PulseBucket[]
-  week_total: PulseBucket
-  months: PulseBucket[]
-  note: string
+  users_sampled?: number
+  tz?: string
+  as_of?: string
+  synced_at?: string
+  sync_error?: string
+  syncing?: boolean
+  week_days?: PulseBucket[]
+  week_total?: PulseBucket
+  months?: PulseBucket[]
+  note?: string
+  error?: string
 }
 
 type Tone = 'excellent' | 'ok' | 'weak' | 'bad' | 'neutral'
@@ -116,6 +122,13 @@ function Cell({
   )
 }
 
+function fmtSyncedAt(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })
+}
+
 export default function PulsePage() {
   const [panels, setPanels] = useState<RemnaPanel[]>([])
   const [panelId, setPanelId] = useState('')
@@ -133,23 +146,30 @@ export default function PulsePage() {
     })
   }, [])
 
-  const loadPulse = useCallback(async (id: string) => {
+  const loadPulse = useCallback(async (id: string, opts?: { refresh?: boolean; quiet?: boolean }) => {
     if (!id) {
       setData(null)
       return
     }
-    setLoading(true)
-    setError('')
+    if (!opts?.quiet) {
+      setLoading(true)
+      setError('')
+    }
     try {
+      const q = new URLSearchParams({ months: '5', tz: 'Europe/Moscow' })
+      if (opts?.refresh) q.set('refresh', '1')
       const res = await api<PulsePayload>(
-        `/api/remna-panels/${encodeURIComponent(id)}/pulse?months=5&tz=Europe/Moscow`,
+        `/api/remna-panels/${encodeURIComponent(id)}/pulse?${q}`,
       )
       setData(res)
+      if (res.error && res.syncing) {
+        setError('')
+      }
     } catch (err) {
-      setData(null)
+      if (!opts?.quiet) setData(null)
       setError(err instanceof Error ? err.message : translateError(String(err)))
     } finally {
-      setLoading(false)
+      if (!opts?.quiet) setLoading(false)
     }
   }, [])
 
@@ -175,13 +195,31 @@ export default function PulsePage() {
     else setLoading(false)
   }, [panelId, loadPulse])
 
+  const awaitingFirstSync = Boolean(data?.syncing && !data.week_total)
+  const syncing = Boolean(data?.syncing)
+
+  useEffect(() => {
+    if (!panelId || (!awaitingFirstSync && !syncing)) return
+    const t = window.setInterval(() => {
+      void loadPulse(panelId, { quiet: true })
+    }, awaitingFirstSync ? 4000 : 8000)
+    return () => window.clearInterval(t)
+  }, [panelId, awaitingFirstSync, syncing, loadPulse])
+
   const weekCols = useMemo(() => {
-    if (!data) return []
+    if (!data?.week_days || !data.week_total) return []
     return [...data.week_days, data.week_total]
   }, [data])
 
+  const currentMonth = useMemo(() => {
+    if (!data?.months?.length) return null
+    return data.months[data.months.length - 1]
+  }, [data])
+
+  const hasTable = Boolean(data?.week_total && data.week_days?.length)
+
   const verdict = useMemo(() => {
-    if (!data) return '—'
+    if (!data?.week_total) return '—'
     const t = toneNet(data.week_total.net_pct, 'week')
     const o = toneOutflow(data.week_total.outflow_pct, 'week')
     if (t === 'excellent' && (o === 'excellent' || o === 'ok')) return 'Отлично'
@@ -189,6 +227,16 @@ export default function PulsePage() {
     if (t === 'weak') return 'Слабо'
     return 'Плохо'
   }, [data])
+
+  const monthVerdict = useMemo(() => {
+    if (!currentMonth || currentMonth.partial) return 'Частичный'
+    const t = toneNet(currentMonth.net_pct, 'month')
+    const o = toneOutflow(currentMonth.outflow_pct, 'month')
+    if (t === 'excellent' && (o === 'excellent' || o === 'ok')) return 'Отлично'
+    if (t === 'ok' || t === 'excellent') return 'Нормально'
+    if (t === 'weak') return 'Слабо'
+    return 'Плохо'
+  }, [currentMonth])
 
   return (
     <div className="shell">
@@ -200,21 +248,25 @@ export default function PulsePage() {
           <button
             className="btn btn-sm"
             type="button"
-            disabled={!panelId || loading}
-            onClick={() => void loadPulse(panelId)}
+            disabled={!panelId || loading || syncing}
+            onClick={() => void loadPulse(panelId, { refresh: true })}
           >
-            Обновить
+            {syncing ? 'Синхронизация…' : 'Синхронизировать'}
           </button>
         </div>
       </header>
 
       <section className="panel pulse-panel">
         <p className="stats-lead">
-          Приток / отток / чистый · % только от текущего ACTIVE (disabled/expired не в базе) · триалы
-          в потоке · неделя со сдвигом, месяцы календарные
+          База на дату = createdAt &lt; T и expireAt &gt; T · приток/отток по этим же датам · DISABLED
+          вне базы · неделя со сдвигом, месяцы календарные · Remnawave только в фоне (раз в 6 ч)
         </p>
 
         {error && <p className="error">{error}</p>}
+        {data?.sync_error ? <p className="error">Синхронизация: {data.sync_error}</p> : null}
+        {awaitingFirstSync ? (
+          <p className="muted">{data?.error || 'Первая синхронизация Pulse — данные появятся через пару минут.'}</p>
+        ) : null}
 
         {panels.length === 0 && !loading ? (
           <p className="muted">
@@ -237,9 +289,11 @@ export default function PulsePage() {
               </div>
             </div>
 
-            {loading && <p className="muted">Считаем digest Remnawave…</p>}
+            {loading && !hasTable && !awaitingFirstSync && (
+              <p className="muted">Читаем локальный кэш Pulse…</p>
+            )}
 
-            {data && !loading && (
+            {hasTable && data?.week_total && (
               <>
                 <div className="pulse-kpis" aria-label="Итог 7 дней">
                   <div className="pulse-kpi">
@@ -250,7 +304,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.inflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">% от текущего ACTIVE · норма нед. 1.2–1.9%</div>
+                    <div className="pulse-kpi-sub">% от базы на старт окна · норма нед. 1.2–1.9%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Отток · 7д</div>
@@ -260,7 +314,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.outflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">churn от ACTIVE · норма нед. 0.7–1.6%</div>
+                    <div className="pulse-kpi-sub">expireAt за 7д · норма нед. 0.7–1.6%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Чистый · 7д</div>
@@ -268,24 +322,25 @@ export default function PulsePage() {
                       {fmtNet(data.week_total.net)}{' '}
                       <span className="pulse-kpi-pct">{fmtPct(data.week_total.net_pct, true)}</span>
                     </div>
-                    <div className="pulse-kpi-sub">% от ACTIVE · норма нед. 0…+0.7%</div>
+                    <div className="pulse-kpi-sub">% от базы старта окна · норма 0…+0.7%</div>
                   </div>
                   <div className="pulse-kpi">
-                    <div className="pulse-kpi-label">База ACTIVE</div>
-                    <div className="pulse-kpi-value">{fmtInt(data.active_now)}</div>
-                    <div className="pulse-kpi-sub">
-                      без disabled/limited/expired · оценка: {verdict}
-                    </div>
+                    <div className="pulse-kpi-label">База на старт 7д</div>
+                    <div className="pulse-kpi-value">{fmtInt(data.week_total.base)}</div>
+                    <div className="pulse-kpi-sub">оценка: {verdict}</div>
                   </div>
                 </div>
 
                 <p className="muted pulse-status-line">
-                  Remnawave сейчас: ACTIVE {fmtInt(data.active_now)}
+                  Remnawave снимок: ACTIVE {fmtInt(data.active_now ?? 0)}
+                  {data.active_by_dates != null ? ` · по датам сейчас ${fmtInt(data.active_by_dates)}` : ''}
                   {data.disabled_now != null ? ` · DISABLED ${fmtInt(data.disabled_now)}` : ''}
                   {data.limited_now != null ? ` · LIMITED ${fmtInt(data.limited_now)}` : ''}
                   {data.expired_now != null ? ` · EXPIRED ${fmtInt(data.expired_now)}` : ''}
-                  {data.total_users != null ? ` · всего ${fmtInt(data.total_users)}` : ''}
-                  {` · ${data.tz}`}
+                  {data.users_sampled != null ? ` · юзеров в расчёте ${fmtInt(data.users_sampled)}` : ''}
+                  {data.tz ? ` · ${data.tz}` : ''}
+                  {data.synced_at ? ` · синк ${fmtSyncedAt(data.synced_at)}` : ''}
+                  {syncing ? ' · обновление…' : ''}
                 </p>
 
                 <h2 className="pulse-section-title">Неделя · 7 дней со сдвигом</h2>
@@ -302,6 +357,12 @@ export default function PulsePage() {
                       </tr>
                     </thead>
                     <tbody>
+                      <tr>
+                        <th scope="row">База на начало</th>
+                        {weekCols.map((c) => (
+                          <Cell key={c.key}>{fmtInt(c.base)}</Cell>
+                        ))}
+                      </tr>
                       <tr>
                         <th scope="row">Приток, шт</th>
                         {weekCols.map((c) => (
@@ -362,33 +423,104 @@ export default function PulsePage() {
                   </table>
                 </div>
 
+                <h2 className="pulse-section-title">
+                  Месяц · {currentMonth ? currentMonth.label : 'текущий'}
+                </h2>
+                {currentMonth && (
+                  <div className="pulse-kpis" aria-label="Итог текущего месяца">
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Приток · месяц</div>
+                      <div className="pulse-kpi-value">
+                        {fmtInt(currentMonth.inflow)}{' '}
+                        <span
+                          className={`pulse-kpi-pct ${
+                            currentMonth.partial
+                              ? 'pulse-neutral'
+                              : `pulse-${toneInflow(currentMonth.inflow_pct, 'month')}`
+                          }`}
+                        >
+                          {fmtPct(currentMonth.inflow_pct)}
+                        </span>
+                      </div>
+                      <div className="pulse-kpi-sub">
+                        % от базы на 1-е · норма мес. 5–8%
+                        {currentMonth.partial ? ' · месяц ещё идёт' : ''}
+                      </div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Отток · месяц</div>
+                      <div className="pulse-kpi-value">
+                        {fmtInt(currentMonth.outflow)}{' '}
+                        <span
+                          className={`pulse-kpi-pct ${
+                            currentMonth.partial
+                              ? 'pulse-neutral'
+                              : `pulse-${toneOutflow(currentMonth.outflow_pct, 'month')}`
+                          }`}
+                        >
+                          {fmtPct(currentMonth.outflow_pct)}
+                        </span>
+                      </div>
+                      <div className="pulse-kpi-sub">
+                        churn · норма мес. 3–7% (avg ~5.5%)
+                        {currentMonth.partial ? ' · без месячной окраски' : ''}
+                      </div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Чистый · месяц</div>
+                      <div
+                        className={`pulse-kpi-value ${
+                          currentMonth.partial
+                            ? ''
+                            : `pulse-${toneNet(currentMonth.net_pct, 'month')}`
+                        }`}
+                      >
+                        {fmtNet(currentMonth.net)}{' '}
+                        <span className="pulse-kpi-pct">{fmtPct(currentMonth.net_pct, true)}</span>
+                      </div>
+                      <div className="pulse-kpi-sub">норма мес. 0…+3%</div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">База на 1-е</div>
+                      <div className="pulse-kpi-value">{fmtInt(currentMonth.base)}</div>
+                      <div className="pulse-kpi-sub">оценка: {monthVerdict}</div>
+                    </div>
+                  </div>
+                )}
+
                 <h2 className="pulse-section-title">Месяцы · календарь без сдвига</h2>
                 <div className="table-wrap pulse-table-wrap">
                   <table className="pulse-table">
                     <thead>
                       <tr>
                         <th>Метрика</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <th key={m.key}>{m.label}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
+                        <th scope="row">База на начало</th>
+                        {(data.months ?? []).map((m) => (
+                          <Cell key={m.key}>{fmtInt(m.base)}</Cell>
+                        ))}
+                      </tr>
+                      <tr>
                         <th scope="row">Приток, шт</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell key={m.key}>{fmtInt(m.inflow)}</Cell>
                         ))}
                       </tr>
                       <tr>
                         <th scope="row">Отток, шт</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell key={m.key}>{fmtInt(m.outflow)}</Cell>
                         ))}
                       </tr>
                       <tr>
                         <th scope="row">Чистый, шт</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell key={m.key} tone={toneNetAbs(m.net)} strong>
                             {fmtNet(m.net)}
                           </Cell>
@@ -396,7 +528,7 @@ export default function PulsePage() {
                       </tr>
                       <tr>
                         <th scope="row">Приток, %</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell
                             key={m.key}
                             tone={m.partial ? 'neutral' : toneInflow(m.inflow_pct, 'month')}
@@ -408,7 +540,7 @@ export default function PulsePage() {
                       </tr>
                       <tr>
                         <th scope="row">Отток (churn), %</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell
                             key={m.key}
                             tone={m.partial ? 'neutral' : toneOutflow(m.outflow_pct, 'month')}
@@ -420,7 +552,7 @@ export default function PulsePage() {
                       </tr>
                       <tr>
                         <th scope="row">Чистый, %</th>
-                        {data.months.map((m) => (
+                        {(data.months ?? []).map((m) => (
                           <Cell
                             key={m.key}
                             tone={m.partial ? 'neutral' : toneNet(m.net_pct, 'month')}
@@ -464,8 +596,8 @@ export default function PulsePage() {
                   </div>
                   <p className="muted pulse-note">
                     Avg churn VPN ~5.5%/мес · solid B2C &lt;5%. Неделя ≈ ÷4.3, день ≈ ÷30. Неполный
-                    месяц без месячной окраски %. Знаменатель везде — текущий ACTIVE, не total и не
-                    реконструкция через expired. {data.note}
+                    месяц без месячной окраски %. База каждого дня/месяца своя — по expireAt/createdAt.
+                    {data.note ?? ''}
                   </p>
                 </aside>
               </>

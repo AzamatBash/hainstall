@@ -20,6 +20,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/protect"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/remna"
+	"github.com/azabash/hapanel/panel/internal/remnapulse"
 	"github.com/azabash/hapanel/panel/internal/remnastats"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
@@ -34,6 +35,7 @@ type Options struct {
 	LLMProxy           string
 	ImagesDir          string
 	RemnaStats         *remnastats.Poller
+	PulseSync          *remnapulse.Syncer
 	InsecureSkipVerify bool
 	OlcrtcAgent        *olcnode.Client
 	KBDir              string // PANEL_KB_DIR — knowledge base for GET /api/v1/kb; empty = none
@@ -48,6 +50,7 @@ type Server struct {
 	ops        *opsagent.Runner
 	remnaStats *remnastats.Poller
 	kb         *kb.Loader
+	pulseSync  *remnapulse.Syncer
 	secretsKey string
 	apiKey     string
 	imagesDir  string
@@ -102,6 +105,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		remnaStats:           opt.RemnaStats,
 		kb:                   kb.NewLoader(opt.KBDir, logger),
+		pulseSync:            opt.PulseSync,
 		secretsKey:           opt.SecretsKey,
 		apiKey:               strings.TrimSpace(opt.APIKey),
 		imagesDir:            opt.ImagesDir,
