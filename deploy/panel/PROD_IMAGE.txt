@@ -1,8 +1,8 @@
 # Exact production image (hapanel-panel)
 # Config ID (docker image id):
-sha256:35fcc2339ceeb7f3585bd0437f9fb2224a2845f585e10f1fe09bba29901e26ce
+sha256:57bc72adc14271d0a3926328185077566fb3a18453bcf20c749fbb18b4d8d358
 # Hub digest:
-sha256:543add8d3a6722631f26fca034b4e5ceb15c3d73ce5683b3a7f08407406a8cfe
-# Tag on prod: azamatbash/hapanel:0.1.85
+sha256:c04e9b5cf2e94dbf502e1bd4366c15989c6259c8f07ef7378455356c52281f55
+# Tag on prod: azamatbash/hapanel:0.1.86
 # Synced:
-2026-11-09T23:21:16Z
+2026-11-09T23:35:00Z
