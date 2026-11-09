@@ -22,6 +22,15 @@ type digestBody struct {
 	} `json:"response"`
 }
 
+// UserStatusCounts is the live Remnawave user breakdown from GET /api/system/stats.
+type UserStatusCounts struct {
+	Active   int
+	Disabled int
+	Limited  int
+	Expired  int
+	Total    int
+}
+
 // FetchDigest loads created/expired counts for half-open range [start, end).
 func (c *Client) FetchDigest(ctx context.Context, baseURL, apiKey string, start, end time.Time) (DigestUsers, error) {
 	if !start.Before(end) {
@@ -40,15 +49,22 @@ func (c *Client) FetchDigest(ctx context.Context, baseURL, apiKey string, start,
 	}, nil
 }
 
-// FetchActiveUsers returns current ACTIVE status count from GET /api/system/stats.
-func (c *Client) FetchActiveUsers(ctx context.Context, baseURL, apiKey, tz string) (int, error) {
+// FetchUserStatusCounts returns live statusCounts + totalUsers.
+func (c *Client) FetchUserStatusCounts(ctx context.Context, baseURL, apiKey, tz string) (UserStatusCounts, error) {
 	q := ""
 	if tz != "" {
 		q = "?tz=" + url.QueryEscape(tz)
 	}
 	var stats statsBody
 	if err := c.getJSON(ctx, baseURL, apiKey, "/api/system/stats"+q, &stats); err != nil {
-		return 0, err
+		return UserStatusCounts{}, err
 	}
-	return int(stats.Response.Users.StatusCounts["ACTIVE"]), nil
+	sc := stats.Response.Users.StatusCounts
+	return UserStatusCounts{
+		Active:   int(sc["ACTIVE"]),
+		Disabled: int(sc["DISABLED"]),
+		Limited:  int(sc["LIMITED"]),
+		Expired:  int(sc["EXPIRED"]),
+		Total:    int(stats.Response.Users.TotalUsers),
+	}, nil
 }

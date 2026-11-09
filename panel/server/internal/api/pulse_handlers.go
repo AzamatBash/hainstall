@@ -54,15 +54,19 @@ func (s *Server) handleRemnaPanelPulse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"panel_id":    id,
-		"panel_name":  name,
-		"active_now":  pulse.ActiveNow,
-		"tz":          pulse.TZ,
-		"as_of":       pulse.AsOf.Format(time.RFC3339),
-		"week_days":   pulse.WeekDays,
-		"week_total":  pulse.WeekTotal,
-		"months":      pulse.Months,
-		"note":        pulse.Note,
+		"panel_id":     id,
+		"panel_name":   name,
+		"active_now":   pulse.ActiveNow,
+		"disabled_now": pulse.DisabledNow,
+		"limited_now":  pulse.LimitedNow,
+		"expired_now":  pulse.ExpiredNow,
+		"total_users":  pulse.TotalUsers,
+		"tz":           pulse.TZ,
+		"as_of":        pulse.AsOf.Format(time.RFC3339),
+		"week_days":    pulse.WeekDays,
+		"week_total":   pulse.WeekTotal,
+		"months":       pulse.Months,
+		"note":         pulse.Note,
 		"scale": map[string]any{
 			"monthly": map[string]any{
 				"outflow": []any{

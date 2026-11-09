@@ -9,27 +9,32 @@ import (
 
 // PulseBucket is one day or month column for the Pulse table.
 type PulseBucket struct {
-	Key       string  `json:"key"`
-	Label     string  `json:"label"`
-	Partial   bool    `json:"partial,omitempty"`
-	Base      int     `json:"base"`
-	Inflow    int     `json:"inflow"`
-	Outflow   int     `json:"outflow"`
-	Net       int     `json:"net"`
-	InflowPct float64 `json:"inflow_pct"`
+	Key        string  `json:"key"`
+	Label      string  `json:"label"`
+	Partial    bool    `json:"partial,omitempty"`
+	Base       int     `json:"base"` // always current ACTIVE (same for every column)
+	Inflow     int     `json:"inflow"`
+	Outflow    int     `json:"outflow"`
+	Net        int     `json:"net"`
+	InflowPct  float64 `json:"inflow_pct"`
 	OutflowPct float64 `json:"outflow_pct"`
-	NetPct    float64 `json:"net_pct"`
+	NetPct     float64 `json:"net_pct"`
 }
 
 // PulseSnapshot is the payload for GET …/pulse.
 type PulseSnapshot struct {
-	ActiveNow int           `json:"active_now"`
-	TZ        string        `json:"tz"`
-	AsOf      time.Time     `json:"as_of"`
-	WeekDays  []PulseBucket `json:"week_days"`
-	WeekTotal PulseBucket   `json:"week_total"`
-	Months    []PulseBucket `json:"months"`
-	Note      string        `json:"note"`
+	ActiveNow   int              `json:"active_now"`
+	DisabledNow int              `json:"disabled_now"`
+	LimitedNow  int              `json:"limited_now"`
+	ExpiredNow  int              `json:"expired_now"`
+	TotalUsers  int              `json:"total_users"`
+	TZ          string           `json:"tz"`
+	AsOf        time.Time        `json:"as_of"`
+	WeekDays    []PulseBucket    `json:"week_days"`
+	WeekTotal   PulseBucket      `json:"week_total"`
+	Months      []PulseBucket    `json:"months"`
+	Note        string           `json:"note"`
+	Statuses    UserStatusCounts `json:"statuses"`
 }
 
 type digestJob struct {
@@ -41,8 +46,9 @@ type digestJob struct {
 }
 
 // FetchPulse builds rolling 7-day and calendar-month pulse tables.
-// Base at period start is reconstructed from current ACTIVE walking
-// backwards via created−expired (Remnawave has no historical active series).
+// Percentages use ONLY current Remnawave ACTIVE as denominator.
+// Historical ACTIVE is not available from Remnawave; we do NOT reconstruct
+// base via created/expired (that pulled expired/disabled mass back into «база»).
 func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, monthCount int) (PulseSnapshot, error) {
 	if monthCount < 1 {
 		monthCount = 5
@@ -59,12 +65,12 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 	asOf := now
 
 	rc := c.withTimeout(20 * time.Second)
-	active, err := rc.FetchActiveUsers(ctx, baseURL, apiKey, tz)
+	st, err := rc.FetchUserStatusCounts(ctx, baseURL, apiKey, tz)
 	if err != nil {
 		return PulseSnapshot{}, err
 	}
+	active := st.Active
 
-	// --- week: last 7 local calendar days ending today ---
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	weekJobs := make([]digestJob, 7)
 	for i := 0; i < 7; i++ {
@@ -77,7 +83,6 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		}
 	}
 
-	// --- months: calendar months ending with current (partial) ---
 	monthJobs := make([]digestJob, monthCount)
 	curMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 	for i := 0; i < monthCount; i++ {
@@ -88,7 +93,7 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		end := me
 		if !ms.Before(curMonthStart) {
 			partial = true
-			end = todayStart.AddDate(0, 0, 1) // through end of today
+			end = todayStart.AddDate(0, 0, 1)
 			label = ms.Format("2006-01") + " (1–" + now.Format("2") + ")"
 		}
 		monthJobs[i] = digestJob{
@@ -109,22 +114,25 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		return PulseSnapshot{}, fmt.Errorf("month digest: %w", err)
 	}
 
-	weekBuckets := makeBuckets(weekJobs, weekDigests)
-	monthBuckets := makeBuckets(monthJobs, monthDigests)
-
-	fillBasesFromActive(weekBuckets, active)
-	fillBasesFromActive(monthBuckets, active)
-
-	weekTotal := sumBuckets("7d", "Итого 7д", weekBuckets)
+	weekBuckets := makeBuckets(weekJobs, weekDigests, active)
+	monthBuckets := makeBuckets(monthJobs, monthDigests, active)
+	weekTotal := sumBuckets("7d", "Итого 7д", weekBuckets, active)
 
 	return PulseSnapshot{
-		ActiveNow: active,
-		TZ:        tz,
-		AsOf:      asOf,
-		WeekDays:  weekBuckets,
-		WeekTotal: weekTotal,
-		Months:    monthBuckets,
-		Note:      "База на начало периода восстановлена от текущего ACTIVE назад по digest (создано−истекло). Remnawave не хранит историю active. Триалы в притоке и оттоке.",
+		ActiveNow:   st.Active,
+		DisabledNow: st.Disabled,
+		LimitedNow:  st.Limited,
+		ExpiredNow:  st.Expired,
+		TotalUsers:  st.Total,
+		Statuses:    st,
+		TZ:          tz,
+		AsOf:        asOf,
+		WeekDays:    weekBuckets,
+		WeekTotal:   weekTotal,
+		Months:      monthBuckets,
+		Note: "База для % = только текущий ACTIVE (без DISABLED/LIMITED/EXPIRED). " +
+			"Историческую ACTIVE Remnawave не отдаёт — прошлую базу через created/expired больше не восстанавливаем. " +
+			"Приток/отток = digest createdCount/expiredCount (триалы в потоке).",
 	}, nil
 }
 
@@ -154,38 +162,22 @@ func firstErr(errs []error) error {
 	return nil
 }
 
-func makeBuckets(jobs []digestJob, digests []DigestUsers) []PulseBucket {
+func makeBuckets(jobs []digestJob, digests []DigestUsers, activeBase int) []PulseBucket {
 	out := make([]PulseBucket, len(jobs))
 	for i, j := range jobs {
-		b := PulseBucket{Key: j.key, Label: j.label, Partial: j.partial}
-		b.Inflow = digests[i].CreatedCount
-		b.Outflow = digests[i].ExpiredCount
+		b := PulseBucket{
+			Key:     j.key,
+			Label:   j.label,
+			Partial: j.partial,
+			Base:    activeBase,
+			Inflow:  digests[i].CreatedCount,
+			Outflow: digests[i].ExpiredCount,
+		}
 		b.Net = b.Inflow - b.Outflow
+		setPcts(&b)
 		out[i] = b
 	}
 	return out
-}
-
-// fillBasesFromActive walks newest→oldest: start[i] = start[i+1] − inflow[i] + outflow[i],
-// with start[last] = activeNow − inflow[last] + outflow[last].
-func fillBasesFromActive(buckets []PulseBucket, activeNow int) {
-	if len(buckets) == 0 {
-		return
-	}
-	n := len(buckets)
-	buckets[n-1].Base = activeNow - buckets[n-1].Inflow + buckets[n-1].Outflow
-	if buckets[n-1].Base < 0 {
-		buckets[n-1].Base = 0
-	}
-	for i := n - 2; i >= 0; i-- {
-		buckets[i].Base = buckets[i+1].Base - buckets[i].Inflow + buckets[i].Outflow
-		if buckets[i].Base < 0 {
-			buckets[i].Base = 0
-		}
-	}
-	for i := range buckets {
-		setPcts(&buckets[i])
-	}
 }
 
 func setPcts(b *PulseBucket) {
@@ -198,12 +190,8 @@ func setPcts(b *PulseBucket) {
 	b.NetPct = float64(b.Net) / base
 }
 
-func sumBuckets(key, label string, days []PulseBucket) PulseBucket {
-	out := PulseBucket{Key: key, Label: label}
-	if len(days) == 0 {
-		return out
-	}
-	out.Base = days[0].Base
+func sumBuckets(key, label string, days []PulseBucket, activeBase int) PulseBucket {
+	out := PulseBucket{Key: key, Label: label, Base: activeBase}
 	for _, d := range days {
 		out.Inflow += d.Inflow
 		out.Outflow += d.Outflow

@@ -19,6 +19,10 @@ type PulsePayload = {
   panel_id: string
   panel_name: string
   active_now: number
+  disabled_now?: number
+  limited_now?: number
+  expired_now?: number
+  total_users?: number
   tz: string
   as_of: string
   week_days: PulseBucket[]
@@ -206,8 +210,8 @@ export default function PulsePage() {
 
       <section className="panel pulse-panel">
         <p className="stats-lead">
-          Приток / отток / чистый прирост · % от активной базы · триалы в потоке · неделя со сдвигом,
-          месяцы календарные
+          Приток / отток / чистый · % только от текущего ACTIVE (disabled/expired не в базе) · триалы
+          в потоке · неделя со сдвигом, месяцы календарные
         </p>
 
         {error && <p className="error">{error}</p>}
@@ -246,7 +250,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.inflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">от базы · норма нед. 1.2–1.9%</div>
+                    <div className="pulse-kpi-sub">% от текущего ACTIVE · норма нед. 1.2–1.9%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Отток · 7д</div>
@@ -256,7 +260,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.outflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">churn · норма нед. 0.7–1.6%</div>
+                    <div className="pulse-kpi-sub">churn от ACTIVE · норма нед. 0.7–1.6%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Чистый · 7д</div>
@@ -264,18 +268,25 @@ export default function PulsePage() {
                       {fmtNet(data.week_total.net)}{' '}
                       <span className="pulse-kpi-pct">{fmtPct(data.week_total.net_pct, true)}</span>
                     </div>
-                    <div className="pulse-kpi-sub">от базы · норма нед. 0…+0.7%</div>
+                    <div className="pulse-kpi-sub">% от ACTIVE · норма нед. 0…+0.7%</div>
                   </div>
                   <div className="pulse-kpi">
-                    <div className="pulse-kpi-label">Оценка недели</div>
-                    <div className={`pulse-kpi-value pulse-${toneNet(data.week_total.net_pct, 'week')}`}>
-                      {verdict}
-                    </div>
+                    <div className="pulse-kpi-label">База ACTIVE</div>
+                    <div className="pulse-kpi-value">{fmtInt(data.active_now)}</div>
                     <div className="pulse-kpi-sub">
-                      база сейчас {fmtInt(data.active_now)} · {data.tz}
+                      без disabled/limited/expired · оценка: {verdict}
                     </div>
                   </div>
                 </div>
+
+                <p className="muted pulse-status-line">
+                  Remnawave сейчас: ACTIVE {fmtInt(data.active_now)}
+                  {data.disabled_now != null ? ` · DISABLED ${fmtInt(data.disabled_now)}` : ''}
+                  {data.limited_now != null ? ` · LIMITED ${fmtInt(data.limited_now)}` : ''}
+                  {data.expired_now != null ? ` · EXPIRED ${fmtInt(data.expired_now)}` : ''}
+                  {data.total_users != null ? ` · всего ${fmtInt(data.total_users)}` : ''}
+                  {` · ${data.tz}`}
+                </p>
 
                 <h2 className="pulse-section-title">Неделя · 7 дней со сдвигом</h2>
                 <div className="table-wrap pulse-table-wrap">
@@ -291,12 +302,6 @@ export default function PulsePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <th scope="row">База на начало</th>
-                        {weekCols.map((c) => (
-                          <Cell key={c.key}>{fmtInt(c.base)}</Cell>
-                        ))}
-                      </tr>
                       <tr>
                         <th scope="row">Приток, шт</th>
                         {weekCols.map((c) => (
@@ -369,12 +374,6 @@ export default function PulsePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <th scope="row">База на начало</th>
-                        {data.months.map((m) => (
-                          <Cell key={m.key}>{fmtInt(m.base)}</Cell>
-                        ))}
-                      </tr>
                       <tr>
                         <th scope="row">Приток, шт</th>
                         {data.months.map((m) => (
@@ -465,7 +464,8 @@ export default function PulsePage() {
                   </div>
                   <p className="muted pulse-note">
                     Avg churn VPN ~5.5%/мес · solid B2C &lt;5%. Неделя ≈ ÷4.3, день ≈ ÷30. Неполный
-                    месяц без месячной окраски %. {data.note}
+                    месяц без месячной окраски %. Знаменатель везде — текущий ACTIVE, не total и не
+                    реконструкция через expired. {data.note}
                   </p>
                 </aside>
               </>

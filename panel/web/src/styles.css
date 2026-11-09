@@ -5815,3 +5815,8 @@ button.task-image-open {
     gap: 0.15rem;
   }
 }
+
+.pulse-status-line {
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+}
