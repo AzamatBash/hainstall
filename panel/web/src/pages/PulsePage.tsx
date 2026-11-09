@@ -19,10 +19,12 @@ type PulsePayload = {
   panel_id: string
   panel_name: string
   active_now: number
+  active_by_dates?: number
   disabled_now?: number
   limited_now?: number
   expired_now?: number
   total_users?: number
+  users_sampled?: number
   tz: string
   as_of: string
   week_days: PulseBucket[]
@@ -210,8 +212,8 @@ export default function PulsePage() {
 
       <section className="panel pulse-panel">
         <p className="stats-lead">
-          Приток / отток / чистый · % только от текущего ACTIVE (disabled/expired не в базе) · триалы
-          в потоке · неделя со сдвигом, месяцы календарные
+          База на дату = createdAt &lt; T и expireAt &gt; T · приток/отток по этим же датам · DISABLED
+          вне базы · неделя со сдвигом, месяцы календарные
         </p>
 
         {error && <p className="error">{error}</p>}
@@ -237,7 +239,9 @@ export default function PulsePage() {
               </div>
             </div>
 
-            {loading && <p className="muted">Считаем digest Remnawave…</p>}
+            {loading && (
+              <p className="muted">Грузим пользователей Remnawave и считаем базу по датам (первый раз может занять минуту)…</p>
+            )}
 
             {data && !loading && (
               <>
@@ -250,7 +254,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.inflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">% от текущего ACTIVE · норма нед. 1.2–1.9%</div>
+                    <div className="pulse-kpi-sub">% от базы на старт окна · норма нед. 1.2–1.9%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Отток · 7д</div>
@@ -260,7 +264,7 @@ export default function PulsePage() {
                         {fmtPct(data.week_total.outflow_pct)}
                       </span>
                     </div>
-                    <div className="pulse-kpi-sub">churn от ACTIVE · норма нед. 0.7–1.6%</div>
+                    <div className="pulse-kpi-sub">expireAt за 7д · норма нед. 0.7–1.6%</div>
                   </div>
                   <div className="pulse-kpi">
                     <div className="pulse-kpi-label">Чистый · 7д</div>
@@ -268,23 +272,22 @@ export default function PulsePage() {
                       {fmtNet(data.week_total.net)}{' '}
                       <span className="pulse-kpi-pct">{fmtPct(data.week_total.net_pct, true)}</span>
                     </div>
-                    <div className="pulse-kpi-sub">% от ACTIVE · норма нед. 0…+0.7%</div>
+                    <div className="pulse-kpi-sub">% от базы старта окна · норма 0…+0.7%</div>
                   </div>
                   <div className="pulse-kpi">
-                    <div className="pulse-kpi-label">База ACTIVE</div>
-                    <div className="pulse-kpi-value">{fmtInt(data.active_now)}</div>
-                    <div className="pulse-kpi-sub">
-                      без disabled/limited/expired · оценка: {verdict}
-                    </div>
+                    <div className="pulse-kpi-label">База на старт 7д</div>
+                    <div className="pulse-kpi-value">{fmtInt(data.week_total.base)}</div>
+                    <div className="pulse-kpi-sub">оценка: {verdict}</div>
                   </div>
                 </div>
 
                 <p className="muted pulse-status-line">
                   Remnawave сейчас: ACTIVE {fmtInt(data.active_now)}
+                  {data.active_by_dates != null ? ` · по датам сейчас ${fmtInt(data.active_by_dates)}` : ''}
                   {data.disabled_now != null ? ` · DISABLED ${fmtInt(data.disabled_now)}` : ''}
                   {data.limited_now != null ? ` · LIMITED ${fmtInt(data.limited_now)}` : ''}
                   {data.expired_now != null ? ` · EXPIRED ${fmtInt(data.expired_now)}` : ''}
-                  {data.total_users != null ? ` · всего ${fmtInt(data.total_users)}` : ''}
+                  {data.users_sampled != null ? ` · юзеров в расчёте ${fmtInt(data.users_sampled)}` : ''}
                   {` · ${data.tz}`}
                 </p>
 
@@ -302,6 +305,12 @@ export default function PulsePage() {
                       </tr>
                     </thead>
                     <tbody>
+                      <tr>
+                        <th scope="row">База на начало</th>
+                        {weekCols.map((c) => (
+                          <Cell key={c.key}>{fmtInt(c.base)}</Cell>
+                        ))}
+                      </tr>
                       <tr>
                         <th scope="row">Приток, шт</th>
                         {weekCols.map((c) => (
@@ -374,6 +383,12 @@ export default function PulsePage() {
                       </tr>
                     </thead>
                     <tbody>
+                      <tr>
+                        <th scope="row">База на начало</th>
+                        {data.months.map((m) => (
+                          <Cell key={m.key}>{fmtInt(m.base)}</Cell>
+                        ))}
+                      </tr>
                       <tr>
                         <th scope="row">Приток, шт</th>
                         {data.months.map((m) => (
@@ -464,8 +479,8 @@ export default function PulsePage() {
                   </div>
                   <p className="muted pulse-note">
                     Avg churn VPN ~5.5%/мес · solid B2C &lt;5%. Неделя ≈ ÷4.3, день ≈ ÷30. Неполный
-                    месяц без месячной окраски %. Знаменатель везде — текущий ACTIVE, не total и не
-                    реконструкция через expired. {data.note}
+                    месяц без месячной окраски %. База каждого дня/месяца своя — по expireAt/createdAt.
+                    {data.note}
                   </p>
                 </aside>
               </>

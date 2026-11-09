@@ -69,6 +69,14 @@ type Server struct {
 	homeTrafficMu sync.Mutex
 	homeTrafficAt time.Time
 	homeTraffic   *homeTrafficDTO
+
+	pulseSpansMu sync.Mutex
+	pulseSpans   map[string]pulseSpansCache
+}
+
+type pulseSpansCache struct {
+	at    time.Time
+	spans []remna.UserSpan
 }
 
 func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logger, opt Options) *Server {
@@ -108,6 +116,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		remnaPanelNodesCache: make(map[string]remnaPanelNodesCacheEntry),
 		remnaOnlineByNode:    make(map[string]remnaOnlineCacheEntry),
 		remnaRefreshInflight: make(map[string]bool),
+		pulseSpans:           make(map[string]pulseSpansCache),
 	}
 	s.ops.OnNodeReady = func(nodeID string) {
 		n, err := s.store.GetNode(nodeID)
