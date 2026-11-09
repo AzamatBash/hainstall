@@ -1,0 +1,4 @@
+Заголовок: Статья (со скобками) в заголовке
+
+bash
+curl -fsSL https://example.com/install.sh
