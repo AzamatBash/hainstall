@@ -38,6 +38,8 @@ WORKDIR /app
 COPY --from=server /out/panel /app/panel
 COPY --from=olcnode /out/olcnode /app/olcnode
 COPY --from=web /web/dist /app/web/dist
+# Knowledge base for GET /api/v1/kb (PANEL_KB_DIR): the same panel/kb the UI is built from.
+COPY panel/kb /app/kb
 RUN mkdir -p /app/data && chown -R panel:panel /app
 USER panel
 ENV PANEL_LISTEN=:3080 \

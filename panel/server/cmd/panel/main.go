@@ -81,6 +81,7 @@ func main() {
 		ImagesDir:          imagesDir,
 		RemnaStats:         remnaStats,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		KBDir:              cfg.KBDir,
 	})
 
 	mux := http.NewServeMux()
@@ -113,6 +114,7 @@ func main() {
 			"addr", cfg.ListenAddr,
 			"db", cfg.DBPath,
 			"static", cfg.StaticDir,
+			"kb", cfg.KBDir,
 			"base_path", cfg.BasePath,
 			"insecure_skip_verify", cfg.InsecureSkipVerify,
 			"utls_hello", ag.HelloName(),
