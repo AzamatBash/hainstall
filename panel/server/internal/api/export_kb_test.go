@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,8 +20,16 @@ import (
 
 	"github.com/azabash/hapanel/panel/internal/agent"
 	"github.com/azabash/hapanel/panel/internal/auth"
+	"github.com/azabash/hapanel/panel/internal/canonjson"
 	"github.com/azabash/hapanel/panel/internal/kb"
 	"github.com/azabash/hapanel/panel/internal/store"
+)
+
+// What Panel VPN reads of a response: the table of contents up to 2 MiB, an
+// article up to 10 MiB.
+const (
+	panelManifestLimit = 2 << 20
+	panelArticleLimit  = 10 << 20
 )
 
 const kbTestIndex = "Заголовок: Заметки по настройке\n" +
@@ -445,5 +454,123 @@ func TestKB_ReadErrorIsRetried(t *testing.T) {
 	}
 	if m := decodeKB[kbManifestBody](t, f.get(t, "/api/v1/kb", f.admin(t))); len(m.Articles) != 1 {
 		t.Fatalf("articles=%+v", m.Articles)
+	}
+}
+
+// Both responses write '<', '>' and '&' as they are, one byte each; the
+// revision is SHA-256 of the canonical form of what the table of contents
+// lists, '<', '>' and '&' as they are, '"' and '\' as \" and \\, whatever
+// the escaping of the response. GET /api/v1/config keeps HTML escaping and
+// its hashes (TestExportConfig_GoldenExample, TestExportConfig_HashMatchesDocumentedRecipe).
+func TestKB_ResponsesDoNotEscapeHTML(t *testing.T) {
+	index := "Заголовок: <База> & \"кавычки\" \\\n" +
+		"Раздел <1> & 2\n" +
+		"- <b>Разметка</b> & \"кавычки\" \\ (a/10-markup.txt)\n"
+	f := newKBFixture(t, writeKBDir(t, index, kbTestFiles))
+	escape := func(hex string) string { return "\\" + "u" + hex }
+
+	rec := f.get(t, "/api/v1/kb", f.admin(t))
+	body := rec.Body.String()
+	for _, raw := range []string{
+		`"title":"<База> & \"кавычки\" \\"`,
+		`"section":"Раздел <1> & 2"`,
+		`"title":"<b>Разметка</b> & \"кавычки\" \\"`,
+	} {
+		if !strings.Contains(body, raw) {
+			t.Fatalf("manifest has no %s:\n%s", raw, body)
+		}
+	}
+	for _, esc := range []string{escape("003c"), escape("003e"), escape("0026")} {
+		if strings.Contains(body, esc) {
+			t.Fatalf("manifest escapes HTML (%s):\n%s", esc, body)
+		}
+	}
+
+	m := decodeKB[kbManifestBody](t, rec)
+	markup := kbTestFiles["a/10-markup.txt"]
+	canonical := `{"articles":[{"key":"a/10-markup.txt","order":1,"section":"Раздел <1> & 2","sha256":"` + kbSHA256(markup) +
+		`","title":"<b>Разметка</b> & \"кавычки\" \\"}],"schema":"hapanel.kb.v1","title":"<База> & \"кавычки\" \\"}`
+	if m.Revision != kbSHA256(canonical) {
+		t.Fatalf("revision=%s want sha256 of %s", m.Revision, canonical)
+	}
+	// The README recipe: the canonical JSON of the listed fields of the response.
+	articles := []map[string]any{}
+	for _, a := range m.Articles {
+		articles = append(articles, map[string]any{"key": a.Key, "order": a.Order, "section": a.Section, "sha256": a.SHA256, "title": a.Title})
+	}
+	toc, err := canonjson.Marshal(map[string]any{"articles": articles, "schema": m.Schema, "title": m.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(toc) != canonical {
+		t.Fatalf("canonical form from the response\n got %s\nwant %s", toc, canonical)
+	}
+
+	rec = f.get(t, "/api/v1/kb/article?key=a/10-markup.txt", f.admin(t))
+	body = rec.Body.String()
+	if want := `<b>HTML</b> & кавычки \"как есть\", \\ черта,\tтабуляция` + escape("2028") + `разделитель`; !strings.Contains(body, want) {
+		t.Fatalf("article body has no %s:\n%s", want, body)
+	}
+	if strings.Contains(body, escape("003c")) || strings.Contains(body, escape("0026")) {
+		t.Fatalf("article escapes HTML:\n%s", body)
+	}
+	if a := decodeKB[kbArticleBody](t, rec); a.Text != markup || a.Revision != m.Revision {
+		t.Fatalf("text=%q revision=%s", a.Text, a.Revision)
+	}
+}
+
+// The largest table of contents fits what Panel VPN reads: 500 articles with
+// the longest keys, titles and sections of 300 characters of four bytes (the
+// most a served character takes: control characters, six bytes in JSON, are
+// cleaned away, '"' and '\' take two), and MaxWarnings warnings with the
+// longest keys.
+func TestKB_ManifestFitsThePanelLimit(t *testing.T) {
+	long := strings.Repeat("🚀", kb.MaxLineLength)
+	var index strings.Builder
+	index.WriteString("Заголовок: " + long + "\n" + long + "\n")
+	files := map[string]string{}
+	for i := 1; i <= kb.MaxArticles+kb.MaxWarnings; i++ {
+		key := fmt.Sprintf("a/%03d%s.txt", i, strings.Repeat("k", 148))
+		fmt.Fprintf(&index, "- %s (%s)\n", long, key)
+		if i <= kb.MaxArticles {
+			files[key] = "x"
+		}
+	}
+	f := newKBFixture(t, writeKBDir(t, index.String(), files))
+	rec := f.get(t, "/api/v1/kb", f.admin(t))
+	m := decodeKB[kbManifestBody](t, rec)
+	if len(m.Articles) != kb.MaxArticles || len(m.Warnings) != kb.MaxWarnings || m.Title != long ||
+		m.Articles[0].Title != long || m.Articles[0].Section != long || len(m.Articles[0].Key) != 157 || len(m.Warnings[0].Key) != 157 {
+		t.Fatalf("articles=%d warnings=%d (first %+v)", len(m.Articles), len(m.Warnings), m.Warnings[0])
+	}
+	if rec.Body.Len() >= panelManifestLimit {
+		t.Fatalf("table of contents of %d bytes, Panel VPN reads %d", rec.Body.Len(), panelManifestLimit)
+	}
+	t.Logf("largest table of contents: %d bytes", rec.Body.Len())
+}
+
+// The largest article fits what Panel VPN reads: its text is at most
+// kb.MaxArticleJSONSize in JSON (4 MiB of line feeds), and HTML takes one
+// byte per character.
+func TestKB_ArticleFitsThePanelLimit(t *testing.T) {
+	long := strings.Repeat("🚀", kb.MaxLineLength)
+	files := map[string]string{
+		"a/newlines.txt": strings.Repeat("\n", kb.MaxArticleSize),
+		"a/html.txt":     strings.Repeat("<&>", kb.MaxArticleSize/3),
+	}
+	index := "- " + long + " (a/newlines.txt)\n- " + long + " (a/html.txt)\n"
+	f := newKBFixture(t, writeKBDir(t, index, files))
+	for key, text := range files {
+		rec := f.get(t, "/api/v1/kb/article?key="+key, f.admin(t))
+		if a := decodeKB[kbArticleBody](t, rec); a.Text != text || a.Title != long {
+			t.Fatalf("%s: text of %d bytes, title %q", key, len(a.Text), a.Title)
+		}
+		if rec.Body.Len() >= panelArticleLimit {
+			t.Fatalf("%s: article of %d bytes, Panel VPN reads %d", key, rec.Body.Len(), panelArticleLimit)
+		}
+		t.Logf("%s: article of %d bytes", key, rec.Body.Len())
+		if key == "a/html.txt" && rec.Body.Len() > len(text)+4096 {
+			t.Fatalf("%s: %d bytes for a text of %d: HTML is escaped", key, rec.Body.Len(), len(text))
+		}
 	}
 }

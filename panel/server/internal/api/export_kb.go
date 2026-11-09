@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -31,7 +32,7 @@ type kbManifestArticle struct {
 
 type kbWarning struct {
 	Code string `json:"code"`
-	Key  string `json:"key"`
+	Key  string `json:"key"` // a key of the article key form or ""
 }
 
 // kbArticle is the GET /api/v1/kb/article response.
@@ -46,6 +47,20 @@ type kbArticle struct {
 	Text     string `json:"text"`
 }
 
+// writeKBJSON writes a knowledge base response like writeJSON but without
+// HTML escaping: '<', '>' and '&' of titles and texts stay one byte each
+// instead of six (\u003c …), so that the largest article
+// (kb.MaxArticleJSONSize) stays within what Panel VPN reads. The revision
+// does not depend on it: its canonical form keeps HTML as is (package kb).
+// GET /api/v1/config keeps writeJSON and its bytes.
+func writeKBJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+}
+
 // noStore marks every response of a route, errors included, as not to be stored.
 func noStore(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +71,8 @@ func noStore(next http.HandlerFunc) http.HandlerFunc {
 
 // handleKB returns the table of contents of the knowledge base in
 // PANEL_KB_DIR, read once on the first request. ETag is the revision; there is
-// no 304 (the panel client takes neither redirects nor 304).
+// no 304 (the panel client takes neither redirects nor 304). Titles and
+// sections come cleaned and the warnings bounded by the loader (package kb).
 //
 // GET /api/v1/kb (API key with scope "config" or admin JWT)
 func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +89,7 @@ func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, kbWarning{Code: wn.Code, Key: wn.Key})
 	}
 	w.Header().Set("ETag", `"`+base.Revision+`"`)
-	writeJSON(w, http.StatusOK, kbManifest{
+	writeKBJSON(w, kbManifest{
 		Schema:      kb.Schema,
 		Version:     buildinfo.Version,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -107,7 +123,7 @@ func (s *Server) handleKBArticle(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "статья не найдена")
 		return
 	}
-	writeJSON(w, http.StatusOK, kbArticle{
+	writeKBJSON(w, kbArticle{
 		Schema:   kb.Schema,
 		Version:  buildinfo.Version,
 		Revision: base.Revision,
