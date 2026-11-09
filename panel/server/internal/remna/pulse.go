@@ -1,8 +1,6 @@
 package remna
 
 import (
-	"context"
-	"fmt"
 	"time"
 )
 
@@ -23,7 +21,7 @@ type PulseBucket struct {
 // PulseSnapshot is the payload for GET …/pulse.
 type PulseSnapshot struct {
 	ActiveNow     int              `json:"active_now"`
-	ActiveByDates int              `json:"active_by_dates"` // sanity check vs Remnawave ACTIVE
+	ActiveByDates int              `json:"active_by_dates"`
 	DisabledNow   int              `json:"disabled_now"`
 	LimitedNow    int              `json:"limited_now"`
 	ExpiredNow    int              `json:"expired_now"`
@@ -46,10 +44,9 @@ type pulseRange struct {
 	end     time.Time
 }
 
-// FetchPulse builds rolling 7-day and calendar-month pulse tables.
-// Base / inflow / outflow come from user createdAt & expireAt windows
-// (streamed once), not from digest reconstruction.
-func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, monthCount int, spans []UserSpan) (PulseSnapshot, error) {
+// BuildPulseFromSpans computes week/month tables locally from cached spans.
+// No Remnawave HTTP calls.
+func BuildPulseFromSpans(spans []UserSpan, st UserStatusCounts, tz string, monthCount int, asOf time.Time) PulseSnapshot {
 	if monthCount < 1 {
 		monthCount = 5
 	}
@@ -61,21 +58,12 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		loc = time.FixedZone("MSK", 3*3600)
 		tz = "Europe/Moscow"
 	}
-	now := time.Now().In(loc)
-	asOf := now
-
-	rc := c.withTimeout(30 * time.Second)
-	st, err := rc.FetchUserStatusCounts(ctx, baseURL, apiKey, tz)
-	if err != nil {
-		return PulseSnapshot{}, err
+	if asOf.IsZero() {
+		asOf = time.Now().In(loc)
+	} else {
+		asOf = asOf.In(loc)
 	}
-
-	if spans == nil {
-		spans, err = rc.FetchUserSpans(ctx, baseURL, apiKey)
-		if err != nil {
-			return PulseSnapshot{}, fmt.Errorf("users stream: %w", err)
-		}
-	}
+	now := asOf
 
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	week := make([]pulseRange, 7)
@@ -114,7 +102,6 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 	weekBuckets := bucketsFromSpans(spans, week)
 	monthBuckets := bucketsFromSpans(spans, months)
 	weekTotal := sumBucketsDate("7d", "Итого 7д", weekBuckets)
-
 	activeByDates := CountActiveAt(spans, now)
 
 	return PulseSnapshot{
@@ -131,10 +118,9 @@ func (c *Client) FetchPulse(ctx context.Context, baseURL, apiKey, tz string, mon
 		WeekDays:      weekBuckets,
 		WeekTotal:     weekTotal,
 		Months:        monthBuckets,
-		Note: "База на начало периода = сколько юзеров на этот момент имели createdAt < T и expireAt > T " +
-			"(DISABLED исключены). Приток/отток — по датам create/expire за период. " +
-			"Не digest-реконструкция.",
-	}, nil
+		Note: "База/приток/отток из локального кэша юзеров (createdAt/expireAt). " +
+			"Remnawave синкается фоном раз в несколько часов, не при каждом открытии Pulse.",
+	}
 }
 
 func bucketsFromSpans(spans []UserSpan, ranges []pulseRange) []PulseBucket {

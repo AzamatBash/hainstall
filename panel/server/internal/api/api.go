@@ -19,6 +19,7 @@ import (
 	"github.com/azabash/hapanel/panel/internal/protect"
 	"github.com/azabash/hapanel/panel/internal/provision"
 	"github.com/azabash/hapanel/panel/internal/remna"
+	"github.com/azabash/hapanel/panel/internal/remnapulse"
 	"github.com/azabash/hapanel/panel/internal/remnastats"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
@@ -33,6 +34,7 @@ type Options struct {
 	LLMProxy           string
 	ImagesDir          string
 	RemnaStats         *remnastats.Poller
+	PulseSync          *remnapulse.Syncer
 	InsecureSkipVerify bool
 	OlcrtcAgent        *olcnode.Client
 }
@@ -45,6 +47,7 @@ type Server struct {
 	remna      *remna.Client
 	ops        *opsagent.Runner
 	remnaStats *remnastats.Poller
+	pulseSync  *remnapulse.Syncer
 	secretsKey string
 	apiKey     string
 	imagesDir  string
@@ -69,14 +72,6 @@ type Server struct {
 	homeTrafficMu sync.Mutex
 	homeTrafficAt time.Time
 	homeTraffic   *homeTrafficDTO
-
-	pulseSpansMu sync.Mutex
-	pulseSpans   map[string]pulseSpansCache
-}
-
-type pulseSpansCache struct {
-	at    time.Time
-	spans []remna.UserSpan
 }
 
 func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logger, opt Options) *Server {
@@ -106,6 +101,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		remna:                remna.New(),
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		remnaStats:           opt.RemnaStats,
+		pulseSync:            opt.PulseSync,
 		secretsKey:           opt.SecretsKey,
 		apiKey:               strings.TrimSpace(opt.APIKey),
 		imagesDir:            opt.ImagesDir,
@@ -116,7 +112,6 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		remnaPanelNodesCache: make(map[string]remnaPanelNodesCacheEntry),
 		remnaOnlineByNode:    make(map[string]remnaOnlineCacheEntry),
 		remnaRefreshInflight: make(map[string]bool),
-		pulseSpans:           make(map[string]pulseSpansCache),
 	}
 	s.ops.OnNodeReady = func(nodeID string) {
 		n, err := s.store.GetNode(nodeID)

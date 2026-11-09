@@ -405,6 +405,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 	if err := s.ensureColumn("api_keys", "scopes", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.migratePulseTables(); err != nil {
+		return err
+	}
 	if err := s.migrateRemnaTrafficSamplesToRates(); err != nil {
 		return err
 	}
