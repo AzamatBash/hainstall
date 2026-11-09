@@ -2,6 +2,7 @@ package remna
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -44,21 +45,37 @@ type usersStreamBody struct {
 			ExpireAt     string  `json:"expireAt"`
 			SubRevokedAt *string `json:"subRevokedAt"`
 		} `json:"users"`
-		NextCursor *float64 `json:"nextCursor"`
-		HasMore    bool     `json:"hasMore"`
+		// Remnawave versions disagree: string id vs numeric cursor.
+		NextCursor any  `json:"nextCursor"`
+		HasMore    bool `json:"hasMore"`
 	} `json:"response"`
+}
+
+func cursorQuery(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strconv.FormatInt(int64(t), 10)
+	case json.Number:
+		return t.String()
+	default:
+		return strings.TrimSpace(fmt.Sprint(t))
+	}
 }
 
 // FetchUserSpans streams all users and keeps subscription windows only.
 func (c *Client) FetchUserSpans(ctx context.Context, baseURL, apiKey string) ([]UserSpan, error) {
 	rc := c.withTimeout(90 * time.Second)
 	var out []UserSpan
-	var cursor *float64
+	cursor := ""
 	for page := 0; page < 500; page++ { // hard cap ~500k users at size=1000
 		q := url.Values{}
 		q.Set("size", "1000")
-		if cursor != nil {
-			q.Set("cursor", strconv.FormatInt(int64(*cursor), 10))
+		if cursor != "" {
+			q.Set("cursor", cursor)
 		}
 		var body usersStreamBody
 		if err := rc.getJSON(ctx, baseURL, apiKey, "/api/users/stream?"+q.Encode(), &body); err != nil {
@@ -82,10 +99,11 @@ func (c *Client) FetchUserSpans(ctx context.Context, baseURL, apiKey string) ([]
 			}
 			out = append(out, span)
 		}
-		if !body.Response.HasMore || body.Response.NextCursor == nil {
+		next := cursorQuery(body.Response.NextCursor)
+		if !body.Response.HasMore || next == "" || next == cursor {
 			return out, nil
 		}
-		cursor = body.Response.NextCursor
+		cursor = next
 	}
 	return out, fmt.Errorf("users stream: exceeded page limit")
 }
