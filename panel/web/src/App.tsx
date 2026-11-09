@@ -7,6 +7,7 @@ import NodesPage from './pages/NodesPage'
 import NodeDetailPage from './pages/NodeDetailPage'
 import TasksPage from './pages/TasksPage'
 import StatsPage from './pages/StatsPage'
+import PulsePage from './pages/PulsePage'
 import OlcrtcPage from './pages/OlcrtcPage'
 import TeamPage from './pages/TeamPage'
 import ApiKeysPage from './pages/ApiKeysPage'
@@ -81,6 +82,7 @@ export default function App() {
         <Route path="/nodes/:id" element={<NodeDetailPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/stats" element={<StatsPage />} />
+        <Route path="/pulse" element={<PulsePage />} />
         <Route path="/olcnode" element={<OlcrtcPage />} />
         <Route path="/team" element={<TeamPage />} />
         <Route path="/api-keys" element={<ApiKeysPage />} />

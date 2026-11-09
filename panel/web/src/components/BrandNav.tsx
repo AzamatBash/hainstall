@@ -8,6 +8,7 @@ export type BrandNavActive =
   | 'panel'
   | 'tasks'
   | 'stats'
+  | 'pulse'
   | 'olcnode'
   | 'team'
   | 'api'
@@ -57,6 +58,14 @@ function IconChart() {
       <path d="M4 19V5" strokeLinecap="round" />
       <path d="M4 19h16" strokeLinecap="round" />
       <path d="M8 15v-4M12 15V8M16 15v-6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconPulse() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M3 12h3.5l2-5 3 10 2.5-6H21" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -115,6 +124,7 @@ const GROUPS: NavGroup[] = [
       { id: 'home', to: '/', label: 'Главная', icon: <IconHome /> },
       { id: 'panel', to: '/nodes', label: 'Ноды', icon: <IconGrid /> },
       { id: 'stats', to: '/stats', label: 'Статистика', icon: <IconChart /> },
+      { id: 'pulse', to: '/pulse', label: 'Pulse', icon: <IconPulse /> },
       { id: 'kb', to: '/kb', label: 'База знаний', icon: <IconBook /> },
     ],
   },
@@ -138,6 +148,7 @@ function activeFromPath(pathname: string): BrandNavActive {
   if (pathname.startsWith('/kb')) return 'kb'
   if (pathname.startsWith('/tasks')) return 'tasks'
   if (pathname.startsWith('/stats')) return 'stats'
+  if (pathname.startsWith('/pulse')) return 'pulse'
   if (pathname.startsWith('/olcnode') || pathname.startsWith('/olcrtc')) return 'olcnode'
   if (pathname.startsWith('/team')) return 'team'
   if (pathname.startsWith('/api-keys')) return 'api'

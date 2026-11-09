@@ -23,6 +23,11 @@ func New() *Client {
 	}
 }
 
+// withTimeout returns a shallow copy whose HTTP client uses d as the request timeout.
+func (c *Client) withTimeout(d time.Duration) *Client {
+	return &Client{http: &http.Client{Timeout: d}}
+}
+
 // Node is a Remnawave node from GET /api/nodes.
 type Node struct {
 	UUID              string      `json:"uuid"`
