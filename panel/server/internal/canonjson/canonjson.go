@@ -12,7 +12,7 @@ import (
 // insignificant whitespace and no HTML escaping: strings are UTF-8 as is,
 // except that '"' and '\\' are escaped, control characters below U+0020 are
 // \b \f \n \r \t or \u00xx (lowercase hex), and U+2028 / U+2029 are written as
-// the escapes   /   (Go's encoder always does that). Integers are
+// the escapes \u2028 / \u2029 (Go's encoder always does that). Integers are
 // kept as written. The README gives the byte-identical Python recipe
 // (TestCanonicalJSON_DocumentedForm in internal/api).
 func Marshal(v any) ([]byte, error) {
