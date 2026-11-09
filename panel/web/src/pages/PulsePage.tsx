@@ -182,6 +182,11 @@ export default function PulsePage() {
     return [...data.week_days, data.week_total]
   }, [data])
 
+  const currentMonth = useMemo(() => {
+    if (!data?.months?.length) return null
+    return data.months[data.months.length - 1]
+  }, [data])
+
   const verdict = useMemo(() => {
     if (!data) return '—'
     const t = toneNet(data.week_total.net_pct, 'week')
@@ -191,6 +196,16 @@ export default function PulsePage() {
     if (t === 'weak') return 'Слабо'
     return 'Плохо'
   }, [data])
+
+  const monthVerdict = useMemo(() => {
+    if (!currentMonth || currentMonth.partial) return 'Частичный'
+    const t = toneNet(currentMonth.net_pct, 'month')
+    const o = toneOutflow(currentMonth.outflow_pct, 'month')
+    if (t === 'excellent' && (o === 'excellent' || o === 'ok')) return 'Отлично'
+    if (t === 'ok' || t === 'excellent') return 'Нормально'
+    if (t === 'weak') return 'Слабо'
+    return 'Плохо'
+  }, [currentMonth])
 
   return (
     <div className="shell">
@@ -370,6 +385,71 @@ export default function PulsePage() {
                     </tbody>
                   </table>
                 </div>
+
+                <h2 className="pulse-section-title">
+                  Месяц · {currentMonth ? currentMonth.label : 'текущий'}
+                </h2>
+                {currentMonth && (
+                  <div className="pulse-kpis" aria-label="Итог текущего месяца">
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Приток · месяц</div>
+                      <div className="pulse-kpi-value">
+                        {fmtInt(currentMonth.inflow)}{' '}
+                        <span
+                          className={`pulse-kpi-pct ${
+                            currentMonth.partial
+                              ? 'pulse-neutral'
+                              : `pulse-${toneInflow(currentMonth.inflow_pct, 'month')}`
+                          }`}
+                        >
+                          {fmtPct(currentMonth.inflow_pct)}
+                        </span>
+                      </div>
+                      <div className="pulse-kpi-sub">
+                        % от базы на 1-е · норма мес. 5–8%
+                        {currentMonth.partial ? ' · месяц ещё идёт' : ''}
+                      </div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Отток · месяц</div>
+                      <div className="pulse-kpi-value">
+                        {fmtInt(currentMonth.outflow)}{' '}
+                        <span
+                          className={`pulse-kpi-pct ${
+                            currentMonth.partial
+                              ? 'pulse-neutral'
+                              : `pulse-${toneOutflow(currentMonth.outflow_pct, 'month')}`
+                          }`}
+                        >
+                          {fmtPct(currentMonth.outflow_pct)}
+                        </span>
+                      </div>
+                      <div className="pulse-kpi-sub">
+                        churn · норма мес. 3–7% (avg ~5.5%)
+                        {currentMonth.partial ? ' · без месячной окраски' : ''}
+                      </div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">Чистый · месяц</div>
+                      <div
+                        className={`pulse-kpi-value ${
+                          currentMonth.partial
+                            ? ''
+                            : `pulse-${toneNet(currentMonth.net_pct, 'month')}`
+                        }`}
+                      >
+                        {fmtNet(currentMonth.net)}{' '}
+                        <span className="pulse-kpi-pct">{fmtPct(currentMonth.net_pct, true)}</span>
+                      </div>
+                      <div className="pulse-kpi-sub">норма мес. 0…+3%</div>
+                    </div>
+                    <div className="pulse-kpi">
+                      <div className="pulse-kpi-label">База на 1-е</div>
+                      <div className="pulse-kpi-value">{fmtInt(currentMonth.base)}</div>
+                      <div className="pulse-kpi-sub">оценка: {monthVerdict}</div>
+                    </div>
+                  </div>
+                )}
 
                 <h2 className="pulse-section-title">Месяцы · календарь без сдвига</h2>
                 <div className="table-wrap pulse-table-wrap">
