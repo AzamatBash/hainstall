@@ -15,6 +15,7 @@ type Config struct {
 	APIKey             string // PANEL_API_KEY — Bearer/X-API-Key for /api/v1/* export
 	DBPath             string
 	StaticDir          string
+	KBDir              string // PANEL_KB_DIR — knowledge base (index.txt, a/*.txt) for GET /api/v1/kb
 	BasePath           string // e.g. "/a1b2c3d4e5f6" — empty = root
 	InsecureSkipVerify bool
 	UTLSHello          string
@@ -35,6 +36,7 @@ func Load() Config {
 		APIKey:             strings.TrimSpace(os.Getenv("PANEL_API_KEY")),
 		DBPath:             envOr("PANEL_DB_PATH", "./data/panel.db"),
 		StaticDir:          envOr("PANEL_STATIC_DIR", "./web/dist"),
+		KBDir:              envOr("PANEL_KB_DIR", "/app/kb"),
 		BasePath:           normalizeBasePath(os.Getenv("PANEL_BASE_PATH")),
 		InsecureSkipVerify: envBool("HAPANEL_INSECURE_SKIP_VERIFY", true),
 		// randomized works with HAProxy; chrome/firefox ClientHello often EOF.

@@ -219,12 +219,13 @@ See `agent/README.md` and `deploy/node/README.md` for details.
 | `PANEL_API_KEY` | (empty) | Optional env bootstrap key for `GET /api/v1/hanodes` (prefer keys from UI **api**) |
 | `PANEL_DB_PATH` | `./data/panel.db` | SQLite path |
 | `PANEL_STATIC_DIR` | `./web/dist` | Built UI directory |
+| `PANEL_KB_DIR` | `/app/kb` | Knowledge base for `GET /api/v1/kb` (`index.txt`, `a/*.txt`); the image ships `panel/kb` there |
 | `HAPANEL_INSECURE_SKIP_VERIFY` | `true` (Docker) | Skip verify on panel→node TLS |
 | `HAPANEL_UTLS_HELLO` | `randomized` | uTLS fingerprint: `randomized`, `chrome`, `firefox`, `golang` |
 
 ### База знаний (`/kb`)
 
-Встроенные технические статьи из `panel/kb/` (источник vpn-hub): каталог по разделам, поиск, код с «Копировать», сборщик плейсхолдеров (домен, Reality-ключи и т.д.) в `localStorage` браузера. При сборке UI: `npm run kb` / `prebuild` читает `KB_SRC` (по умолчанию `panel/kb`).
+Встроенные технические статьи из `panel/kb/` (источник vpn-hub): каталог по разделам, поиск, код с «Копировать», сборщик плейсхолдеров (домен, Reality-ключи и т.д.) в `localStorage` браузера. При сборке UI: `npm run kb` / `prebuild` читает `KB_SRC` (по умолчанию `panel/kb`). API разбирает `index.txt` так же, как сборщик интерфейса, и отдаёт тексты статей без изменений: см. «База знаний по API» ниже.
 
 ### Export API (hanode stats for another panel)
 
@@ -316,5 +317,48 @@ curl -sS -H "X-API-Key: $HAPANEL_CONFIG_KEY" "https://panel.example/<PANEL_BASE_
 | `provider_accounts` | `id` | `id`, `provider_id`, `created_at` |
 
 Никогда не выгружаются: токены агентов и полный адрес управления нод (схема, порт, путь); статус, `last_seen`, CPU и трафик нод (они в `/api/v1/hanodes`); `base_url` и API-ключи панелей Remnawave; `login` аккаунтов; `login_url` и `favicon_url` провайдеров; `users_online`, `node_ok`, `last_seen_at`, `updated_at` каталога; задачи, команда, olcRTC, API-ключи и история метрик. Пример ответа на тестовых данных: `panel/server/internal/api/testdata/config_v1_example.json`.
+
+### База знаний по API (`GET /api/v1/kb`)
+
+Только чтение, доступ как у `GET /api/v1/config`: ключ с правом `config` или сессия администратора; ключ без права получает `403`, запрос без ключа — `401`. У всех ответов заголовок `Cache-Control: no-store`.
+
+Образ кладёт `panel/kb` в `/app/kb` (финальная стадия `deploy/panel/Dockerfile`), другой каталог задаёт `PANEL_KB_DIR`. Сервер читает базу один раз, при первом запросе, и держит в памяти до перезапуска: база меняется только вместе с образом. Нет каталога или `index.txt` — `404 {"error":"база знаний недоступна"}`; файл не прочитался — `500`, следующий запрос читает базу заново. Образ собирайте на файловой системе с учётом регистра: на macOS `index.txt` и `INDEX.txt` в рабочем дереве — один файл.
+
+```bash
+curl -sS -H "X-API-Key: $HAPANEL_CONFIG_KEY" "https://panel.example/<PANEL_BASE_PATH>/api/v1/kb"
+curl -sS -G -H "X-API-Key: $HAPANEL_CONFIG_KEY" --data-urlencode "key=a/01-glossary.txt" "https://panel.example/<PANEL_BASE_PATH>/api/v1/kb/article"
+```
+
+`GET /api/v1/kb` — оглавление, заголовок `ETag: "<revision>"` (ответа `304` нет):
+
+```json
+{
+  "schema": "hapanel.kb.v1",
+  "version": "0.1.81",
+  "generated_at": "2026-11-09T12:00:00Z",
+  "revision": "<64 hex>",
+  "title": "Технические заметки по настройке VPN",
+  "articles": [
+    {"key": "a/01-glossary.txt", "title": "Термины простыми словами", "section": "Термины", "order": 1, "size": 15560, "sha256": "<64 hex>"}
+  ],
+  "warnings": []
+}
+```
+
+- `index.txt` разбирается так же, как в сборщике интерфейса (`parseIndex` в `panel/web/scripts/build-kb.mjs`), поэтому API перечисляет те же статьи, заголовки и разделы, что показывает интерфейс, кроме не прошедших проверки ниже. Строки делятся по `\n` и `\r\n` и обрезаются по пробелам JavaScript (`trim()`: в том числе неразрывные пробелы, U+2028, U+2029 и BOM). Пустые строки и все строки, начинающиеся с `Заголовок:`, пропускаются. Строка статьи — регулярное выражение сборщика `^-\s+(.+?)\s+\((a\/[^)]+\.txt)\)\s*$`: ключ — скобки в конце строки, скобки в заголовке допустимы. Другая строка, начинающаяся с `-`, пропускается с предупреждением `invalid_key`; любая другая строка — раздел для статей ниже. Название базы — остаток первой непустой строки, если она начинается с `Заголовок:`. У статей до первого раздела `section` пустой (интерфейс подписывает их «Разное»). Совпадение с интерфейсом проверяет `TestParseIndex_MatchesUIBuilder` (нужен `node`, без него тест пропускается).
+- Заголовки статей, разделы и название базы отдаются очищенными: управляющие и форматные символы (категории Unicode Cc и Cf), U+2028 и U+2029 заменяются пробелом, пробелы схлопываются, края обрезаются, длина — не больше 300 символов (пробел на месте обрезки тоже снимается). Если заголовок статьи после очистки пуст, заголовком становится имя файла без `a/` и `.txt`, а в `warnings` — `empty_title` с ключом; сама статья отдаётся.
+- `order` — сквозной номер статьи с 1, `size` и `sha256` — размер и SHA-256 (hex) байт файла.
+- Ключ статьи — путь из скобок по шаблону `^a/[a-z0-9][a-z0-9._-]{0,150}\.txt$` (`..` внутри имени файла допустимо: это не элемент пути). Читаются только обычные файлы внутри каталога, символические ссылки — нет. Не больше 500 статей; статья до 4 МиБ, в корректной UTF-8 и не длиннее 8 МиБ строкой JSON (управляющие символы, кроме `\b`, `\f`, `\n`, `\r`, `\t`, JSON пишет шестью байтами `\u00xx`).
+- Что не прошло проверку, в оглавление не попадает и отдаётся в `warnings` (`{"code", "key"}`): `invalid_key`, `duplicate_key` (остаётся первая строка), `listed_but_missing`, `unlisted_file` (файл в `a/` без строки в `index.txt`), `article_too_large`, `invalid_utf8`, `too_many_articles`. `key` — только ключ по шаблону статьи, иначе `""`. Предупреждений не больше 100: если их больше, отдаются первые 99 и `too_many_warnings` без ключа.
+- Ответы обоих маршрутов — JSON без HTML-экранирования: `<`, `>` и `&` идут как есть. В строках экранируются `"` и `\`, управляющие символы (`\n`, `\t`, … `\u00xx`), U+2028 и U+2029 (`\u2028`, `\u2029`). Самое большое оглавление (500 статей с самыми длинными ключами, заголовками и разделами, 100 предупреждений) — около 1,4 МБ, самая большая статья — около 8 МиБ; панель читает до 2 и 10 МиБ.
+- `revision` — SHA-256 (64 hex, без префикса `sha256:`) канонического JSON, как у хешей выгрузки настроек, от `{"articles":[{"key","order","section","sha256","title"}…],"schema","title"}` с заголовками и разделами в том виде, в каком они отдаются. Каноническая форма HTML не экранирует, поэтому ревизия не зависит от кодирования ответа. `version` и `generated_at` в неё не входят, поэтому ревизия меняется только вместе с базой. В Python с `canonical()` из примера выше:
+
+  ```python
+  keys = ("key", "order", "section", "sha256", "title")
+  toc = {"articles": [{k: a[k] for k in keys} for a in body["articles"]], "schema": body["schema"], "title": body["title"]}
+  assert body["revision"] == hashlib.sha256(canonical(toc)).hexdigest()
+  ```
+
+`GET /api/v1/kb/article?key=<ключ>` — статья: `schema`, `version`, `revision`, `key`, `title`, `sha256`, `size`, `text`. `text` — байты файла без изменений, `revision` — ревизия оглавления, к которому относится статья. Нет параметра или ключ не по шаблону — `400`, ключа нет в оглавлении — `404 {"error":"статья не найдена"}`.
 
 Do not commit real secrets (`.env`, tokens, passwords).

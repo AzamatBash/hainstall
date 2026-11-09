@@ -26,7 +26,8 @@ type APIKeyMeta struct {
 	Scopes []string
 }
 
-// APIKeyScopeConfig allows GET /api/v1/config (read-only configuration snapshot).
+// APIKeyScopeConfig allows GET /api/v1/config (read-only configuration
+// snapshot) and the knowledge base GET /api/v1/kb and /api/v1/kb/article.
 const APIKeyScopeConfig = "config"
 
 var knownAPIKeyScopes = map[string]struct{}{

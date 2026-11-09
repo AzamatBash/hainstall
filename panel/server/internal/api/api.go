@@ -14,6 +14,7 @@ import (
 
 	"github.com/azabash/hapanel/panel/internal/agent"
 	"github.com/azabash/hapanel/panel/internal/auth"
+	"github.com/azabash/hapanel/panel/internal/kb"
 	"github.com/azabash/hapanel/panel/internal/olcnode"
 	"github.com/azabash/hapanel/panel/internal/opsagent"
 	"github.com/azabash/hapanel/panel/internal/protect"
@@ -37,6 +38,7 @@ type Options struct {
 	PulseSync          *remnapulse.Syncer
 	InsecureSkipVerify bool
 	OlcrtcAgent        *olcnode.Client
+	KBDir              string // PANEL_KB_DIR — knowledge base for GET /api/v1/kb; empty = none
 }
 
 type Server struct {
@@ -47,6 +49,7 @@ type Server struct {
 	remna      *remna.Client
 	ops        *opsagent.Runner
 	remnaStats *remnastats.Poller
+	kb         *kb.Loader
 	pulseSync  *remnapulse.Syncer
 	secretsKey string
 	apiKey     string
@@ -101,6 +104,7 @@ func New(st *store.Store, au *auth.Service, ag *agent.Client, logger *slog.Logge
 		remna:                remna.New(),
 		ops:                  opsagent.NewRunner(st, llm, opt.PanelIP, logger),
 		remnaStats:           opt.RemnaStats,
+		kb:                   kb.NewLoader(opt.KBDir, logger),
 		pulseSync:            opt.PulseSync,
 		secretsKey:           opt.SecretsKey,
 		apiKey:               strings.TrimSpace(opt.APIKey),
@@ -146,6 +150,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/hanodes/{id}", s.requireAPIKeyOrAuth(s.handleExportHanode))
 	// Read-only configuration snapshot (key with scope "config" or admin JWT).
 	s.mux.HandleFunc("GET /api/v1/config", s.requireAPIKeyScope(store.APIKeyScopeConfig, s.handleExportConfig))
+	// Read-only knowledge base from PANEL_KB_DIR (same scope "config"; Cache-Control: no-store).
+	s.mux.HandleFunc("GET /api/v1/kb", noStore(s.requireAPIKeyScope(store.APIKeyScopeConfig, s.handleKB)))
+	s.mux.HandleFunc("GET /api/v1/kb/article", noStore(s.requireAPIKeyScope(store.APIKeyScopeConfig, s.handleKBArticle)))
 
 	// Manage export API keys (admin session only).
 	s.mux.HandleFunc("GET /api/settings/api-keys", s.requireAuth(s.handleListAPIKeys))
