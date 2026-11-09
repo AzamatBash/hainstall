@@ -19,7 +19,8 @@ import (
 // testdataBase: index.txt with an article before the first section, a title
 // with parentheses, an invalid key, a duplicate, a missing file, a line
 // without a key and an unlisted file; articles with HTML, quotes, a tab,
-// U+2028, CRLF and no final newline.
+// U+2028, CRLF and no final newline. A warning shows no key that fails the
+// article key form.
 const testdataBase = "testdata/base"
 
 func sha256Hex(b []byte) string {
@@ -126,7 +127,7 @@ func TestLoad_Testdata(t *testing.T) {
 		}
 	}
 	wantWarnings := []Warning{
-		{WarnInvalidKey, "a/Bad_Name.txt"},
+		{WarnInvalidKey, ""}, // a/Bad_Name.txt
 		{WarnDuplicateKey, "a/10-first.txt"},
 		{WarnListedButMissing, "a/12-missing.txt"},
 		{WarnInvalidKey, ""},
@@ -257,7 +258,7 @@ func TestLoad_IndexParsing(t *testing.T) {
 	want := []string{
 		"1|a/a.txt|Первая|",
 		"2|a/b.txt|Вторая|Раздел",
-		"3|a/c.txt|Третья|Заголовок: только первая строка называет базу",
+		"3|a/c.txt|Третья|Раздел", // a later "Заголовок:" line is skipped, as in the UI
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("articles=%q\nwant %q", got, want)
@@ -566,8 +567,9 @@ func TestLoader_ConcurrentFirstUse(t *testing.T) {
 //
 //	KB_CHECK_DIR=../../../kb go test ./internal/kb -run CheckDir -v
 //
-// Any warning fails it. On macOS take panel/kb from git (git archive): there
-// INDEX.txt and index.txt are one file in the working tree.
+// Any warning fails it, and so does an article line the UI bundle builder
+// reads otherwise (with node installed). On macOS take panel/kb from git (git
+// archive): there INDEX.txt and index.txt are one file in the working tree.
 func TestLoad_CheckDir(t *testing.T) {
 	dir := os.Getenv("KB_CHECK_DIR")
 	if dir == "" {
@@ -581,5 +583,19 @@ func TestLoad_CheckDir(t *testing.T) {
 	t.Logf("title=%q articles=%d sections=%d revision=%s", b.Title, len(b.Articles), len(sections), b.Revision)
 	for _, w := range b.Warnings {
 		t.Errorf("warning %s %q", w.Code, w.Key)
+	}
+	index, err := os.ReadFile(filepath.Join(dir, "index.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui, skip := uiBuilderParse(t, []string{string(index)})
+	if ui == nil {
+		t.Log(skip)
+		return
+	}
+	if got := articleLines(string(index)); !reflect.DeepEqual(got, ui[0]) {
+		t.Errorf("the UI bundle builder reads index.txt otherwise:\nloader %q\nUI     %q", got, ui[0])
+	} else {
+		t.Logf("the UI bundle builder reads the same %d article lines", len(got))
 	}
 }
