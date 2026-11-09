@@ -14,8 +14,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/azabash/hapanel/panel/internal/canonjson"
+	"golang.org/x/sys/unix"
 )
 
 // Schema names the export format; it is part of the revision.
@@ -149,15 +150,18 @@ func Load(dir string) (*Base, error) {
 	if dir == "" {
 		return nil, ErrNotFound
 	}
-	if fi, err := os.Stat(dir); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+	// Follow the configured root once; all children are then opened relative
+	// to pinned directories. A concurrent rename cannot redirect a read.
+	rootFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ENOTDIR) {
 			return nil, ErrNotFound
 		}
 		return nil, err
-	} else if !fi.IsDir() {
-		return nil, ErrNotFound
 	}
-	index, err := readRegular(filepath.Join(dir, "index.txt"), maxIndexSize)
+	root := os.NewFile(uintptr(rootFD), dir)
+	defer root.Close()
+	index, err := readRegularAt(root, "index.txt", maxIndexSize)
 	switch {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, errNotRegular):
 		return nil, ErrNotFound
@@ -170,13 +174,15 @@ func Load(dir string) (*Base, error) {
 		return nil, errors.New("index.txt is not valid UTF-8")
 	}
 
-	articlesDir := filepath.Join(dir, "a")
-	hasArticlesDir := false
-	if fi, err := os.Lstat(articlesDir); err == nil {
-		hasArticlesDir = fi.IsDir() // a symbolic link to a directory is not followed
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	var articlesDir *os.File
+	articlesFD, err := unix.Openat(rootFD, "a", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err == nil {
+		articlesDir = os.NewFile(uintptr(articlesFD), "a")
+		defer articlesDir.Close()
+	} else if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP) {
 		return nil, err
 	}
+	hasArticlesDir := articlesDir != nil
 
 	b := &Base{Articles: []Article{}, Warnings: []Warning{}, byKey: map[string]int{}}
 	warnings := 0
@@ -215,8 +221,8 @@ func Load(dir string) (*Base, error) {
 			warn(WarnListedButMissing, key)
 			continue
 		}
-		// The key form keeps the path inside a/: one name, no leading dot.
-		data, err := readRegular(filepath.Join(dir, filepath.FromSlash(key)), MaxArticleSize)
+		// The key form gives a single child name, opened within the pinned a/.
+		data, err := readRegularAt(articlesDir, strings.TrimPrefix(key, "a/"), MaxArticleSize)
 		switch {
 		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errNotRegular):
 			warn(WarnListedButMissing, key)
@@ -252,15 +258,25 @@ func Load(dir string) (*Base, error) {
 	}
 
 	if hasArticlesDir {
-		entries, err := os.ReadDir(articlesDir) // sorted by name
+		names, err := articlesDir.Readdirnames(-1)
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range entries {
-			if e.IsDir() {
+		sort.Strings(names)
+		for _, name := range names {
+			// Do not let DirEntry's unknown-type fallback stat through a
+			// pathname: classification must use the same pinned directory.
+			var info unix.Stat_t
+			if err := unix.Fstatat(articlesFD, name, &info, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				return nil, err
+			}
+			if info.Mode&unix.S_IFMT == unix.S_IFDIR {
 				continue
 			}
-			if key := "a/" + e.Name(); !listed[key] {
+			if key := "a/" + name; !listed[key] {
 				warn(WarnUnlistedFile, key)
 			}
 		}
@@ -404,32 +420,31 @@ func revision(title string, articles []Article) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// readRegular reads path when it is a regular file, not a symbolic link, of
-// at most limit bytes. Errors: fs.ErrNotExist when missing; errNotRegular for
-// a symbolic link, directory or other special file; errTooLarge over limit.
-func readRegular(path string, limit int64) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
+// readRegularAt reads a single child of a pinned directory. NOFOLLOW denies
+// links atomically; NONBLOCK prevents a swapped-in FIFO from waiting for a
+// writer before the opened descriptor's type can be checked.
+func readRegularAt(dir *os.File, name string, limit int64) ([]byte, error) {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
 		return nil, errNotRegular
 	}
-	if info.Size() > limit {
-		return nil, errTooLarge
-	}
-	f, err := os.Open(path)
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, errNotRegular
+		}
 		return nil, err
 	}
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
-	// The file opened must be the one checked, not a link put in its place.
 	opened, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if !os.SameFile(info, opened) {
+	if !opened.Mode().IsRegular() {
 		return nil, errNotRegular
+	}
+	if opened.Size() > limit {
+		return nil, errTooLarge
 	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
