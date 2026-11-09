@@ -1,17 +1,16 @@
 package api
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/azabash/hapanel/panel/internal/buildinfo"
+	"github.com/azabash/hapanel/panel/internal/canonjson"
 	"github.com/azabash/hapanel/panel/internal/remna"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
@@ -249,31 +248,12 @@ func (s *Server) configSection(name string, err error, items func() any) configS
 	return configSection{Status: "ok", ContentHash: sha256Tag(raw), Items: v}
 }
 
-// canonicalJSON encodes v with object keys sorted at every level, no
-// insignificant whitespace and no HTML escaping: strings are UTF-8 as is,
-// except that '"' and '\\' are escaped, control characters below U+0020 are
-// \b \f \n \r \t or \u00xx (lowercase hex), and U+2028 / U+2029 are written as
-// the escapes \u2028 / \u2029 (Go's encoder always does that). Integers are
-// kept as written. Hashes in the config export are SHA-256 of this form; the
-// README gives the byte-identical Python recipe (TestCanonicalJSON_DocumentedForm).
+// canonicalJSON is the canonical form shared with the knowledge base revision
+// (canonjson.Marshal: sorted keys, no whitespace, no HTML escaping). Hashes in
+// the config export are SHA-256 of this form; the README gives the
+// byte-identical Python recipe (TestCanonicalJSON_DocumentedForm).
 func canonicalJSON(v any) ([]byte, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var generic any
-	if err := dec.Decode(&generic); err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(generic); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+	return canonjson.Marshal(v)
 }
 
 func sha256Tag(b []byte) string {
