@@ -49,6 +49,17 @@ type ProtectProfile struct {
 	SynProxy            bool `json:"synproxy"`
 }
 
+// PanelProxy is a HAProxy base profile pushed from the panel.
+// Backend server inventory stays in Servers and is rewritten separately —
+// applying a profile must not wipe backends.
+type PanelProxy struct {
+	ProfileID string `json:"profile_id,omitempty"`
+	Revision  int    `json:"revision,omitempty"`
+	Engine    string `json:"engine,omitempty"` // haproxy (envoy later)
+	Body      string `json:"body"`             // base only (no backend sections)
+	AppliedAt string `json:"applied_at,omitempty"`
+}
+
 // State is the on-disk agent state restored across reloads.
 type State struct {
 	Servers     []Server          `json:"servers"`
@@ -56,6 +67,7 @@ type State struct {
 	Entrances   []Entrance        `json:"entrances,omitempty"`
 	ListenPorts []int             `json:"listen_ports,omitempty"` // derived from Entrances; kept for older agents/tools
 	Protect     *ProtectProfile   `json:"protect,omitempty"`
+	PanelProxy  *PanelProxy       `json:"panel_proxy,omitempty"`
 }
 
 // DefaultEntrance is used when nothing is configured.

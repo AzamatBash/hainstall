@@ -8,8 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PANEL_VERSION="${PANEL_VERSION:-0.1.88}"
-NODE_VERSION="${NODE_VERSION:-0.1.13}"
+PANEL_VERSION="${PANEL_VERSION:-0.1.89}"
+NODE_VERSION="${NODE_VERSION:-0.1.14}"
 PANEL_IMAGE="${PANEL_IMAGE:-azamatbash/hapanel}"
 NODE_IMAGE="${NODE_IMAGE:-azamatbash/hanode}"
 PROD_CONFIG_ID="sha256:467ffaf3097bc04625dd16e802dc0c477582424b1e6268f728e7470ad4548cae"
@@ -37,6 +37,7 @@ fi
 
 echo "==> Building ${NODE_IMAGE}:${NODE_VERSION}"
 docker build \
+  --build-arg AGENT_VERSION="${NODE_VERSION}" \
   -t "${NODE_IMAGE}:${NODE_VERSION}" \
   -t "${NODE_IMAGE}:latest" \
   -f deploy/node/agent/Dockerfile \

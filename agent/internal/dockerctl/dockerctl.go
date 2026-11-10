@@ -1,13 +1,17 @@
 package dockerctl
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // Controller reloads/restarts the HAProxy container via the Docker Engine API.
@@ -79,6 +83,43 @@ func (c *Controller) Restart(ctx context.Context) error {
 		return fmt.Errorf("restart container: %w", err)
 	}
 	return nil
+}
+
+// Exec runs a command inside the HAProxy container and returns combined output.
+func (c *Controller) Exec(ctx context.Context, cmd []string) (string, error) {
+	if len(cmd) == 0 {
+		return "", fmt.Errorf("empty exec command")
+	}
+	id, err := c.resolveID(ctx)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	created, err := c.cli.ContainerExecCreate(ctx, id, types.ExecConfig{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          cmd,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec create: %w", err)
+	}
+	attach, err := c.cli.ContainerExecAttach(ctx, created.ID, types.ExecStartCheck{})
+	if err != nil {
+		return "", fmt.Errorf("exec attach: %w", err)
+	}
+	defer attach.Close()
+	var buf bytes.Buffer
+	_, _ = stdcopy.StdCopy(&buf, &buf, attach.Reader)
+	insp, err := c.cli.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return buf.String(), fmt.Errorf("exec inspect: %w", err)
+	}
+	if insp.ExitCode != 0 {
+		return buf.String(), fmt.Errorf("exit %d", insp.ExitCode)
+	}
+	_, _ = io.Copy(io.Discard, attach.Reader)
+	return buf.String(), nil
 }
 
 // RemoveNameConflicts force-removes containers whose name is exactly name

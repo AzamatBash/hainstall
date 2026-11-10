@@ -231,10 +231,74 @@ func (s *Server) handleSetNodeProxyEngine(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"node": n})
 }
 
-// POST /api/nodes/{id}/proxy-apply — reserved; agent path not implemented yet.
+// POST /api/nodes/{id}/proxy-apply — push assigned profile to the node agent.
 func (s *Server) handleNodeProxyApply(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{
-		"ok":    false,
-		"error": "Применение профиля на ноду пока не реализовано. Сначала обновите агент (отдельная задача).",
+	id := strings.TrimSpace(r.PathValue("id"))
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "нода не найдена")
+		return
+	}
+	if strings.TrimSpace(n.ProxyProfileID) == "" {
+		writeErr(w, http.StatusBadRequest, "сначала назначьте шаблон на ноде")
+		return
+	}
+	p, err := s.store.GetProxyProfile(n.ProxyProfileID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка базы данных")
+		return
+	}
+	if p == nil {
+		writeErr(w, http.StatusBadRequest, "профиль не найден")
+		return
+	}
+	if p.Engine != store.ProxyEngineHAProxy {
+		writeErr(w, http.StatusBadRequest, "агент пока применяет только HAProxy")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"profile_id": p.ID,
+		"revision":   p.Revision,
+		"engine":     p.Engine,
+		"body":       p.Body,
+	})
+	ctx := r.Context()
+	status, raw, err := s.agent.ProxyApply(ctx, n.URL, n.Token, strings.NewReader(string(payload)))
+	if err != nil {
+		_, _ = s.store.SetNodeProxyApplied(id, n.ProxyAppliedRev, err.Error())
+		writeErr(w, http.StatusBadGateway, "агент: "+err.Error())
+		return
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		var eresp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &eresp) == nil && eresp.Error != "" {
+			msg = eresp.Error
+		}
+		if msg == "" {
+			msg = "агент отклонил apply"
+		}
+		_, _ = s.store.SetNodeProxyApplied(id, n.ProxyAppliedRev, msg)
+		writeErr(w, http.StatusBadGateway, msg)
+		return
+	}
+
+	n2, err := s.store.SetNodeProxyApplied(id, p.Revision, "")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "профиль на ноде применён, но статус в панели не сохранился")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"node":  n2,
+		"agent": json.RawMessage(raw),
+		"note":  "Шаблон записан в base.cfg; backend-серверы на ноде сохранены из state агента.",
 	})
 }

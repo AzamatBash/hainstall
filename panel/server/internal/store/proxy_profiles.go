@@ -271,6 +271,34 @@ WHERE id=?`, eng, p.ID, desiredRev, status, applyErr, nodeID)
 	return s.GetNode(nodeID)
 }
 
+// SetNodeProxyApplied marks agent apply result for the assigned profile.
+func (s *Store) SetNodeProxyApplied(nodeID string, rev int, applyErr string) (*Node, error) {
+	n, err := s.GetNode(nodeID)
+	if n == nil || err != nil {
+		return n, err
+	}
+	status := ProxyApplyApplied
+	applied := rev
+	desired := n.ProxyDesiredRev
+	if applyErr != "" {
+		status = ProxyApplyError
+		applied = n.ProxyAppliedRev
+	} else if rev > 0 {
+		desired = rev
+	}
+	_, err = s.db.Exec(`
+UPDATE nodes SET
+  proxy_desired_rev=?,
+  proxy_applied_rev=?,
+  proxy_apply_status=?,
+  proxy_apply_error=?
+WHERE id=?`, desired, applied, status, applyErr, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetNode(nodeID)
+}
+
 // SetNodeProxyEngine sets preferred engine without applying config to the agent.
 func (s *Store) SetNodeProxyEngine(nodeID, engine string) (*Node, error) {
 	n, err := s.GetNode(nodeID)

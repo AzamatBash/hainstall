@@ -68,6 +68,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Put("/entrances", d.handlePutEntrances)
 			r.Get("/protect", d.handleGetProtect)
 			r.Put("/protect", d.handlePutProtect)
+			r.Get("/proxy/status", d.handleProxyStatus)
+			r.Post("/proxy/config/validate", d.handleProxyValidate)
+			r.Put("/proxy/config", d.handleProxyApply)
 		})
 	})
 

@@ -57,21 +57,27 @@ func ApplyEntrances(ctx context.Context, st *store.Store, backendsDir string, do
 	}
 
 	path := filepath.Join(backendsDir, haproxy.BaseConfigFile)
-	prevBody, _ := os.ReadFile(path)
-	body := haproxy.BaseConfigBodyKeeping(string(prevBody), ents, protect.ToHAProxy(prot), false)
+	panelManaged := state.PanelProxy != nil && strings.TrimSpace(state.PanelProxy.Body) != ""
 	cfgBak := ""
-	if _, statErr := os.Stat(path); statErr == nil {
-		cfgBak, err = hostplan.BackupFile(path)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("backup base cfg: %w", err)
-		}
-	}
-	if err := haproxy.AtomicWriteFile(path, body); err != nil {
-		return nil, nil, nil, fmt.Errorf("write base cfg: %w", err)
-	}
 	restoreCfg := func() {
 		if cfgBak != "" {
 			_ = hostplan.RestoreFile(cfgBak, path)
+		}
+	}
+	if panelManaged {
+		// Keep panel base as-is; only sync host/docker ports below.
+		// Frontends must match the panel profile bind ports.
+	} else {
+		prevBody, _ := os.ReadFile(path)
+		body := haproxy.BaseConfigBodyKeeping(string(prevBody), ents, protect.ToHAProxy(prot), false)
+		if _, statErr := os.Stat(path); statErr == nil {
+			cfgBak, err = hostplan.BackupFile(path)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("backup base cfg: %w", err)
+			}
+		}
+		if err := haproxy.AtomicWriteFile(path, body); err != nil {
+			return nil, nil, nil, fmt.Errorf("write base cfg: %w", err)
 		}
 	}
 

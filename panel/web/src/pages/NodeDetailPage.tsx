@@ -1510,10 +1510,43 @@ export default function NodeDetailPage() {
       setProxyEngine((res.node.proxy_engine as ProxyEngine) || 'haproxy')
       setToast({
         kind: 'ok',
-        text: res.note || 'Профиль назначен в панели (на ноду не отправлено)',
+        text: res.note || 'Шаблон сохранён в панели',
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : translateError(String(err)))
+    } finally {
+      setProxyBusy(false)
+    }
+  }
+
+  async function onApplyProxy() {
+    if (!id || !proxyProfileId) return
+    if (
+      !confirm(
+        'Применить шаблон на ноду? Base-конфиг обновится, список backend-серверов на ноде сохранится.',
+      )
+    ) {
+      return
+    }
+    setProxyBusy(true)
+    setError('')
+    try {
+      const res = await api<{ node?: Node; note?: string; error?: string }>(
+        `/api/nodes/${id}/proxy-apply`,
+        { method: 'POST' },
+      )
+      if (res.node) {
+        setNode(res.node)
+        setProxyProfileId(res.node.proxy_profile_id || '')
+        setProxyEngine((res.node.proxy_engine as ProxyEngine) || 'haproxy')
+      }
+      setToast({ kind: 'ok', text: res.note || 'Шаблон применён на ноде' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translateError(String(err)))
+      setToast({
+        kind: 'fail',
+        text: err instanceof Error ? err.message : 'Не удалось применить шаблон',
+      })
     } finally {
       setProxyBusy(false)
     }
@@ -1893,9 +1926,18 @@ export default function NodeDetailPage() {
                 </select>
               </div>
             </div>
-            <div className="row">
+            <div className="row" style={{ flexWrap: 'wrap' }}>
               <button className="btn btn-primary" type="submit" disabled={proxyBusy}>
                 {proxyBusy ? 'Сохранение…' : 'Сохранить шаблон'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={proxyBusy || !proxyProfileId || st !== 'online'}
+                onClick={() => void onApplyProxy()}
+                title="Записать шаблон на ноду; бэкенды из state агента не трогаем"
+              >
+                Применить на ноду
               </button>
             </div>
           </form>

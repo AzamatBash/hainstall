@@ -52,8 +52,12 @@ func main() {
 	}
 
 	// Write frontends into backends.d before HAProxy starts (compose depends_on agent).
-	if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil, entrances, protect.ToHAProxy(prot)); err != nil {
-		log.Warn("base config write failed", "err", err)
+	if managed, _, err := haproxy.EnsurePanelBase(context.Background(), st, cfg.BackendsDir, nil, nil); err != nil {
+		log.Warn("panel base restore failed", "err", err)
+	} else if !managed {
+		if _, err := haproxy.EnsureBaseConfig(context.Background(), cfg.BackendsDir, nil, nil, entrances, protect.ToHAProxy(prot)); err != nil {
+			log.Warn("base config write failed", "err", err)
+		}
 	}
 
 	// Sync persisted servers into backends.d on startup.
@@ -94,7 +98,7 @@ func main() {
 	// on a host bind-mounted haproxy.cfg — Docker turns a missing file into a dir).
 	// Then ensure TCP runtime API for the panel.
 	go func() {
-		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, entrances, protect.ToHAProxy(prot), func(msg string, args ...any) {
+		haproxy.EnsureBaseConfigLoop(ctx, cfg.BackendsDir, docker, ha, st, entrances, protect.ToHAProxy(prot), func(msg string, args ...any) {
 			log.Info(msg, args...)
 		})
 		haproxy.EnsureRuntimeTCPLoop(ctx, cfg.BackendsDir, docker, ha, func(msg string, args ...any) {

@@ -126,14 +126,33 @@ func EnsureBaseConfig(ctx context.Context, backendsDir string, docker *dockerctl
 }
 
 // EnsureBaseConfigLoop keeps base frontends present (fixes empty/missing mounts).
-func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, entrances []store.Entrance, protect ProtectOpts, log func(msg string, args ...any)) {
+// When st has a panel profile, that body is restored instead of the generated template.
+func EnsureBaseConfigLoop(ctx context.Context, backendsDir string, docker *dockerctl.Controller, ha *Client, st *store.Store, entrances []store.Entrance, protect ProtectOpts, log func(msg string, args ...any)) {
 	backoff := time.Second
 	ports := store.PortsFromEntrances(entrances)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		changed, err := EnsureBaseConfig(ctx, backendsDir, docker, ha, entrances, protect)
+		var changed bool
+		var err error
+		if st != nil {
+			var managed bool
+			managed, changed, err = EnsurePanelBase(ctx, st, backendsDir, docker, ha)
+			if err == nil && managed {
+				if log != nil {
+					if changed {
+						log("haproxy panel profile restored", "file", BaseConfigFile)
+					} else {
+						log("haproxy panel profile ok", "file", BaseConfigFile)
+					}
+				}
+				return
+			}
+		}
+		if err == nil {
+			changed, err = EnsureBaseConfig(ctx, backendsDir, docker, ha, entrances, protect)
+		}
 		if err == nil {
 			if log != nil {
 				if changed {

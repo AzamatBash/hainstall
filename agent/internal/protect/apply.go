@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/azabash/hapanel/agent/internal/dockerctl"
@@ -33,6 +34,9 @@ func Apply(ctx context.Context, st *store.Store, backendsDir string, docker *doc
 	state, err := st.Load()
 	if err != nil {
 		return Profile{}, err
+	}
+	if state.PanelProxy != nil && strings.TrimSpace(state.PanelProxy.Body) != "" {
+		return Profile{}, fmt.Errorf("база HAProxy управляется профилем панели — правьте шаблон в панели, protect здесь не перезаписывает base")
 	}
 	ents := state.Entrances
 	if len(ents) == 0 {

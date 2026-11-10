@@ -291,6 +291,23 @@ func (c *Client) SetProtect(ctx context.Context, baseURL, token string, body io.
 	}, nil)
 }
 
+func (c *Client) ProxyStatus(ctx context.Context, baseURL, token string) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodGet,
+		Path:   "/_hapctl/v1/proxy/status",
+		Token:  token,
+	}, nil)
+}
+
+func (c *Client) ProxyApply(ctx context.Context, baseURL, token string, body io.Reader) (int, []byte, error) {
+	return c.DoJSON(ctx, baseURL, RequestOptions{
+		Method: http.MethodPut,
+		Path:   "/_hapctl/v1/proxy/config",
+		Token:  token,
+		Body:   body,
+	}, nil)
+}
+
 // IsTransientDisconnect reports errors typical of a killed mid-flight connection
 // (e.g. legacy setups that still proxied management through HAProxy).
 func IsTransientDisconnect(err error) bool {
