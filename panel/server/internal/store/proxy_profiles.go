@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/azabash/hapanel/panel/internal/proxyconfig"
 	"github.com/google/uuid"
 )
 
@@ -315,32 +316,12 @@ func scanProxyProfile(r rowScanner) (ProxyProfile, error) {
 	return p, nil
 }
 
-// DefaultHAProxyProfileBody is a starter snippet for new HAProxy profiles.
+// DefaultHAProxyProfileBody is the standard VPN HAProxy template (agent defaults).
 func DefaultHAProxyProfileBody() string {
-	return `# Managed by hapanel — edit in panel, apply to node later via agent.
-# This text is stored in the panel only until apply is implemented.
-
-global
-    log stdout format raw local0
-    maxconn 20000
-    stats socket /var/run/haproxy/admin.sock mode 660 level admin expose-fd listeners
-    master-worker
-
-defaults
-    log     global
-    mode    tcp
-    option  dontlognull
-    timeout connect 5s
-    timeout client  50s
-    timeout server  50s
-`
+	return proxyconfig.DefaultHAProxyVPN()
 }
 
-// DefaultEnvoyProfileBody is a starter YAML for Envoy profiles (not applied yet).
+// DefaultEnvoyProfileBody is the Envoy starter template.
 func DefaultEnvoyProfileBody() string {
-	return `# Managed by hapanel — Envoy profile (panel-only until agent supports Envoy).
-static_resources:
-  listeners: []
-  clusters: []
-`
+	return proxyconfig.DefaultEnvoyVPN()
 }

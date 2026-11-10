@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/azabash/hapanel/panel/internal/proxyconfig"
 	"github.com/azabash/hapanel/panel/internal/store"
 )
 
@@ -17,6 +18,37 @@ func (s *Server) handleListProxyProfiles(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"profiles": list})
+}
+
+// GET /api/proxy-profiles/defaults?engine=haproxy|envoy
+func (s *Server) handleProxyProfileDefaults(w http.ResponseWriter, r *http.Request) {
+	engine := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("engine")))
+	if engine == "" {
+		engine = store.ProxyEngineHAProxy
+	}
+	if engine != store.ProxyEngineHAProxy && engine != store.ProxyEngineEnvoy {
+		writeErr(w, http.StatusBadRequest, "engine: haproxy или envoy")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"engine": engine,
+		"body":   proxyconfig.DefaultBody(engine),
+		"note":   "Стандартный VPN-шаблон hapanel (как на нодах).",
+	})
+}
+
+// POST /api/proxy-profiles/validate
+func (s *Server) handleValidateProxyProfile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Engine string `json:"engine"`
+		Body   string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	res := proxyconfig.Validate(body.Engine, body.Body)
+	writeJSON(w, http.StatusOK, res)
 }
 
 // POST /api/proxy-profiles
@@ -35,20 +67,24 @@ func (s *Server) handleCreateProxyProfile(w http.ResponseWriter, r *http.Request
 	if engine == "" {
 		engine = store.ProxyEngineHAProxy
 	}
-	cfg := strings.TrimSpace(body.Body)
-	if cfg == "" {
-		if engine == store.ProxyEngineEnvoy {
-			cfg = store.DefaultEnvoyProfileBody()
-		} else {
-			cfg = store.DefaultHAProxyProfileBody()
-		}
+	cfg := body.Body
+	if strings.TrimSpace(cfg) == "" {
+		cfg = proxyconfig.DefaultBody(engine)
+	}
+	vres := proxyconfig.Validate(engine, cfg)
+	if !vres.OK {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":      vres.Message,
+			"validation": vres,
+		})
+		return
 	}
 	p, err := s.store.CreateProxyProfile(body.Name, engine, cfg, body.Note)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"profile": p})
+	writeJSON(w, http.StatusCreated, map[string]any{"profile": p, "validation": vres})
 }
 
 // GET /api/proxy-profiles/{id}
@@ -108,12 +144,20 @@ func (s *Server) handleUpdateProxyProfile(w http.ResponseWriter, r *http.Request
 	if body.Note != nil {
 		note = *body.Note
 	}
+	vres := proxyconfig.Validate(engine, cfg)
+	if !vres.OK {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":      vres.Message,
+			"validation": vres,
+		})
+		return
+	}
 	p, err := s.store.UpdateProxyProfile(id, name, engine, cfg, note, bump)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"profile": p})
+	writeJSON(w, http.StatusOK, map[string]any{"profile": p, "validation": vres})
 }
 
 // DELETE /api/proxy-profiles/{id}

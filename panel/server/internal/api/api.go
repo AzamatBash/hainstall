@@ -191,6 +191,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/proxy-profiles", s.requireAuth(s.handleListProxyProfiles))
 	s.mux.HandleFunc("POST /api/proxy-profiles", s.requireAuth(s.handleCreateProxyProfile))
+	s.mux.HandleFunc("GET /api/proxy-profiles/defaults", s.requireAuth(s.handleProxyProfileDefaults))
+	s.mux.HandleFunc("POST /api/proxy-profiles/validate", s.requireAuth(s.handleValidateProxyProfile))
 	s.mux.HandleFunc("GET /api/proxy-profiles/{id}", s.requireAuth(s.handleGetProxyProfile))
 	s.mux.HandleFunc("PUT /api/proxy-profiles/{id}", s.requireAuth(s.handleUpdateProxyProfile))
 	s.mux.HandleFunc("DELETE /api/proxy-profiles/{id}", s.requireAuth(s.handleDeleteProxyProfile))
