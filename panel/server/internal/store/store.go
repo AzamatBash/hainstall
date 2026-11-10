@@ -37,7 +37,14 @@ type Node struct {
 	ListenPorts       []int           `json:"listen_ports"`
 	Entrances         []Entrance      `json:"entrances"`
 	Protect           protect.Profile `json:"protect"`
-	Snapshot          *NodeSnapshot   `json:"live,omitempty"`
+	// Proxy* fields are panel-side only until agents learn to apply profiles.
+	ProxyEngine      string        `json:"proxy_engine"`
+	ProxyProfileID   string        `json:"proxy_profile_id"`
+	ProxyDesiredRev  int           `json:"proxy_desired_rev"`
+	ProxyAppliedRev  int           `json:"proxy_applied_rev"`
+	ProxyApplyStatus string        `json:"proxy_apply_status"`
+	ProxyApplyError  string        `json:"proxy_apply_error,omitempty"`
+	Snapshot         *NodeSnapshot `json:"live,omitempty"`
 }
 
 // Entrance is one client listen port routed to a HAProxy backend.
@@ -408,6 +415,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 	if err := s.migratePulseTables(); err != nil {
 		return err
 	}
+	if err := s.migrateProxyProfiles(); err != nil {
+		return err
+	}
 	if err := s.migrateRemnaTrafficSamplesToRates(); err != nil {
 		return err
 	}
@@ -533,7 +543,7 @@ func (s *Store) backfillSortOrder() error {
 	return nil
 }
 
-const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log, listen_ports, entrances, protect`
+const nodeSelectCols = `id, name, url, token, country, sort_order, remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status, snapshot, traffic_log, listen_ports, entrances, protect, proxy_engine, proxy_profile_id, proxy_desired_rev, proxy_applied_rev, proxy_apply_status, proxy_apply_error`
 
 func (s *Store) ListNodes() ([]Node, error) {
 	rows, err := s.db.Query(`
@@ -977,8 +987,15 @@ func scanNode(r rowScanner) (Node, error) {
 		entrances   sql.NullString
 		protectRaw  sql.NullString
 	)
-	if err := r.Scan(&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID, &createdAt, &lastSeen, &status, &snapshot, &trafficLog, &listenPorts, &entrances, &protectRaw); err != nil {
+	if err := r.Scan(
+		&n.ID, &n.Name, &n.URL, &n.Token, &n.Country, &n.SortOrder, &n.RemnaPanelID, &n.ProviderID, &n.ProviderAccountID,
+		&createdAt, &lastSeen, &status, &snapshot, &trafficLog, &listenPorts, &entrances, &protectRaw,
+		&n.ProxyEngine, &n.ProxyProfileID, &n.ProxyDesiredRev, &n.ProxyAppliedRev, &n.ProxyApplyStatus, &n.ProxyApplyError,
+	); err != nil {
 		return Node{}, err
+	}
+	if n.ProxyEngine == "" {
+		n.ProxyEngine = ProxyEngineHAProxy
 	}
 	n.TrafficLog = trafficLog != 0
 	n.ListenPorts = []int{8443}

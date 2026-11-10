@@ -6,6 +6,7 @@ import { withBase } from '../basePath'
 export type BrandNavActive =
   | 'home'
   | 'panel'
+  | 'proxy'
   | 'tasks'
   | 'stats'
   | 'pulse'
@@ -117,12 +118,22 @@ function IconKey() {
   )
 }
 
+function IconProxy() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M4 7h16M4 12h10M4 17h16" strokeLinecap="round" />
+      <circle cx="18" cy="12" r="2.25" />
+    </svg>
+  )
+}
+
 const GROUPS: NavGroup[] = [
   {
     title: 'Обзор',
     items: [
       { id: 'home', to: '/', label: 'Главная', icon: <IconHome /> },
       { id: 'panel', to: '/nodes', label: 'Ноды', icon: <IconGrid /> },
+      { id: 'proxy', to: '/proxy-profiles', label: 'Профили', icon: <IconProxy /> },
       { id: 'stats', to: '/stats', label: 'Статистика', icon: <IconChart /> },
       { id: 'pulse', to: '/pulse', label: 'Pulse', icon: <IconPulse /> },
       { id: 'kb', to: '/kb', label: 'База знаний', icon: <IconBook /> },
@@ -145,6 +156,7 @@ const GROUPS: NavGroup[] = [
 function activeFromPath(pathname: string): BrandNavActive {
   if (pathname === '/') return 'home'
   if (pathname.startsWith('/nodes')) return 'panel'
+  if (pathname.startsWith('/proxy-profiles')) return 'proxy'
   if (pathname.startsWith('/kb')) return 'kb'
   if (pathname.startsWith('/tasks')) return 'tasks'
   if (pathname.startsWith('/stats')) return 'stats'

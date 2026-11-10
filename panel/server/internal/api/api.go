@@ -185,6 +185,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/nodes/{id}/entrances", s.requireAuth(s.handleNodeEntrances))
 	s.mux.HandleFunc("PUT /api/nodes/{id}/protect", s.requireAuth(s.handleNodeProtect))
 	s.mux.HandleFunc("GET /api/nodes/{id}/health", s.requireAuth(s.handleHealth))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/proxy-profile", s.requireAuth(s.handleAssignNodeProxyProfile))
+	s.mux.HandleFunc("PUT /api/nodes/{id}/proxy-engine", s.requireAuth(s.handleSetNodeProxyEngine))
+	s.mux.HandleFunc("POST /api/nodes/{id}/proxy-apply", s.requireAuth(s.handleNodeProxyApply))
+
+	s.mux.HandleFunc("GET /api/proxy-profiles", s.requireAuth(s.handleListProxyProfiles))
+	s.mux.HandleFunc("POST /api/proxy-profiles", s.requireAuth(s.handleCreateProxyProfile))
+	s.mux.HandleFunc("GET /api/proxy-profiles/{id}", s.requireAuth(s.handleGetProxyProfile))
+	s.mux.HandleFunc("PUT /api/proxy-profiles/{id}", s.requireAuth(s.handleUpdateProxyProfile))
+	s.mux.HandleFunc("DELETE /api/proxy-profiles/{id}", s.requireAuth(s.handleDeleteProxyProfile))
 
 	s.mux.HandleFunc("GET /api/remna-panels", s.requireAuth(s.handleListRemnaPanels))
 	s.mux.HandleFunc("POST /api/remna-panels", s.requireAuth(s.handleCreateRemnaPanel))

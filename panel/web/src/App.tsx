@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api, setToken } from './api'
 import BrandNav from './components/BrandNav'
+import ProxyProfilesPage from './pages/ProxyProfilesPage'
 import LoginPage from './pages/LoginPage'
 import NodesPage from './pages/NodesPage'
 import NodeDetailPage from './pages/NodeDetailPage'
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/nodes/:id" element={<NodeDetailPage />} />
+        <Route path="/proxy-profiles" element={<ProxyProfilesPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/pulse" element={<PulsePage />} />

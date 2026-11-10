@@ -86,7 +86,9 @@ type ProviderAccountConfig struct {
 const nodeConfigSelect = `
 SELECT id, name, url, CASE WHEN token <> '' THEN '1' ELSE '' END, country, sort_order,
   remna_panel_id, provider_id, provider_account_id, created_at, last_seen, status,
-  snapshot, traffic_log, listen_ports, entrances, protect, protect
+  snapshot, traffic_log, listen_ports, entrances, protect,
+  proxy_engine, proxy_profile_id, proxy_desired_rev, proxy_applied_rev, proxy_apply_status, proxy_apply_error,
+  protect
 FROM nodes ORDER BY id ASC`
 
 // scanAppend feeds extra destinations after the ones scanNode asks for.

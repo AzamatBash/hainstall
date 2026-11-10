@@ -13,6 +13,8 @@ import {
   Node,
   ProtectProfile,
   Provider,
+  ProxyEngine,
+  ProxyProfile,
   realServers,
   RemnaBackendStat,
   RemnaPanel,
@@ -306,6 +308,10 @@ export default function NodeDetailPage() {
     synproxy: false,
   })
   const [protectBusy, setProtectBusy] = useState(false)
+  const [proxyProfiles, setProxyProfiles] = useState<ProxyProfile[]>([])
+  const [proxyProfileId, setProxyProfileId] = useState('')
+  const [proxyEngine, setProxyEngine] = useState<ProxyEngine>('haproxy')
+  const [proxyBusy, setProxyBusy] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [showAddBackend, setShowAddBackend] = useState(false)
   const actionsRef = useRef<HTMLDivElement | null>(null)
@@ -498,6 +504,15 @@ export default function NodeDetailPage() {
     }
   }, [])
 
+  const loadProxyProfiles = useCallback(async () => {
+    try {
+      const res = await api<{ profiles?: ProxyProfile[] }>('/api/proxy-profiles')
+      setProxyProfiles(Array.isArray(res.profiles) ? res.profiles : [])
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   const loadRemnaLinks = useCallback(async () => {
     if (!id) return
     try {
@@ -595,6 +610,8 @@ export default function NodeDetailPage() {
           synproxy: found.protect.synproxy ?? false,
         })
       }
+      setProxyProfileId(found.proxy_profile_id || '')
+      setProxyEngine((found.proxy_engine as ProxyEngine) || 'haproxy')
       if (found.status !== 'online') {
         // Soft degrade: keep last backends/stats/remna so a transient offline
         // (port add / HAProxy recreate) does not blank the page.
@@ -776,8 +793,9 @@ export default function NodeDetailPage() {
   useEffect(() => {
     void loadRemnaPanels()
     void loadProviders()
+    void loadProxyProfiles()
     void loadRemnaLinks()
-  }, [loadRemnaPanels, loadProviders, loadRemnaLinks])
+  }, [loadRemnaPanels, loadProviders, loadProxyProfiles, loadRemnaLinks])
 
   // Live poll while detail page is open. Keep polling even if status flickers —
   // clearing the timer on offline used to freeze the page until hard refresh.
@@ -1474,6 +1492,33 @@ export default function NodeDetailPage() {
     }
   }
 
+  async function onSaveProxyAssign(e: FormEvent) {
+    e.preventDefault()
+    if (!id) return
+    setProxyBusy(true)
+    setError('')
+    try {
+      const res = await api<{ node: Node; note?: string }>(`/api/nodes/${id}/proxy-profile`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          proxy_profile_id: proxyProfileId,
+          proxy_engine: proxyEngine,
+        }),
+      })
+      setNode(res.node)
+      setProxyProfileId(res.node.proxy_profile_id || '')
+      setProxyEngine((res.node.proxy_engine as ProxyEngine) || 'haproxy')
+      setToast({
+        kind: 'ok',
+        text: res.note || 'Профиль назначен в панели (на ноду не отправлено)',
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : translateError(String(err)))
+    } finally {
+      setProxyBusy(false)
+    }
+  }
+
   async function onSaveProtect(e: FormEvent) {
     e.preventDefault()
     setProtectBusy(true)
@@ -1786,6 +1831,71 @@ export default function NodeDetailPage() {
                 onClick={() => setEditOpen(false)}
               >
                 Отмена
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {node && (
+        <section className="panel" style={{ marginBottom: '1rem' }}>
+          <div className="panel-head">
+            <h2>Шаблон</h2>
+            <div className="panel-head-aside">
+              <Link className="btn btn-sm btn-ghost" to="/proxy-profiles">
+                Профили
+              </Link>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+            Выберите шаблон из раздела Профили. Бэкенды ниже — как раньше. На живую ноду шаблон
+            пока не применяется.
+            {node.proxy_profile_id
+              ? ` · выбран rev ${node.proxy_desired_rev || '—'}`
+              : ''}
+          </p>
+          <form className="stack" onSubmit={(e) => void onSaveProxyAssign(e)}>
+            <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div className="field" style={{ flex: '0 0 10rem' }}>
+                <label htmlFor="node-proxy-engine">Движок</label>
+                <select
+                  id="node-proxy-engine"
+                  value={proxyEngine}
+                  onChange={(e) => {
+                    setProxyEngine(e.target.value as ProxyEngine)
+                    setProxyProfileId('')
+                  }}
+                >
+                  <option value="haproxy">HAProxy</option>
+                  <option value="envoy">Envoy</option>
+                </select>
+              </div>
+              <div className="field" style={{ flex: '1 1 14rem' }}>
+                <label htmlFor="node-proxy-profile">Шаблон</label>
+                <select
+                  id="node-proxy-profile"
+                  value={proxyProfileId}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setProxyProfileId(next)
+                    const p = proxyProfiles.find((x) => x.id === next)
+                    if (p) setProxyEngine(p.engine)
+                  }}
+                >
+                  <option value="">— не выбран —</option>
+                  {proxyProfiles
+                    .filter((p) => p.engine === proxyEngine)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} · rev {p.revision}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+            <div className="row">
+              <button className="btn btn-primary" type="submit" disabled={proxyBusy}>
+                {proxyBusy ? 'Сохранение…' : 'Сохранить шаблон'}
               </button>
             </div>
           </form>

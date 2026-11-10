@@ -13,6 +13,19 @@ export interface NodeLive {
   updated_at?: string
 }
 
+export type ProxyEngine = 'haproxy' | 'envoy'
+
+export interface ProxyProfile {
+  id: string
+  name: string
+  engine: ProxyEngine
+  body: string
+  revision: number
+  note?: string
+  created_at: string
+  updated_at: string
+}
+
 export interface Node {
   id: string
   name: string
@@ -36,6 +49,12 @@ export interface Node {
   listen_ports?: number[]
   entrances?: Entrance[]
   protect?: ProtectProfile
+  proxy_engine?: ProxyEngine | string
+  proxy_profile_id?: string
+  proxy_desired_rev?: number
+  proxy_applied_rev?: number
+  proxy_apply_status?: string
+  proxy_apply_error?: string
   live?: NodeLive
 }
 
